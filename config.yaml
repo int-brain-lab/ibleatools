@@ -1,0 +1,15 @@
+# Configuration for electrophysiology feature computation and region inference
+pid: "5246af08-0730-40f7-83de-29b5d62b9b6d"  # Probe ID
+t_start: 300.0  # Start time in seconds
+duration: 3.0  # Duration in seconds
+
+# Operation mode: 'features' for feature computation only,
+# 'inference' for region inference only, or 'both' for both operations
+mode: "both"
+
+# Path to save/load features file. If not provided,
+# features will be saved as 'features_{pid}.parquet' in the current directory
+features_path: "/Users/pranavrai/Work/int-brain-lab/temp/features"  # Set to null to use default path, or provide a specific path like "/path/to/features.parquet"
+
+# Path to the model directory for region inference
+model_path: "/Users/pranavrai/Downloads/models/2024_W50_Cosmos_voter-snap-pudding/"  # Path to the model directory
