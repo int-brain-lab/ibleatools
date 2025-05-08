@@ -19,7 +19,7 @@ def setup_logger(name: str, log_level: int = logging.INFO) -> logging.Logger:
     
     # Create handlers
     console_handler = logging.StreamHandler(sys.stdout)
-    file_handler = logging.FileHandler(Path('logs') / f'{name}.log')
+    file_handler = logging.FileHandler(Path('logs') / f'{name}.log', mode='w')
     
     # Create formatters and add it to handlers
     log_format = logging.Formatter(

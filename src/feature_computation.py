@@ -28,7 +28,7 @@ from typing import Dict, Any, Tuple
 from src.logger_config import setup_logger
 
 # Set up logger
-logger = setup_logger('feature_computation')
+logger = setup_logger(__name__)
 
 def get_target_coordinates(pid, one, channels):
     """
@@ -83,7 +83,7 @@ def online_feature_computation(sr_lf, sr_ap, t0, duration, channel_labels=None):
     des_lf = ibldsp.voltage.destripe_lfp(
         raw_lf, fs=sr_lf.fs, channel_labels=channel_labels,
     )
-
+    logger.info(f"Destriped AP and LF data")
     df = {}
     df['channels'] = pd.DataFrame({
         'lateral_um': sr_ap.geometry['x'],
@@ -91,12 +91,13 @@ def online_feature_computation(sr_lf, sr_ap, t0, duration, channel_labels=None):
         'labels': channel_labels,
         'channel': np.arange(len(channel_labels)),
     })
-
+    logger.info(f"Starting LF, CSD and AP computation")
     df['lf'] = features.lf(des_lf, fs=sr_lf.fs)
     df['csd'] = features.csd(des_lf, fs=sr_lf.fs, geometry=sr_ap.geometry, decimate=10)
     df['ap'] = features.ap(des_ap, geometry=sr_ap.geometry)
-
+    logger.info(f"LF, CSD and AP computation completed")
     # this takes a long time !
+    logger.info(f"Starting waveforms computation")
     df['waveforms'], waveforms = features.spikes(des_ap, fs=sr_ap.fs, geometry=sr_ap.geometry)
     df['waveforms']['spike_count'] = df['waveforms']['spike_count'].astype('Int64')
 
@@ -120,7 +121,7 @@ def compute_features(pid, t_start, duration, one):
     start_time = float(t_start)
     duration = float(duration)
     
-    print(ssl.session_path, ssl.pname)
+    logger.info(f"Session path: {ssl.session_path}, probe name: {ssl.pname}")
 
     df = online_feature_computation(sr_ap=sr_ap, sr_lf=sr_lf, t0=start_time, duration=duration)
 

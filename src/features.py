@@ -23,7 +23,7 @@ from typing import Dict, Any, Tuple
 from src.logger_config import setup_logger
 
 # Set up logger
-logger = setup_logger('features')
+logger = setup_logger(__name__)
 
 floats = Annotated[pandera.Float, pandera.Float32]
 BANDS = {
@@ -300,7 +300,9 @@ def spikes(data, fs: int, geometry: dict, return_waveforms=True, **params):
     :return:
     """
     params = DartParameters() if params is None else DartParameters(**params)
+    logger.info(f"Starting spike detection")
     df_spikes_, d_waveforms = dart_subtraction_numpy(data, fs, geometry, params=params)
+    logger.info(f"Spike detection completed")
     df_waveforms = ibldsp.waveforms.compute_spike_features(d_waveforms["denoised"])
     df_spikes = df_spikes_.merge(df_waveforms, left_index=True, right_index=True)
     # we cast the float32 values as float64
