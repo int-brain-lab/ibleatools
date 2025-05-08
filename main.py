@@ -24,46 +24,29 @@ def parse_arguments(args: List[str]) -> argparse.Namespace:
     """Parse command line arguments."""
     logger.debug("Parsing command line arguments")
     parser = argparse.ArgumentParser(description="Electrophysiology feature computation and region inference")
-    parser.add_argument("--pid", help="Probe ID")
-    parser.add_argument("--t_start", help="Start time")
-    parser.add_argument("--duration", help="Duration")
-    parser.add_argument("--config", help="Path to YAML configuration file")
-    parser.add_argument("--mode", choices=['features', 'inference', 'both'], default='both',
-                      help="Specify which operations to perform: 'features' for feature computation only, "
-                           "'inference' for region inference only, or 'both' for both operations")
-    parser.add_argument("--features-path", help="Path to save/load features file. If not provided, "
-                      "features will be saved as 'features_{pid}.parquet' in the current directory")
-    parser.add_argument("--model-path", help="Path to the model directory for region inference")
-    
+    parser.add_argument("--config", required=True, help="Path to YAML configuration file")
     return parser.parse_args(args)
 
 
 def get_parameters(args: argparse.Namespace) -> Dict[str, Any]:
-    """Get parameters from either command line arguments or config file."""
-    if args.config:
-        logger.info("Using configuration from YAML file")
-        config = load_config(args.config)
-        return {
-            'pid': config['pid'],
-            't_start': config['t_start'],
-            'duration': config['duration'],
-            'mode': config.get('mode', 'both'),
-            'features_path': config.get('features_path'),
-            'model_path': config.get('model_path')
-        }
-    else:
-        logger.info("Using command line arguments")
-        if not all([args.pid, args.t_start, args.duration]):
-            logger.error("Missing required arguments")
-            raise ValueError("If no config file is provided, pid, t_start, and duration must be specified")
-        return {
-            'pid': args.pid,
-            't_start': args.t_start,
-            'duration': args.duration,
-            'mode': args.mode,
-            'features_path': args.features_path,
-            'model_path': args.model_path
-        }
+    """Get parameters from config file."""
+    logger.info("Loading configuration from YAML file")
+    config = load_config(args.config)
+    
+    # Validate required parameters
+    required_params = ['pid', 't_start', 'duration']
+    missing_params = [param for param in required_params if param not in config]
+    if missing_params:
+        raise ValueError(f"Missing required parameters in config file: {', '.join(missing_params)}")
+    
+    return {
+        'pid': config['pid'],
+        't_start': config['t_start'],
+        'duration': config['duration'],
+        'mode': config.get('mode', 'both'),
+        'features_path': config.get('features_path'),
+        'model_path': config.get('model_path')
+    }
 
 
 def main(args: Optional[List[str]] = None) -> int:
@@ -76,7 +59,7 @@ def main(args: Optional[List[str]] = None) -> int:
     # Parse arguments
     parsed_args = parse_arguments(args)
     
-    # Get parameters from either command line or config file
+    # Get parameters from config file
     params = get_parameters(parsed_args)
     logger.info(f"Processing probe ID: {params['pid']}")
     

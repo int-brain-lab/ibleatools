@@ -13,3 +13,5 @@ features_path: "/Users/pranavrai/Work/int-brain-lab/temp/features"  # Set to nul
 
 # Path to the model directory for region inference
 model_path: "/Users/pranavrai/Downloads/models/2024_W50_Cosmos_voter-snap-pudding/"  # Path to the model directory
+
+#python main.py --config config.yaml

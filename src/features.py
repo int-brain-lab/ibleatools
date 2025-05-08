@@ -258,13 +258,13 @@ def dart_subtraction_numpy(data, fs, geometry, **params):
     temp_suffix = "".join(
         [random.choice(string.ascii_lowercase + string.digits) for _ in range(8)]
     )
-    breakpoint()
+    
     detected_spikes, h5_filename = dartsort.subtract(
         rec_np,
         temp_folder := Path.home().joinpath("scratch", f"dart_{temp_suffix}"),
         featurization_config=featurization_cfg,
         subtraction_config=subtraction_cfg,
-        n_jobs=0,
+        n_jobs=1,
         # if you set n_jobs=1, this will initialize CUDA in a separate process, so GPU memory will be freed. with n_jobs=0, the cuda runtime will be initialized in the main process
         show_progress=True,
     )
