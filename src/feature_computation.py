@@ -8,7 +8,7 @@ import numpy as np
 import seaborn as sns
 import matplotlib.pyplot as plt
 import matplotlib
-matplotlib.use('qt5agg')
+# matplotlib.use('qt5agg')
 
 from one.api import ONE
 import iblatlas.atlas

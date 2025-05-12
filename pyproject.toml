@@ -1,7 +1,7 @@
 [project]
-name = "ibl_python_template"
+name = "ibleatools"
 version = "0.1.0"
-description = "Default template for PDM package"
+description = "Tools for IBL data analysis and processing"
 authors = [
     {name = "International Brain Laboratory", email = "software-devs@internationalbrainlab.org"},
 ]
@@ -11,15 +11,25 @@ dependencies = [
     "pandas>=2.0.0",
     "spikeglx>=0.1.0",
     "ibl-neuropixel>=1.0.0",
+    "matplotlib>=3.10.1",
+    "scipy>=1.15.2",
+    "scikit-learn>=1.6.1",
+    "seaborn>=0.13.2",
+    "tqdm>=4.67.1",
+    "pytest>=8.3.5",
 ]
 requires-python = ">=3.10"
 readme = "README.md"
 license = {text = "MIT"}
+classifiers = [
+    "Intended Audience :: Science/Research",
+    "Topic :: Neuroscience :: Data analysis",
+    "Programming Language :: Python :: 3.10",
+]
 
 [build-system]
 requires = ["pdm-backend"]
 build-backend = "pdm.backend"
-
 
 [tool.pdm]
 distribution = true
