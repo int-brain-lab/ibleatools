@@ -259,9 +259,13 @@ def dart_subtraction_numpy(data, fs, geometry, **params):
         [random.choice(string.ascii_lowercase + string.digits) for _ in range(8)]
     )
     
+    # Ensure scratch directory exists
+    scratch_dir = Path.home().joinpath("scratch")
+    scratch_dir.mkdir(parents=True, exist_ok=True)
+    
     detected_spikes, h5_filename = dartsort.subtract(
         rec_np,
-        temp_folder := Path.home().joinpath("scratch", f"dart_{temp_suffix}"),
+        temp_folder := scratch_dir.joinpath(f"dart_{temp_suffix}"),
         featurization_config=featurization_cfg,
         subtraction_config=subtraction_cfg,
         n_jobs=1,

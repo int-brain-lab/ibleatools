@@ -2,6 +2,7 @@ from pathlib import Path
 from functools import reduce
 
 import scipy.signal
+from scipy import fft
 import pandas as pd
 import numpy as np
 
@@ -64,11 +65,15 @@ def online_feature_computation(sr_lf, sr_ap, t0, duration, channel_labels=None):
     :return:
     """
 
-    # ns_ap = 2 ** 17  # number of samples for the feature extraction
-    # ns_lf = int(ns_ap * sr_lf.fs / sr_ap.fs)
-    #PR What is the last column of sr_ap, and why to exlcude it. It contains 64 as the value.
-    # raw_ap = sr_ap[slice(n0 := int(sr_ap.fs * t0), n0 + ns_ap), :-sr_ap.nsync].T
-    raw_ap = sr_ap[slice(int(sr_ap.fs * t0), int(sr_ap.fs * (t0+duration))), :-sr_ap.nsync].T
+
+    #Calculate the next fast length for the AP data
+    ns_ap = fft.next_fast_len(int(sr_ap.fs * duration), real=True)
+
+    #Calculate the next fast length for the LF data
+    ns_lf = fft.next_fast_len(int(sr_lf.fs * duration), real=True)
+
+    #Ignore the columns which include the sync pulse data.
+    raw_ap = sr_ap[slice(n0 := int(sr_ap.fs * t0), n0 + ns_ap), :(sr_ap.nc - sr_ap.nsync)].T
     if channel_labels is None:
         channel_labels, _ = ibldsp.voltage.detect_bad_channels(raw_ap, fs=sr_ap.fs)
 
@@ -77,9 +82,8 @@ def online_feature_computation(sr_lf, sr_ap, t0, duration, channel_labels=None):
         raw_ap, fs=sr_ap.fs, neuropixel_version=sr_ap.major_version, channel_labels=channel_labels,
         k_filter=False,
     )
-    #PR why adding 3 to n0?
-    # raw_lf = sr_lf[slice(n0 := int(sr_lf.fs * t0 + 3), n0 + ns_lf), :-sr_lf.nsync].T
-    raw_lf = sr_lf[slice(int(sr_lf.fs * t0 + 3), int(sr_lf.fs * (t0+duration) + 3)), :-sr_lf.nsync].T
+    #Add 3 to n0 to account for the 3 samples of latency in the LF data
+    raw_lf = sr_lf[slice(n0 := int(sr_lf.fs * t0 + 3), n0 + ns_lf), :(sr_lf.nc - sr_lf.nsync)].T
     des_lf = ibldsp.voltage.destripe_lfp(
         raw_lf, fs=sr_lf.fs, channel_labels=channel_labels,
     )
