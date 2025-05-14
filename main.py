@@ -9,6 +9,10 @@ import yaml
 from pathlib import Path
 import pandas as pd
 from src.logger_config import setup_logger
+from src.plots import plot_results
+from src import decoding
+import random
+import string
 
 # Set up logger
 logger = setup_logger(__name__)
@@ -34,18 +38,29 @@ def get_parameters(args: argparse.Namespace) -> Dict[str, Any]:
     config = load_config(args.config)
     
     # Validate required parameters
-    required_params = ['pid', 't_start', 'duration']
-    missing_params = [param for param in required_params if param not in config]
-    if missing_params:
-        raise ValueError(f"Missing required parameters in config file: {', '.join(missing_params)}")
+    if 'pid' in config:
+        # PID-based configuration
+        required_params = ['pid', 't_start', 'duration']
+        missing_params = [param for param in required_params if param not in config]
+        if missing_params:
+            raise ValueError(f"Missing required parameters in config file: {', '.join(missing_params)}")
+    else:
+        # File-based configuration
+        required_params = ['ap_file', 'lf_file', 't_start', 'duration']
+        missing_params = [param for param in required_params if param not in config]
+        if missing_params:
+            raise ValueError(f"Missing required parameters in config file: {', '.join(missing_params)}")
     
     return {
-        'pid': config['pid'],
+        'pid': config.get('pid'),
+        'ap_file': config.get('ap_file'),
+        'lf_file': config.get('lf_file'),
         't_start': config['t_start'],
         'duration': config['duration'],
         'mode': config.get('mode', 'both'),
         'features_path': config.get('features_path'),
-        'model_path': config.get('model_path')
+        'model_path': config.get('model_path'),
+        'traj_dict': config.get('traj_dict')
     }
 
 
@@ -63,15 +78,25 @@ def main(args: Optional[List[str]] = None) -> int:
     params = get_parameters(parsed_args)
     logger.info(f"Processing probe ID: {params['pid']}")
     
-    # Initialize ONE
+    # Initialize ONE if using PID
     one = ONE()
-    logger.info("ONE client initialized")
+    if params['pid'] is not None:
+        logger.info("ONE client initialized")
+        logger.info(f"Processing probe ID: {params['pid']}")
+    else:
+        logger.info(f"Processing files: AP={params['ap_file']}, LF={params['lf_file']}")
     
     df_features = None
     # Determine features file path
     features_path = params.get('features_path')
     if features_path is None:
-        features_path = Path(f"features_{params['pid']}.parquet")
+        if params['pid'] is not None:
+            features_path = Path(f"features_{params['pid']}.parquet")
+        else:
+            # Generate 8 character alphanumeric filename
+            filename = ''.join(random.choices(string.ascii_letters + string.digits, k=8))
+            features_path = Path(f"features_{filename}.parquet")
+            logger.info(f"Generated features filename: {features_path}")
     else:
         features_path = Path(features_path)
         # Ensure the file has .parquet extension
@@ -82,16 +107,19 @@ def main(args: Optional[List[str]] = None) -> int:
     if params['mode'] in ['features', 'both']:
         logger.info("Starting feature computation")
         df_features = compute_features(
-            params['pid'], 
-            params['t_start'], 
-            params['duration'], 
-            one
+            pid=params.get('pid'),
+            t_start=params['t_start'],
+            duration=params['duration'],
+            one=one,
+            ap_file=params.get('ap_file'),
+            lf_file=params.get('lf_file'),
+            traj_dict=params.get('traj_dict')
         )
         logger.info(f"Feature computation completed. Shape: {df_features.shape}")
         
         # Save features to parquet file
         logger.info(f"Saving features to {features_path}")
-        df_features.to_parquet(features_path, index=False)
+        df_features.to_parquet(features_path, index=True)
     
     # Infer regions if mode is 'inference' or 'both'
     if params['mode'] in ['inference', 'both']:
@@ -103,18 +131,37 @@ def main(args: Optional[List[str]] = None) -> int:
         else:
             model_path = Path(model_path)
         
-        # If df_features is None, load from file.
+        # If df_features is None, load from file
         if df_features is None:
-            # This should only in inference mode.
+            # This should only happen in inference mode
             assert params['mode'] == 'inference'
             if not features_path.exists():
                 raise ValueError(f"Features file not found at {features_path}. Please compute features first.")
             logger.info(f"Loading features from {features_path}")
             df_features = pd.read_parquet(features_path)
         
-        predicted_regions, predicted_probas = infer_regions(df_features, params['pid'], one, model_path)
+        
+        predicted_probas, predicted_regions = infer_regions(df_features, model_path)
         logger.info(f"Predicted regions shape: {predicted_regions.shape}")
         logger.info(f"Prediction probabilities shape: {predicted_probas.shape}")
+
+        # Save numpy arrays
+        output_dir = features_path.parent
+        np_probas_path = output_dir / f"probas_{params['pid']}.npy"
+        np_regions_path = output_dir / f"regions_{params['pid']}.npy"
+        
+        logger.info(f"Saving prediction probabilities as numpy array to {np_probas_path}")
+        np.save(np_probas_path, predicted_probas)
+        
+        logger.info(f"Saving predicted regions as numpy array to {np_regions_path}")
+        np.save(np_regions_path, predicted_regions)
+
+        #Plot the results
+        #Todo need to have better interface than calling dict_model here just for plotting.
+        dict_model = decoding.load_model(model_path.joinpath(f'FOLD04'))
+        fig, ax = plot_results(df_features, predicted_probas, dict_model)
+        import matplotlib.pyplot as plt
+        plt.savefig(output_dir / f"results_{params['pid']}.png")
     
     return 0
 

@@ -1,6 +1,4 @@
 
-#Todo need to update this file.
-
 
 from iblatlas.atlas import BrainRegions
 from iblutil.numerical import ismember
@@ -40,8 +38,8 @@ def plot_cumulative_probas(probas, depths, aids, regions=None, ax=None, legend=F
         ax.legend()
     return ax
 
-#TODO Need to change the arguments to the function
-def plot_results(df, predicted_probas, dict_model, sr_ap, regions):
+# How to add ground truth(histology data) to the plot?
+def plot_results(df, predicted_probas, dict_model, regions = None):
     features = dict_model['meta']['FEATURES'][:-4]
     aids = np.array(dict_model['meta']['CLASSES'])
     n_folds, n_channels, n_classes = predicted_probas.shape
@@ -64,15 +62,13 @@ def plot_results(df, predicted_probas, dict_model, sr_ap, regions):
     ax[0].set_xticks(np.arange(len(features)) + 0.5)
     ax[0].set_xticklabels(features, rotation=90)
     for i in range(n_folds):
-        plot_cumulative_probas(predicted_probas[i], sr_ap.geometry['y'][df.index], aids=aids, regions=regions, ax=ax[i + 1])
+        plot_cumulative_probas(predicted_probas[i], df['axial_um'].values, aids=aids, regions=regions, ax=ax[i + 1])
         ax[-1].plot(entropies[:, i], df['axial_um'], label=f'Fold {i}', alpha=0.2)
         ax[i + 1].set_title('Fold {i}')
     ax[-1].plot(entropies.mean(axis=1), df['axial_um'], label='Mean', color='k')
     # ax[-1].legend()
     ax[-1].set_title('Entropies')
-    plt.show()
+    return fig, ax
 
 # plot_results(df_inference_denoised, predicted_probas)
 
-# df = df_inference_denoised
-# plt.figure

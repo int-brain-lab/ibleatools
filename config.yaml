@@ -1,7 +1,20 @@
 # Configuration for electrophysiology feature computation and region inference
-pid: "5246af08-0730-40f7-83de-29b5d62b9b6d"  # Probe ID
+# pid: "5246af08-0730-40f7-83de-29b5d62b9b6d"  # Probe ID
 t_start: 300.0  # Start time in seconds
-duration: 3.0  # Duration in seconds
+duration: 1  # Duration in seconds
+ap_file: "/Users/pranavrai/Downloads/ONE/alyx.internationalbrainlab.org/angelakilab/Subjects/NYU-48/2021-06-28/001/raw_ephys_data/probe00/_spikeglx_ephysData_g0_t0.imec0.ap.cbin"
+lf_file: "/Users/pranavrai/Downloads/ONE/alyx.internationalbrainlab.org/angelakilab/Subjects/NYU-48/2021-06-28/001/raw_ephys_data/probe00/_spikeglx_ephysData_g0_t0.imec0.lf.cbin"
+
+# Trajectory information for xyz target computation
+traj_dict:
+  x: -2243.1  # x coordinate
+  y: -1999.8  # y coordinate
+  z: -361.0  # z coordinate
+  depth: 4000.0  # insertion depth
+  theta: 15.0  # insertion angle theta
+  phi: 180.0  # insertion angle phi
+
+
 
 # Operation mode: 'features' for feature computation only,
 # 'inference' for region inference only, or 'both' for both operations
@@ -9,8 +22,8 @@ mode: "both"
 
 # Path to save/load features file. If not provided,
 # features will be saved as 'features_{pid}.parquet' in the current directory
-features_path: "/Users/pranavrai/Work/int-brain-lab/temp/features"  # Set to null to use default path, or provide a specific path like "/path/to/features.parquet"
-
+# features_path: "/Users/pranavrai/Work/int-brain-lab/temp/features"  # Set to null to use default path, or provide a specific path like "/path/to/features.parquet"
+features_path: "/Users/pranavrai/Work/int-brain-lab/temp/features/features.parquet"
 # Path to the model directory for region inference
 model_path: "/Users/pranavrai/Downloads/models/2024_W50_Cosmos_voter-snap-pudding/"  # Path to the model directory
 
