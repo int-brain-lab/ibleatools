@@ -224,9 +224,9 @@ def compute_features(pid=None, t_start=None, duration=None, one=None, ap_file=No
     duration = float(duration)
 
     # Compute features
-    # df = online_feature_computation(sr_ap=sr_ap, sr_lf=sr_lf, t0=t_start, duration=duration)
+    df = online_feature_computation(sr_ap=sr_ap, sr_lf=sr_lf, t0=t_start, duration=duration)
     # df.to_parquet("/Users/pranavrai/Work/int-brain-lab/temp/features/features_wo_target.parquet",index=True)
-    df = pd.read_parquet("/Users/pranavrai/Work/int-brain-lab/temp/features/features_wo_target.parquet")
+    # df = pd.read_parquet("/Users/pranavrai/Work/int-brain-lab/temp/features/features_wo_target.parquet")
     
     # Add xyz target information if available
     if pid is not None and one is not None:
