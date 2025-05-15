@@ -1,35 +1,21 @@
-from pathlib import Path
 from functools import reduce
+import logging
 
 import scipy.signal
-from scipy import fft
+import scipy.fft
 import pandas as pd
 import numpy as np
 
-import seaborn as sns
-import matplotlib.pyplot as plt
-import matplotlib
-# matplotlib.use('qt5agg')
-
-from one.api import ONE
-import iblatlas.atlas
 from brainbox.io.one import SpikeSortingLoader
 import ibldsp.voltage
-from ibl_style.style import figure_style
-import pandas as pd
-import numpy as np
+
 from iblatlas.atlas import Insertion, NeedlesAtlas, AllenAtlas
 from ibllib.pipes.histology import interpolate_along_track
 
-from .plots import plot_cumulative_probas
-from . import features
-from . import data
-from . import decoding
-from typing import Dict, Any, Tuple
-from .logger_config import setup_logger
+from ephysatlas import features
 
 # Set up logger
-logger = setup_logger(__name__)
+logger = logging.getLogger(__name__)
 
 def get_target_coordinates(pid=None, one=None, channels=None, traj_dict=None):
     """
@@ -92,10 +78,10 @@ def online_feature_computation(sr_lf, sr_ap, t0, duration, channel_labels=None):
         pd.DataFrame: DataFrame containing computed features
     """
     # Calculate the next fast length for the AP data
-    ns_ap = fft.next_fast_len(int(sr_ap.fs * duration), real=True)
+    ns_ap = scipy.fft.next_fast_len(int(sr_ap.fs * duration), real=True)
 
     # Calculate the next fast length for the LF data
-    ns_lf = fft.next_fast_len(int(sr_lf.fs * duration), real=True)
+    ns_lf = scipy.fft.next_fast_len(int(sr_lf.fs * duration), real=True)
 
     # Check if requested time range is within bounds
     max_time_ap = sr_ap.ns / sr_ap.fs

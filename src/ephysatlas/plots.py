@@ -1,10 +1,9 @@
-
-
-from iblatlas.atlas import BrainRegions
-from iblutil.numerical import ismember
 import numpy as np
 import scipy.stats
 import matplotlib.pyplot as plt
+
+from iblatlas.atlas import BrainRegions
+from iblutil.numerical import ismember
 from ibl_style.style import figure_style
 
 figure_style()

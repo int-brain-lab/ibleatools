@@ -1,15 +1,15 @@
-
 from pathlib import Path
-from . import decoding
-from . import features
+
 import numpy as np
 
+from ibleatools import decoding
+from ibleatools import features
 
+# TODO: ship the model online and download them instead of hard-coding the model paths
 model_paths = [
     Path('/mnt/s0/ephys-atlas-decoding/models/2024_W50_Cosmos_voter-snap-pudding/'),  # without waveforms
     Path('/mnt/s0/ephys-atlas-decoding/models/2024_W50_Cosmos_lid-basket-sense/') #with waveforms
 ]
-
 
 n_folds = 5
 

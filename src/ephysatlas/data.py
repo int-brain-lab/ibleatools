@@ -8,11 +8,9 @@ import pandas as pd
 from ibldsp.waveforms import peak_to_trough_ratio
 import neuropixel
 from one.remote import aws
-from iblutil.numerical import ismember
 
 from one.api import ONE
-from iblatlas.atlas import Insertion, NeedlesAtlas, AllenAtlas, BrainRegions, tilt_spherical
-from ibllib.pipes.histology import interpolate_along_track
+import iblatlas.atlas
 
 
 _logger = logging.getLogger("ibllib")
@@ -437,7 +435,7 @@ def load_voltage_features(local_path, regions=None, mapping="Cosmos", dropna=Tru
     if mapping not in list_mapping:
         raise ValueError(f"mapping should be in {list_mapping}")
 
-    regions = BrainRegions() if regions is None else regions
+    regions = iblatlas.atlas.BrainRegions() if regions is None else regions
     if local_path is None:
         ## data loading section
         config = get_config()
@@ -459,7 +457,7 @@ def load_voltage_features(local_path, regions=None, mapping="Cosmos", dropna=Tru
 
 
 def prep_voltage_dataframe(df_voltage, mapping='Allen', regions=None):
-    regions = BrainRegions() if regions is None else regions
+    regions = iblatlas.atlas.BrainRegions() if regions is None else regions
     df_voltage.replace([np.inf, -np.inf], np.nan, inplace=True)
     if mapping != "Allen":
         df_voltage[mapping + "_id"] = regions.remap(
@@ -673,7 +671,7 @@ def prepare_mat_plot(array_in, id_feat, diag_val=0):
 
 def prepare_df_voltage(df_voltage, df_channels, br=None):
     if br is None:
-        br = BrainRegions()
+        br = iblatlas.atlas.BrainRegions()
     df_voltage = pd.merge(
         df_voltage, df_channels, left_index=True, right_index=True
     ).dropna()

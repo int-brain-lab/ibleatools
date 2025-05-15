@@ -1,34 +1,8 @@
 [project]
 name = "ibleatools"
-version = "0.1.0"
 description = "Tools for IBL data analysis and processing"
 authors = [
     {name = "International Brain Laboratory", email = "software-devs@internationalbrainlab.org"},
-]
-dependencies = [
-    "dartsort @ git+https://github.com/cwindolf/dartsort@iblsorter",
-    "dredge @ git+https://github.com/evarol/dredge@v0.2.2",
-    "h5py",
-    "hdbscan",
-    "iblatlas>=0.3.0",
-    "ibllib",
-    "linear-operator",
-    "matplotlib",
-    "mock",
-    "numba",
-    "numpy>=2.0",
-    "opt-einsum",
-    "pandas",
-    "pandera",
-    "pydantic",
-    "pytest",
-    "scikit-learn",
-    "scipy>=1.13",
-    "seaborn",
-    "spikeinterface",
-    "torch>=2.0",
-    "tqdm",
-    "xgboost",
 ]
 requires-python = ">=3.10"
 readme = "README.md"
@@ -38,6 +12,8 @@ classifiers = [
     "Topic :: Neuroscience :: Data analysis",
     "Programming Language :: Python :: 3.10",
 ]
+dynamic = ["version"]
+
 
 [build-system]
 requires = ["pdm-backend"]
@@ -46,17 +22,18 @@ build-backend = "pdm.backend"
 [tool.pdm]
 distribution = true
 
+[tool.pdm.dependencies]
+file = "requirements.txt"
+
+[tool.pdm.version]
+source = "file"
+path = 'src/ephysatlas/__init__.py'
+
 [tool.pdm.package-dir]
-ibleatools = "src/ibleatools"
+ibleatools = "src/ephysatlas"
 
 [tool.pdm.packages]
-include = ["src/ibleatools"]
+include = ["src/ephysatlas"]
 
-[[tool.pdm.source]]
-name = "23b9ae"
-url = "https://download.pytorch.org/whl/cpu"
-verify_ssl = true
 [dependency-groups]
 lint = ["ruff>=0.7.3"]
-
-#Add dev dependencies for testing.

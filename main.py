@@ -1,18 +1,20 @@
-import os
 import argparse
-from typing import List, Optional, Dict, Any
-from ibleatools.feature_computation import compute_features
-from ibleatools.region_inference import infer_regions
-from one.api import ONE
-import numpy as np
-import yaml
-from pathlib import Path
-import pandas as pd
-from ibleatools.logger_config import setup_logger
-from ibleatools.plots import plot_results
-from ibleatools import decoding
 import random
 import string
+from typing import List, Optional, Dict, Any
+from pathlib import Path
+
+import numpy as np
+import yaml
+import pandas as pd
+
+from one.api import ONE
+
+from ephysatlas.feature_computation import compute_features
+from ephysatlas.region_inference import infer_regions
+from ephysatlas.plots import plot_results
+from ephysatlas import decoding
+
 
 def load_config(config_path: str) -> Dict[str, Any]:
     """Load configuration from YAML file."""
