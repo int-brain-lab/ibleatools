@@ -1,31 +1,17 @@
-from pathlib import Path
 from functools import reduce
 
-import scipy.signal
 from scipy import fft
-import pandas as pd
-import numpy as np
 
-import seaborn as sns
-import matplotlib.pyplot as plt
-import matplotlib
 # matplotlib.use('qt5agg')
 
-from one.api import ONE
-import iblatlas.atlas
 from brainbox.io.one import SpikeSortingLoader
 import ibldsp.voltage
-from ibl_style.style import figure_style
 import pandas as pd
 import numpy as np
 from iblatlas.atlas import Insertion, NeedlesAtlas, AllenAtlas
 from ibllib.pipes.histology import interpolate_along_track
 
-from .plots import plot_cumulative_probas
-from . import features
-from . import data
-from . import decoding
-from typing import Dict, Any, Tuple
+from ibleatools.ephysatlas import features
 from src.logger_config import setup_logger
 
 # Set up logger
@@ -47,7 +33,6 @@ def get_target_coordinates(pid=None, one=None, channels=None, traj_dict=None):
     Returns:
         pd.DataFrame: DataFrame containing target coordinates for each channel
     """
-    from pathlib import Path
     needles = NeedlesAtlas()
     allen = AllenAtlas()
     needles.compute_surface()

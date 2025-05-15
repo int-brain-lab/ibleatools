@@ -1,19 +1,19 @@
-import os
 import argparse
 from typing import List, Optional, Dict, Any
-from src.feature_computation import compute_features
-from src.region_inference import infer_regions
+from ephysatlas.feature_computation import compute_features
+from ephysatlas.region_inference import infer_regions
 from one.api import ONE
 import numpy as np
 import yaml
 from pathlib import Path
 import pandas as pd
-from src.logger_config import setup_logger
-from src.plots import plot_results
-from src import decoding
+from ephysatlas.logger_config import setup_logger
+from ephysatlas.plots import plot_results
+from ephysatlas import decoding
 import random
 import string
 
+# from iblutil.util import setup_logger
 # Set up logger
 logger = setup_logger(__name__)
 

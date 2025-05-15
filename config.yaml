@@ -22,9 +22,10 @@ mode: "both"
 
 # Path to save/load features file. If not provided,
 # features will be saved as 'features_{pid}.parquet' in the current directory
-# features_path: "/Users/pranavrai/Work/int-brain-lab/temp/features"  # Set to null to use default path, or provide a specific path like "/path/to/features.parquet"
-features_path: "/Users/pranavrai/Work/int-brain-lab/temp/features/features.parquet"
+features_path: "/home/olivier/scratch/atlas-features"  # Set to null to use default path, or provide a specific path like "/path/to/features.parquet"
+
 # Path to the model directory for region inference
-model_path: "/Users/pranavrai/Downloads/models/2024_W50_Cosmos_voter-snap-pudding/"  # Path to the model directory
+model_path: "/mnt/s0/ephys-atlas-decoding/models/2024_W50_Cosmos_voter-snap-pudding"  # Path to the model directory
+
 
 #python main.py --config config.yaml

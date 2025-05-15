@@ -1,7 +1,6 @@
 
 from pathlib import Path
-from . import decoding
-from . import features
+from ibleatools.ephysatlas import decoding, features
 import numpy as np
 
 
