@@ -130,6 +130,7 @@ ENV/
 env.bak/
 venv.bak/
 .vscode/
+load_venv.sh
 
 # Spyder project settings
 .spyderproject
@@ -173,4 +174,7 @@ pdm.lock
 # Configuration files
 config.yaml
 
+# Scratchpad
 Todos.md
+Issues.md
+testing.ipynb

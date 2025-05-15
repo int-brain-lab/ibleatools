@@ -2,8 +2,8 @@ from pathlib import Path
 
 import numpy as np
 
-from ibleatools import decoding
-from ibleatools import features
+from ephysatlas import decoding
+from ephysatlas import features
 
 # TODO: ship the model online and download them instead of hard-coding the model paths
 model_paths = [
