@@ -1,21 +1,20 @@
 from functools import reduce
+import logging
 
+import pandas as pd
+import numpy as np
 from scipy import fft
-
-# matplotlib.use('qt5agg')
 
 from brainbox.io.one import SpikeSortingLoader
 import ibldsp.voltage
-import pandas as pd
-import numpy as np
 from iblatlas.atlas import Insertion, NeedlesAtlas, AllenAtlas
 from ibllib.pipes.histology import interpolate_along_track
 
 from ibleatools.ephysatlas import features
-from src.logger_config import setup_logger
 
 # Set up logger
-logger = setup_logger(__name__)
+logger = logging.getLogger(__name__)
+
 
 def get_target_coordinates(pid=None, one=None, channels=None, traj_dict=None):
     """

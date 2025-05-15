@@ -3,6 +3,8 @@ from pathlib import Path
 import random
 import shutil
 import string
+import logging
+from typing_extensions import Annotated
 
 import numpy as np
 import pandas as pd
@@ -10,20 +12,15 @@ import pandera
 import pydantic
 import scipy.signal
 import skimage.restoration
+from pandera.typing import Series
 
 import ibldsp.waveforms
 import ibldsp.cadzow
 import ibldsp.utils
 import ibldsp.voltage
 
-from pandera.typing import Series
-
-from typing_extensions import Annotated
-from typing import Dict, Any, Tuple
-from src.logger_config import setup_logger
-
 # Set up logger
-logger = setup_logger(__name__)
+logger = logging.getLogger(__name__)
 
 floats = Annotated[pandera.Float, pandera.Float32]
 BANDS = {
