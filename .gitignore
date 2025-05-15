@@ -170,4 +170,7 @@ cython_debug/
 #  version on PyPI doesn't break anything, then do not submit the pdm.lock file.
 pdm.lock
 
+# Configuration files
+config.yaml
+
 Todos.md

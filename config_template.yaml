@@ -1,0 +1,34 @@
+# config file
+pid: "YOUR_PROBE_ID"  # Probe ID
+t_start: 300.0  # Start time in seconds
+duration: 1  # Duration in seconds
+
+# Logging configuration
+log_path: "/path/to/logs/ibleatools.log"  # Absolute path for log file. If not provided, no file logging will be done.
+
+# Big .cbin files
+# ap_file: "/path/to/your/ap/file.cbin"
+# lf_file: "/path/to/your/lf/file.cbin"
+
+
+# Trajectory information for xyz target computation
+# traj_dict:
+#   x: -2243.1  # x coordinate
+#   y: -1999.8  # y coordinate
+#   z: -361.0  # z coordinate
+#   depth: 4000.0  # insertion depth
+#   theta: 15.0  # insertion angle theta
+#   phi: 180.0  # insertion angle phi
+
+# Operation mode: 'features' for feature computation only,
+# 'inference' for region inference only, or 'both' for both operations
+mode: "both"
+
+# Path to save/load features file. If not provided,
+# features will be saved as 'features_{pid}.parquet' in the current directory
+features_path: "/path/to/your/features.parquet"
+
+# Path to the model directory for region inference
+model_path: "/path/to/your/model/directory/"
+
+# Usage: python main.py --config config.yaml 

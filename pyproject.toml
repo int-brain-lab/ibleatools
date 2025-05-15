@@ -6,17 +6,29 @@ authors = [
     {name = "International Brain Laboratory", email = "software-devs@internationalbrainlab.org"},
 ]
 dependencies = [
-    "one-api>=2.0.0",
-    "numpy>=1.24.0",
-    "pandas>=2.0.0",
-    "spikeglx>=0.1.0",
-    "ibl-neuropixel>=1.0.0",
-    "matplotlib>=3.10.1",
-    "scipy>=1.15.2",
-    "scikit-learn>=1.6.1",
-    "seaborn>=0.13.2",
-    "tqdm>=4.67.1",
-    "pytest>=8.3.5",
+    "dartsort @ git+https://github.com/cwindolf/dartsort@iblsorter",
+    "dredge @ git+https://github.com/evarol/dredge@v0.2.2",
+    "h5py",
+    "hdbscan",
+    "iblatlas>=0.3.0",
+    "ibllib",
+    "linear-operator",
+    "matplotlib",
+    "mock",
+    "numba",
+    "numpy>=2.0",
+    "opt-einsum",
+    "pandas",
+    "pandera",
+    "pydantic",
+    "pytest",
+    "scikit-learn",
+    "scipy>=1.13",
+    "seaborn",
+    "spikeinterface",
+    "torch>=2.0",
+    "tqdm",
+    "xgboost",
 ]
 requires-python = ">=3.10"
 readme = "README.md"
@@ -34,7 +46,16 @@ build-backend = "pdm.backend"
 [tool.pdm]
 distribution = true
 
+[tool.pdm.package-dir]
+ibleatools = "src/ibleatools"
 
+[tool.pdm.packages]
+include = ["src/ibleatools"]
+
+[[tool.pdm.source]]
+name = "23b9ae"
+url = "https://download.pytorch.org/whl/cpu"
+verify_ssl = true
 [dependency-groups]
 lint = ["ruff>=0.7.3"]
 

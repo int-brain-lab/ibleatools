@@ -1,40 +1,32 @@
 import os
 import argparse
 from typing import List, Optional, Dict, Any
-from src.feature_computation import compute_features
-from src.region_inference import infer_regions
+from ibleatools.feature_computation import compute_features
+from ibleatools.region_inference import infer_regions
 from one.api import ONE
 import numpy as np
 import yaml
 from pathlib import Path
 import pandas as pd
-from src.logger_config import setup_logger
-from src.plots import plot_results
-from src import decoding
+from ibleatools.logger_config import setup_logger
+from ibleatools.plots import plot_results
+from ibleatools import decoding
 import random
 import string
 
-# Set up logger
-logger = setup_logger(__name__)
-
 def load_config(config_path: str) -> Dict[str, Any]:
     """Load configuration from YAML file."""
-    logger.info(f"Loading configuration from {config_path}")
     with open(config_path, 'r') as f:
         return yaml.safe_load(f)
 
-
 def parse_arguments(args: List[str]) -> argparse.Namespace:
     """Parse command line arguments."""
-    logger.debug("Parsing command line arguments")
     parser = argparse.ArgumentParser(description="Electrophysiology feature computation and region inference")
     parser.add_argument("--config", required=True, help="Path to YAML configuration file")
     return parser.parse_args(args)
 
-
 def get_parameters(args: argparse.Namespace) -> Dict[str, Any]:
     """Get parameters from config file."""
-    logger.info("Loading configuration from YAML file")
     config = load_config(args.config)
     
     # Validate required parameters
@@ -60,13 +52,12 @@ def get_parameters(args: argparse.Namespace) -> Dict[str, Any]:
         'mode': config.get('mode', 'both'),
         'features_path': config.get('features_path'),
         'model_path': config.get('model_path'),
-        'traj_dict': config.get('traj_dict')
+        'traj_dict': config.get('traj_dict'),
+        'log_path': config.get('log_path')  # Get log path from config
     }
-
 
 def main(args: Optional[List[str]] = None) -> int:
     """Main function that can be called with arguments or use command line arguments."""
-    logger.info("Starting main function")
     if args is None:
         import sys
         args = sys.argv[1:]
@@ -76,7 +67,10 @@ def main(args: Optional[List[str]] = None) -> int:
     
     # Get parameters from config file
     params = get_parameters(parsed_args)
-    logger.info(f"Processing probe ID: {params['pid']}")
+    
+    # Set up logger with config path
+    logger = setup_logger(__name__, log_path=params.get('log_path'))
+    logger.info("Starting main function")
     
     # Initialize ONE if using PID
     one = ONE()

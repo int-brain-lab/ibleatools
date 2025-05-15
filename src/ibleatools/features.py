@@ -20,7 +20,7 @@ from pandera.typing import Series
 
 from typing_extensions import Annotated
 from typing import Dict, Any, Tuple
-from src.logger_config import setup_logger
+from .logger_config import setup_logger
 
 # Set up logger
 logger = setup_logger(__name__)
