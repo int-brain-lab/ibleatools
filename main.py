@@ -46,7 +46,7 @@ def get_parameters(args: argparse.Namespace) -> Dict[str, Any]:
             raise ValueError(f"Missing required parameters in config file: {', '.join(missing_params)}")
     else:
         # File-based configuration
-        required_params = ['ap_file', 'lf_file', 't_start', 'duration']
+        required_params = ['ap_file', 'lf_file']
         missing_params = [param for param in required_params if param not in config]
         if missing_params:
             raise ValueError(f"Missing required parameters in config file: {', '.join(missing_params)}")
@@ -55,8 +55,8 @@ def get_parameters(args: argparse.Namespace) -> Dict[str, Any]:
         'pid': config.get('pid'),
         'ap_file': config.get('ap_file'),
         'lf_file': config.get('lf_file'),
-        't_start': config['t_start'],
-        'duration': config['duration'],
+        't_start': config.get('t_start', 0.0),  # Default to 0.0 if not specified
+        'duration': config.get('duration'),  # Default to None if not specified
         'mode': config.get('mode', 'both'),
         'features_path': config.get('features_path'),
         'model_path': config.get('model_path'),

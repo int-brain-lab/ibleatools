@@ -194,8 +194,8 @@ def compute_features(pid=None, t_start=None, duration=None, one=None, ap_file=No
     
     Args:
         pid (str, optional): Probe ID. Required if ap_file and lf_file are not provided.
-        t_start (float): Start time in seconds
-        duration (float): Duration in seconds
+        t_start (float): Start time in seconds. Defaults to 0.0 if not specified.
+        duration (float, optional): Duration in seconds. If None, will use the entire available duration.
         one (ONE, optional): ONE client instance. Required if pid is provided.
         ap_file (str, optional): Path to AP .cbin file. Required if pid is not provided.
         lf_file (str, optional): Path to LF .cbin file. Required if pid is not provided.
@@ -221,7 +221,14 @@ def compute_features(pid=None, t_start=None, duration=None, one=None, ap_file=No
 
     # Convert time parameters to float
     t_start = float(t_start)
-    duration = float(duration)
+    
+    # If duration is None, use the entire available duration
+    if duration is None:
+        max_time_ap = sr_ap.ns / sr_ap.fs
+        max_time_lf = sr_lf.ns / sr_lf.fs
+        duration = min(max_time_ap, max_time_lf) - t_start
+    else:
+        duration = float(duration)
 
     # Compute features
     df = online_feature_computation(sr_ap=sr_ap, sr_lf=sr_lf, t0=t_start, duration=duration)

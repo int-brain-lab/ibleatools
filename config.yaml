@@ -1,10 +1,15 @@
 # Configuration for electrophysiology feature computation and region inference
 # pid: "5246af08-0730-40f7-83de-29b5d62b9b6d"  # Probe ID
-t_start: 300.0  # Start time in seconds
-duration: 1  # Duration in seconds
-ap_file: "/Users/pranavrai/Downloads/ONE/alyx.internationalbrainlab.org/angelakilab/Subjects/NYU-48/2021-06-28/001/raw_ephys_data/probe00/_spikeglx_ephysData_g0_t0.imec0.ap.cbin"
-lf_file: "/Users/pranavrai/Downloads/ONE/alyx.internationalbrainlab.org/angelakilab/Subjects/NYU-48/2021-06-28/001/raw_ephys_data/probe00/_spikeglx_ephysData_g0_t0.imec0.lf.cbin"
+# t_start: 300.0  # Start time in seconds
+# duration: 1  # Duration in seconds
 
+#Big .cbin files
+# ap_file: "/Users/pranavrai/Downloads/ONE/alyx.internationalbrainlab.org/angelakilab/Subjects/NYU-48/2021-06-28/001/raw_ephys_data/probe00/_spikeglx_ephysData_g0_t0.imec0.ap.cbin"
+# lf_file: "/Users/pranavrai/Downloads/ONE/alyx.internationalbrainlab.org/angelakilab/Subjects/NYU-48/2021-06-28/001/raw_ephys_data/probe00/_spikeglx_ephysData_g0_t0.imec0.lf.cbin"
+
+#Small .cbin files
+lf_file: "/Users/pranavrai/Downloads/ONE/alyx.internationalbrainlab.org/cache/lf/mainenlab/Subjects/ZM_1898/2019-12-10/007/raw_ephys_data/probe00/chunk_001799_to_001800/_spikeglx_ephysData_g1_t0.imec.lf.stream.cbin"
+ap_file: "/Users/pranavrai/Downloads/ONE/alyx.internationalbrainlab.org/cache/ap/mainenlab/Subjects/ZM_1898/2019-12-10/007/raw_ephys_data/probe00/chunk_001799_to_001800/_spikeglx_ephysData_g1_t0.imec.ap.stream.cbin"
 # Trajectory information for xyz target computation
 traj_dict:
   x: -2243.1  # x coordinate
