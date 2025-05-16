@@ -1,5 +1,6 @@
-import dataclasses
+from typing_extensions import Annotated
 from pathlib import Path
+import logging
 import random
 import shutil
 import string
@@ -10,20 +11,15 @@ import pandera
 import pydantic
 import scipy.signal
 import skimage.restoration
+from pandera.typing import Series
 
 import ibldsp.waveforms
 import ibldsp.cadzow
 import ibldsp.utils
 import ibldsp.voltage
 
-from pandera.typing import Series
-
-from typing_extensions import Annotated
-from typing import Dict, Any, Tuple
-from src.logger_config import setup_logger
-
 # Set up logger
-logger = setup_logger(__name__)
+logger = logging.getLogger(__name__)
 
 floats = Annotated[pandera.Float, pandera.Float32]
 BANDS = {
@@ -83,7 +79,9 @@ class ModelSpikeFeatures(BaseChannelFeatures):
     recovery_slope: Series[float] = pandera.Field(coerce=True)
     recovery_time_secs: Series[float] = pandera.Field(coerce=True)
     repolarisation_slope: Series[float] = pandera.Field(coerce=True)
-    spike_count: int = pandera.Field(coerce=True, metadata={'transform': lambda x: x.astype(float)})
+    spike_count: int = pandera.Field(
+        coerce=True, metadata={"transform": lambda x: x.astype(float)}
+    )
     tip_time_secs: Series[float] = pandera.Field(coerce=True)
     tip_val: Series[float] = pandera.Field(coerce=True)
     trough_time_secs: Series[float] = pandera.Field(coerce=True)
@@ -111,7 +109,11 @@ class ModelHistologyResolved(BaseChannelFeatures):
 
 
 class ModelRawFeatures(
-    ModelSpikeFeatures, ModelCsdFeatures, ModelApFeatures, ModelLfFeatures, ModelChannelLayout
+    ModelSpikeFeatures,
+    ModelCsdFeatures,
+    ModelApFeatures,
+    ModelLfFeatures,
+    ModelChannelLayout,
 ):
     pass
 
@@ -123,23 +125,42 @@ def voltage_features_set(features_list=FEATURES_LIST):
     :param features_list: optional, defaults to ['raw_ap', 'raw_lf', 'raw_lf_csd', 'waveforms', 'micro-manipulator'], or 'all'
     :return:
     """
-    if features_list == 'all':
-        features_list = ['raw_ap', 'raw_lf', 'raw_lf_csd', 'waveforms', 'micro-manipulator']
+    if features_list == "all":
+        features_list = [
+            "raw_ap",
+            "raw_lf",
+            "raw_lf_csd",
+            "waveforms",
+            "micro-manipulator",
+        ]
     # the looping preserves the order of the features groups in the list
     x_list = []
     for feature_group in features_list:
         match feature_group:
-            case 'raw_ap':
-                x_list += list(set(ModelApFeatures.to_schema().columns.keys()) - set(['channel']))
+            case "raw_ap":
+                x_list += list(
+                    set(ModelApFeatures.to_schema().columns.keys()) - set(["channel"])
+                )
             case "raw_lf":
-                x_list += list(set(ModelLfFeatures.to_schema().columns.keys()) - set(['channel']))
+                x_list += list(
+                    set(ModelLfFeatures.to_schema().columns.keys()) - set(["channel"])
+                )
             case "raw_lf_csd":
-                x_list += list(set(ModelCsdFeatures.to_schema().columns.keys()) - set(['channel']))
+                x_list += list(
+                    set(ModelCsdFeatures.to_schema().columns.keys()) - set(["channel"])
+                )
             case "waveforms":
-                x_list += list(set(ModelSpikeFeatures.to_schema().columns.keys()) - set(['channel']))
+                x_list += list(
+                    set(ModelSpikeFeatures.to_schema().columns.keys())
+                    - set(["channel"])
+                )
             case "micro-manipulator":
-                x_list += list(set(ModelHistologyPlanned.to_schema().columns.keys()) - set(['channel']))
+                x_list += list(
+                    set(ModelHistologyPlanned.to_schema().columns.keys())
+                    - set(["channel"])
+                )
     return x_list
+
 
 def _get_power_in_band(fscale, period, band):
     band = np.array(band)
@@ -258,11 +279,11 @@ def dart_subtraction_numpy(data, fs, geometry, **params):
     temp_suffix = "".join(
         [random.choice(string.ascii_lowercase + string.digits) for _ in range(8)]
     )
-    
+
     # Ensure scratch directory exists
     scratch_dir = Path.home().joinpath("scratch")
     scratch_dir.mkdir(parents=True, exist_ok=True)
-    
+
     detected_spikes, h5_filename = dartsort.subtract(
         rec_np,
         temp_folder := scratch_dir.joinpath(f"dart_{temp_suffix}"),
@@ -304,16 +325,16 @@ def spikes(data, fs: int, geometry: dict, return_waveforms=True, **params):
     :return:
     """
     params = DartParameters() if params is None else DartParameters(**params)
-    logger.info(f"Starting spike detection")
+    logger.info("Starting spike detection")
     df_spikes_, d_waveforms = dart_subtraction_numpy(data, fs, geometry, params=params)
-    logger.info(f"Spike detection completed")
+    logger.info("Spike detection completed")
     df_waveforms = ibldsp.waveforms.compute_spike_features(d_waveforms["denoised"])
     df_spikes = df_spikes_.merge(df_waveforms, left_index=True, right_index=True)
     # we cast the float32 values as float64
     df_spikes[df_spikes.select_dtypes(np.float32).columns] = df_spikes.select_dtypes(
         np.float32
     ).astype(np.float64)
-    fcn_mean_time = lambda x: np.mean((x - params.trough_offset)) / fs
+    fcn_mean_time = lambda x: np.mean((x - params.trough_offset)) / fs  # NOQA
     # aggregation by channel of the spikes / waveforms features
     df_spiking = (
         df_spikes.groupby("channel")
@@ -402,7 +423,9 @@ def xcor_acor_ratio(v: np.ndarray, geometry: dict, n_neighbor: int = 3) -> np.nd
     return cor_ratio[n_mirror:-n_mirror]
 
 
-def denoise_shank(feature: np.ndarray, xy: np.ndarray, labels: np.ndarray | None = None, fac: int = 1) -> np.ndarray:
+def denoise_shank(
+    feature: np.ndarray, xy: np.ndarray, labels: np.ndarray | None = None, fac: int = 1
+) -> np.ndarray:
     """
     Denoise the AP feature using a maximum variation filter. Interpolates the feature in a square grid,
     performs the filtering, and then interpolates back to the original grid.
@@ -417,11 +440,21 @@ def denoise_shank(feature: np.ndarray, xy: np.ndarray, labels: np.ndarray | None
     xyu = np.unique(xy[:, 0]), np.unique(xy[:, 1])
     x, y = np.meshgrid(*xyu)
     xyi = np.c_[x.flatten(), y.flatten()]
-    feature_image = scipy.interpolate.griddata(xy[isvalid, :], feature[isvalid], xyi).reshape(x.shape)
-    feature_image_nearest = scipy.interpolate.griddata(xy[isvalid, :], feature[isvalid], xyi, method='nearest').reshape(x.shape)
-    feature_image[np.isnan(feature_image)] = feature_image_nearest[np.isnan(feature_image)]
-    feature_image_dn = skimage.restoration.denoise_tv_chambolle(feature_image, weight=np.median(np.abs(feature_image)) * fac)
-    denoised_feature = scipy.interpolate.RegularGridInterpolator(xyu, feature_image_dn.T, bounds_error=False)(xy)
+    feature_image = scipy.interpolate.griddata(
+        xy[isvalid, :], feature[isvalid], xyi
+    ).reshape(x.shape)
+    feature_image_nearest = scipy.interpolate.griddata(
+        xy[isvalid, :], feature[isvalid], xyi, method="nearest"
+    ).reshape(x.shape)
+    feature_image[np.isnan(feature_image)] = feature_image_nearest[
+        np.isnan(feature_image)
+    ]
+    feature_image_dn = skimage.restoration.denoise_tv_chambolle(
+        feature_image, weight=np.median(np.abs(feature_image)) * fac
+    )
+    denoised_feature = scipy.interpolate.RegularGridInterpolator(
+        xyu, feature_image_dn.T, bounds_error=False
+    )(xy)
     return denoised_feature
 
 
@@ -434,18 +467,23 @@ def denoise_dataframe(df_pid, feature_names=None, fac=1):
     :return:
     """
     if feature_names is None:
-        feature_names = list(set(voltage_features_set(['raw_ap', 'raw_lf', 'raw_lf_csd', 'waveforms'])) & set(df_pid.columns))
-    df_pid_denoise = df_pid.loc[:, list(set(df_pid.columns) - set(feature_names))].copy()
+        feature_names = list(
+            set(voltage_features_set(["raw_ap", "raw_lf", "raw_lf_csd", "waveforms"]))
+            & set(df_pid.columns)
+        )
+    df_pid_denoise = df_pid.loc[
+        :, list(set(df_pid.columns) - set(feature_names))
+    ].copy()
     raw_features_schema = ModelRawFeatures.to_schema()
     for feature_name in feature_names:
         if (metadata := raw_features_schema.columns[feature_name].metadata) is not None:
-            fval = metadata['transform'](np.copy(df_pid[feature_name].to_numpy()))
+            fval = metadata["transform"](np.copy(df_pid[feature_name].to_numpy()))
         else:
             fval = np.copy(df_pid[feature_name].to_numpy())
-        fval[df_pid['labels'] != 0] = np.nan
+        fval[df_pid["labels"] != 0] = np.nan
         df_pid_denoise.loc[:, feature_name] = denoise_shank(
             feature=fval,
-            xy=df_pid[['lateral_um', 'axial_um']].values,
+            xy=df_pid[["lateral_um", "axial_um"]].values,
             fac=fac,
         )
     return df_pid_denoise

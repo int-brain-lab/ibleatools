@@ -1,4 +1,3 @@
-import hashlib
 from typing import List, Tuple
 from pathlib import Path
 import yaml
@@ -6,7 +5,6 @@ import yaml
 import numpy as np
 from xgboost import XGBClassifier
 
-# from ephys_atlas.data import save_model  # NO QA
 from iblutil.util import Bunch
 
 

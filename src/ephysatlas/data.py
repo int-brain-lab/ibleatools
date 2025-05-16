@@ -8,11 +8,9 @@ import pandas as pd
 from ibldsp.waveforms import peak_to_trough_ratio
 import neuropixel
 from one.remote import aws
-from iblutil.numerical import ismember
 
 from one.api import ONE
-from iblatlas.atlas import Insertion, NeedlesAtlas, AllenAtlas, BrainRegions, tilt_spherical
-from ibllib.pipes.histology import interpolate_along_track
+import iblatlas.atlas
 
 
 _logger = logging.getLogger("ibllib")
@@ -354,7 +352,7 @@ def save_model(path_model, classifier, meta, subfolder="", identifier=None):
         2023_W41_Cosmos_dfd731f0/FOLD01/
     :return:
     """
-    meta['MODEL_CLASS'] = (
+    meta["MODEL_CLASS"] = (
         f"{classifier.__class__.__module__}.{classifier.__class__.__name__}"
     )
     if identifier is None:
@@ -369,7 +367,9 @@ def save_model(path_model, classifier, meta, subfolder="", identifier=None):
     return path_model
 
 
-def download_model(local_path: Path, model_name: str, one: ONE, overwrite=False) -> Path:
+def download_model(
+    local_path: Path, model_name: str, one: ONE, overwrite=False
+) -> Path:
     """
     download_model(Path('/mnt/s0/ephys-atlas-decoding/models'), '2024_W50_Cosmos_lid-basket-sense', one=one)
     :param local_path:
@@ -437,7 +437,7 @@ def load_voltage_features(local_path, regions=None, mapping="Cosmos", dropna=Tru
     if mapping not in list_mapping:
         raise ValueError(f"mapping should be in {list_mapping}")
 
-    regions = BrainRegions() if regions is None else regions
+    regions = iblatlas.atlas.BrainRegions() if regions is None else regions
     if local_path is None:
         ## data loading section
         config = get_config()
@@ -458,8 +458,8 @@ def load_voltage_features(local_path, regions=None, mapping="Cosmos", dropna=Tru
     return df_voltage, df_clusters, df_channels, df_probes
 
 
-def prep_voltage_dataframe(df_voltage, mapping='Allen', regions=None):
-    regions = BrainRegions() if regions is None else regions
+def prep_voltage_dataframe(df_voltage, mapping="Allen", regions=None):
+    regions = iblatlas.atlas.BrainRegions() if regions is None else regions
     df_voltage.replace([np.inf, -np.inf], np.nan, inplace=True)
     if mapping != "Allen":
         df_voltage[mapping + "_id"] = regions.remap(
@@ -471,14 +471,15 @@ def prep_voltage_dataframe(df_voltage, mapping='Allen', regions=None):
     return df_voltage
 
 
-
 def load_tables(local_path, verify=False):
     """
     :param local_path: path to the folder containing the tables
     """
     local_path = Path(local_path)
     local_path.mkdir(exist_ok=True)  # no parent here
-    if not (file_raw_features := local_path.joinpath("raw_ephys_features_denoised.pqt")).exists():
+    if not (
+        file_raw_features := local_path.joinpath("raw_ephys_features_denoised.pqt")
+    ).exists():
         file_raw_features = local_path.joinpath("raw_ephys_features.pqt")
     df_channels = pd.read_parquet(local_path.joinpath("channels.pqt"))
     df_voltage = pd.read_parquet(file_raw_features)
@@ -612,6 +613,7 @@ def compute_depth_dataframe(df_raw_features, df_clusters, df_channels):
     df_depth = df_depth_raw.merge(df_depth_clusters, left_index=True, right_index=True)
     return df_depth
 
+
 def get_config():
     file_yaml = Path(__file__).parents[2].joinpath("config-ephys-atlas.yaml")
     with open(file_yaml, "r") as stream:
@@ -628,7 +630,7 @@ def compute_summary_stat(df_voltage, features):
     """
     # The behavior of loc is inconsistent
     # If you input a str instead of a list, it returns a Series instead of a dataframe
-    if type(features) != list:  # Make sure input is a list
+    if not isinstance(features, list):  # Make sure input is a list
         features = [features]
 
     summary = (
@@ -673,7 +675,7 @@ def prepare_mat_plot(array_in, id_feat, diag_val=0):
 
 def prepare_df_voltage(df_voltage, df_channels, br=None):
     if br is None:
-        br = BrainRegions()
+        br = iblatlas.atlas.BrainRegions()
     df_voltage = pd.merge(
         df_voltage, df_channels, left_index=True, right_index=True
     ).dropna()

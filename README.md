@@ -29,8 +29,14 @@ python main.py --config config.yaml
 
 ### Configuration File
 
-The `config.yaml` file contains all the necessary parameters for running the analysis. Here's an example configuration:
+The configuration is managed through a YAML file. To avoid committing local changes, the actual configuration file (`config.yaml`) is ignored by git. Instead, a template file (`config_template.yaml`) is provided. To use the tool:
 
+1. Copy the template file to create your local configuration:
+```bash
+cp config_template.yaml config.yaml
+```
+
+2. Edit `config.yaml` with your specific settings:
 ```yaml
 # Required parameters
 pid: "5246af08-0730-40f7-83de-29b5d62b9b6d"  # Probe ID
