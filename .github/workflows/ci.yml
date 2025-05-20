@@ -23,12 +23,8 @@ jobs:
     
     - name: Install dependencies
       run: |
-        pdm install -dG test
-
-    - name: Test imports
-      run: |
-        python -c "import ephysatlas"        
+        pdm install -dG test    
 
     - name: Run Tests
       run: |
-        pdm run -v pytest tests
+        pdm run -v pytest -v tests
