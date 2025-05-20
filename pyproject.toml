@@ -13,7 +13,20 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
 ]
 dynamic = ["version"]
-
+dependencies = [
+    "dartsort @ git+https://github.com/cwindolf/dartsort@iblsorter",
+    "dredge @ git+https://github.com/evarol/dredge@v0.2.2",
+    "h5py>=3.13.0",
+    "hdbscan>=0.8.40",
+    "ibllib>=3.3.1",
+    "linear-operator>=0.6",
+    "mock>=5.2.0",
+    "opt-einsum>=3.4.0",
+    "pandera>=0.24.0",
+    "pydantic>=2.11.4",
+    "spikeinterface>=0.101.2",
+    "xgboost>=3.0.1"
+]
 
 [build-system]
 requires = ["pdm-backend"]
@@ -22,15 +35,12 @@ build-backend = "pdm.backend"
 [tool.pdm]
 distribution = true
 
-[tool.pdm.dependencies]
-file = "requirements.txt"
-
 [tool.pdm.version]
 source = "file"
 path = 'src/ephysatlas/__init__.py'
 
 [tool.pdm.package-dir]
-ibleatools = "src/ephysatlas"
+ephysatlas = "src/ephysatlas"
 
 [tool.pdm.packages]
 include = ["src/ephysatlas"]
@@ -39,4 +49,8 @@ include = ["src/ephysatlas"]
 lint = ["ruff>=0.7.3"]
 dev = [
     "pytest>=8.3.5",
+]
+test = [
+    "pytest>=8.3.5",
+    "pytest-cov>=4.0.0",  # for coverage reports if needed
 ]
