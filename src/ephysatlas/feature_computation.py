@@ -343,3 +343,13 @@ def compute_features_from_raw(
     df_voltage.dropna(inplace=True)
 
     return df_voltage
+
+#TODO - Define a function to compute features for a single category.
+def compute_features_for_category(df, category):
+    """
+    Compute features for a specific category from a DataFrame.
+
+    Args:
+        df (pd.DataFrame): DataFrame containing computed features
+    """
+    #TODO - Define the features to compute for the category.
