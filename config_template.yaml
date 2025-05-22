@@ -24,9 +24,9 @@ log_path: "/path/to/logs/ibleatools.log"  # Absolute path for log file. If not p
 # 'inference' for region inference only, or 'both' for both operations
 mode: "both"
 
-# Path to save/load features file. If not provided,
+# Path to output directory.
 # features will be saved as 'features_{pid}.parquet' in the current directory
-features_path: "/path/to/your/features.parquet"
+output_dir: "/path/to/your/output/directory/"
 
 # Path to the model directory for region inference
 model_path: "/path/to/your/model/directory/"
