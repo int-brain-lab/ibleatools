@@ -1,5 +1,6 @@
 from functools import reduce
 import logging
+import os
 
 import scipy.signal
 import scipy.fft
@@ -13,6 +14,8 @@ from iblatlas.atlas import Insertion, NeedlesAtlas, AllenAtlas
 from ibllib.pipes.histology import interpolate_along_track
 
 from ephysatlas import features
+
+from pathlib import Path
 
 # Set up logger
 logger = logging.getLogger(__name__)
@@ -270,7 +273,7 @@ def compute_features(
 
 
 def compute_features_from_raw(
-    raw_ap, raw_lf, fs_ap, fs_lf, geometry, channel_labels=None
+    raw_ap, raw_lf, fs_ap, fs_lf, geometry, channel_labels=None, features_to_compute=None, save_dir=Path(".")
 ):
     """
     Compute features from raw numpy arrays of AP and LF data.
@@ -282,6 +285,9 @@ def compute_features_from_raw(
         fs_lf (float): Sampling frequency of LF data
         geometry (dict): Dictionary containing 'x' and 'y' coordinates for each channel
         channel_labels (np.ndarray, optional): Array of channel labels. If None, will be computed.
+        features_to_compute (list, optional): List of feature sets to compute. If None, computes all features.
+            Available options: ['channels', 'lf', 'csd', 'ap', 'waveforms']
+        save_dir (str, optional): Directory to save individual feature sets. If None, features are not saved.
 
     Returns:
         pd.DataFrame: DataFrame containing computed features
@@ -295,6 +301,18 @@ def compute_features_from_raw(
         raw_ap.shape[0] == len(geometry["x"]) == len(geometry["y"])
     ), "Number of channels must match geometry"
     assert fs_ap > 0 and fs_lf > 0, "Sampling frequencies must be positive"
+
+    # Define available feature sets
+    available_features = ['channels', 'lf', 'csd', 'ap', 'waveforms']
+    
+    # If no specific features are requested, compute all
+    if features_to_compute is None:
+        features_to_compute = available_features
+    else:
+        # Validate requested features
+        invalid_features = [f for f in features_to_compute if f not in available_features]
+        if invalid_features:
+            raise ValueError(f"Invalid feature sets requested: {invalid_features}. Available options: {available_features}")
 
     # Todo do I need to check the dtype of the raw_ap and raw_lf?
     if channel_labels is None:
@@ -316,25 +334,76 @@ def compute_features_from_raw(
     logger.info("Destriped AP and LF data")
 
     df = {}
-    df["channels"] = pd.DataFrame(
-        {
-            "lateral_um": geometry["x"],
-            "axial_um": geometry["y"],
-            "labels": channel_labels,
-            "channel": np.arange(len(channel_labels)),
-        }
-    )
+    
+    # Function to save features to file
+    def save_features(feature_name, feature_df):
+        if save_dir is not None:
+            os.makedirs(save_dir, exist_ok=True)
+            file_path = os.path.join(save_dir, f"{feature_name}_features.parquet")
+            feature_df.to_parquet(file_path)
+            logger.info(f"Saved {feature_name} features to {file_path}")
+
+    # Function to load features from file
+    def load_features(feature_name):
+        if save_dir is not None:
+            file_path = os.path.join(save_dir, f"{feature_name}_features.parquet")
+            if os.path.exists(file_path):
+                logger.info(f"Loading {feature_name} features from {file_path}")
+                return pd.read_parquet(file_path)
+        return None
+
+    # Compute or load each feature set
+    if 'channels' in features_to_compute:
+        df["channels"] = pd.DataFrame(
+            {
+                "lateral_um": geometry["x"],
+                "axial_um": geometry["y"],
+                "labels": channel_labels,
+                "channel": np.arange(len(channel_labels)),
+            }
+        )
+        save_features('channels', df["channels"])
+    else:
+        df["channels"] = load_features('channels')
+        if df["channels"] is None:
+            raise ValueError("Channels features not found in save directory")
 
     logger.info("Starting LF, CSD and AP computation")
-    df["lf"] = features.lf(des_lf, fs=fs_lf)
-    df["csd"] = features.csd(des_lf, fs=fs_lf, geometry=geometry, decimate=10)
-    df["ap"] = features.ap(des_ap, geometry=geometry)
-    logger.info("LF, CSD and AP computation completed")
+    
+    if 'lf' in features_to_compute:
+        df["lf"] = features.lf(des_lf, fs=fs_lf)
+        save_features('lf', df["lf"])
+    else:
+        df["lf"] = load_features('lf')
+        if df["lf"] is None:
+            raise ValueError("LF features not found in save directory")
+
+    if 'csd' in features_to_compute:
+        df["csd"] = features.csd(des_lf, fs=fs_lf, geometry=geometry, decimate=10)
+        save_features('csd', df["csd"])
+    else:
+        df["csd"] = load_features('csd')
+        if df["csd"] is None:
+            raise ValueError("CSD features not found in save directory")
+
+    if 'ap' in features_to_compute:
+        df["ap"] = features.ap(des_ap, geometry=geometry)
+        save_features('ap', df["ap"])
+    else:
+        df["ap"] = load_features('ap')
+        if df["ap"] is None:
+            raise ValueError("AP features not found in save directory")
 
     # this takes a long time !
     logger.info("Starting waveforms computation")
-    df["waveforms"], waveforms = features.spikes(des_ap, fs=fs_ap, geometry=geometry)
-    df["waveforms"]["spike_count"] = df["waveforms"]["spike_count"].astype("Int64")
+    if 'waveforms' in features_to_compute:
+        df["waveforms"], waveforms = features.spikes(des_ap, fs=fs_ap, geometry=geometry)
+        df["waveforms"]["spike_count"] = df["waveforms"]["spike_count"].astype("Int64")
+        save_features('waveforms', df["waveforms"])
+    else:
+        df["waveforms"] = load_features('waveforms')
+        if df["waveforms"] is None:
+            raise ValueError("Waveforms features not found in save directory")
 
     df_voltage = reduce(
         lambda left, right: pd.merge(left, right, on="channel", how="outer"),

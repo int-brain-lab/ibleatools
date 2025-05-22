@@ -47,7 +47,7 @@ duration: 3.0  # Duration in seconds
 mode: "both"  # Options: 'features', 'inference', or 'both'
 
 # Optional parameters
-features_path: "/path/to/features"  # Path to save/load features file
+features_path: "/path/to/output_dir"  # Path to output directory.
 model_path: "/path/to/model"  # Path to the model directory for region inference
 ```
 
@@ -65,7 +65,7 @@ model_path: "/path/to/model"  # Path to the model directory for region inference
     - `both`: Perform both feature computation and region inference
 
 - **Optional Parameters**:
-  - `features_path`: Path to save/load features file. If not provided, features will be saved as `features_{pid}.parquet` in the current directory
+  - `output_dir`: Path to output directory
   - `model_path`: Path to the model directory for region inference. If not provided, a default path will be used
 
 ## Features
