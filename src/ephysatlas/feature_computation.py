@@ -175,10 +175,10 @@ def load_data_from_pid(pid, one):
         print(f"Computing features for eid: {pid['eid']}, probe name: {pid['probe_name']}")
         eid = pid["eid"]
         probe_name = pid["probe_name"]
-        ssl = SpikeSortingLoader(eid=eid, pname=probe_name, one=one)
+        ssl = SpikeSortingLoader(pid=pid["pid"], eid=eid, pname=probe_name, one=one)
         #Need to change this to stream=False
-        sr_ap = ssl.raw_electrophysiology(band="ap", stream=False)
-        sr_lf = ssl.raw_electrophysiology(band="lf", stream=False)
+        sr_ap = ssl.raw_electrophysiology(band="ap", stream=True)
+        sr_lf = ssl.raw_electrophysiology(band="lf", stream=True)
     else:
         assert isinstance(pid, str), "PID must be a string"
         ssl = SpikeSortingLoader(pid=pid, one=one)
