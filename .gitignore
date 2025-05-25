@@ -178,3 +178,4 @@ config.yaml
 Todos.md
 Issues.md
 testing.ipynb
+*.parquet

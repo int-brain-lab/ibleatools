@@ -44,9 +44,18 @@ def get_target_coordinates(pid=None, one=None, channels=None, traj_dict=None):
     # Validate input combinations
     if pid is not None and one is not None:
         # Mode 1: Using Alyx database
-        trajs = one.alyx.rest(
-            "trajectories", "list", probe_insertion=pid, django="provenance__lte,30"
-        )
+        # Check if one is in local mode or remote mode,
+        # TODO - Doing this for SDSC computation but need to do it cleaner.
+        if one.mode == "local":
+            from one.api import ONE
+            one_remote = ONE(mode="remote")
+            trajs = one_remote.alyx.rest(
+                "trajectories", "list", probe_insertion=pid, django="provenance__lte,30"
+            )
+        else:
+            trajs = one.alyx.rest(
+                "trajectories", "list", probe_insertion=pid, django="provenance__lte,30"
+            )
         traj = next(
             (t for t in trajs if t["provenance"] == "Micro-manipulator"), trajs[0]
         )
@@ -160,10 +169,22 @@ def load_data_from_pid(pid, one):
         tuple: (sr_ap, sr_lf, channels) SpikeGLX readers and channel information
     """
     logger.info(f"Loading data using PID: {pid}")
-    ssl = SpikeSortingLoader(pid=pid, one=one)
+    # if pid is a dict, then extract eid and probe_name from it
+    if isinstance(pid, dict):
+        # logger.info(f"Computing features for eid: {pid['eid']}, probe name: {pid['probe_name']}")
+        print(f"Computing features for eid: {pid['eid']}, probe name: {pid['probe_name']}")
+        eid = pid["eid"]
+        probe_name = pid["probe_name"]
+        ssl = SpikeSortingLoader(eid=eid, pname=probe_name, one=one)
+        #Need to change this to stream=False
+        sr_ap = ssl.raw_electrophysiology(band="ap", stream=False)
+        sr_lf = ssl.raw_electrophysiology(band="lf", stream=False)
+    else:
+        assert isinstance(pid, str), "PID must be a string"
+        ssl = SpikeSortingLoader(pid=pid, one=one)
+        sr_ap = ssl.raw_electrophysiology(band="ap", stream=True)
+        sr_lf = ssl.raw_electrophysiology(band="lf", stream=True)
     channels = ssl.load_channels()
-    sr_ap = ssl.raw_electrophysiology(band="ap", stream=True)
-    sr_lf = ssl.raw_electrophysiology(band="lf", stream=True)
     logger.info(f"Session path: {ssl.session_path}, probe name: {ssl.pname}")
     return sr_ap, sr_lf, channels
 
@@ -196,6 +217,8 @@ def load_data_from_files(ap_file, lf_file):
         raise RuntimeError(f"Failed to load .cbin files: {str(e)}")
 
 
+# TODO - Allow pid to be a dict so that it can be used for SDSC computation.
+# Also change the name of the variable from pid to something else.
 def compute_features(
     pid=None,
     t_start=None,
@@ -258,7 +281,12 @@ def compute_features(
     # Add xyz target information if available
     if pid is not None and one is not None:
         # Mode 1: Using Alyx database
-        xyz_target = get_target_coordinates(pid=pid, one=one, channels=channels)
+        # if pid is a dict, then extract eid and probe_name from it
+        if isinstance(pid, dict):
+            probe_id = pid["pid"]
+        else:
+            probe_id = pid
+        xyz_target = get_target_coordinates(pid=probe_id, one=one, channels=channels)
         df = df.merge(xyz_target, left_index=True, right_index=True, how="left")
     elif traj_dict is not None:
         # Mode 2: Using direct trajectory dictionary
