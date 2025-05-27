@@ -1,7 +1,7 @@
 from functools import reduce
 import logging
 import os
-
+from deploy.iblsdsc import OneSdsc
 import scipy.signal
 import scipy.fft
 import pandas as pd
@@ -80,7 +80,7 @@ def get_target_coordinates(pid=None, one=None, channels=None, traj_dict=None):
     return dfc
 
 
-def online_feature_computation(sr_lf, sr_ap, t0, duration, channel_labels=None):
+def online_feature_computation(sr_lf, sr_ap, t0, duration, channel_labels=None, save_dir=Path(".")):
     """
     Compute features from SpikeGLX reader objects.
 
@@ -154,9 +154,10 @@ def online_feature_computation(sr_lf, sr_ap, t0, duration, channel_labels=None):
         fs_lf=sr_lf.fs,
         geometry=sr_ap.geometry,
         channel_labels=channel_labels,
+        save_dir=save_dir
     )
 
-
+# TODO - Need to be clear here , if I want to check based on SDSC or not, VS pid as dict or pid as string.
 def load_data_from_pid(pid, one):
     """
     Load data using a probe ID from the ONE database.
@@ -172,13 +173,16 @@ def load_data_from_pid(pid, one):
     # if pid is a dict, then extract eid and probe_name from it
     if isinstance(pid, dict):
         # logger.info(f"Computing features for eid: {pid['eid']}, probe name: {pid['probe_name']}")
-        print(f"Computing features for eid: {pid['eid']}, probe name: {pid['probe_name']}")
+        print(f"Computing features for eid: {pid['eid']}, probe name: {pid['probe_name']}, pid: {pid['pid']}")
         eid = pid["eid"]
         probe_name = pid["probe_name"]
         ssl = SpikeSortingLoader(pid=pid["pid"], eid=eid, pname=probe_name, one=one)
-        #Need to change this to stream=False
-        sr_ap = ssl.raw_electrophysiology(band="ap", stream=True)
-        sr_lf = ssl.raw_electrophysiology(band="lf", stream=True)
+        if isinstance(one, OneSdsc):
+            stream = False
+        else:
+            stream = True
+        sr_ap = ssl.raw_electrophysiology(band="ap", stream=stream)
+        sr_lf = ssl.raw_electrophysiology(band="lf", stream=stream)
     else:
         assert isinstance(pid, str), "PID must be a string"
         ssl = SpikeSortingLoader(pid=pid, one=one)
@@ -227,6 +231,7 @@ def compute_features(
     ap_file=None,
     lf_file=None,
     traj_dict=None,
+    save_dir=Path("."),
 ):
     """
     Compute features from either PID or .cbin files.
@@ -273,7 +278,7 @@ def compute_features(
 
     # Compute features
     df = online_feature_computation(
-        sr_ap=sr_ap, sr_lf=sr_lf, t0=t_start, duration=duration
+        sr_ap=sr_ap, sr_lf=sr_lf, t0=t_start, duration=duration, save_dir=save_dir
     )
     # df.to_parquet("/Users/pranavrai/Work/int-brain-lab/temp/features/features_wo_target.parquet",index=True)
     # df = pd.read_parquet("/Users/pranavrai/Work/int-brain-lab/temp/features/features_wo_target.parquet")
@@ -428,6 +433,15 @@ def compute_features_from_raw(
         df["waveforms"], waveforms = features.spikes(des_ap, fs=fs_ap, geometry=geometry)
         df["waveforms"]["spike_count"] = df["waveforms"]["spike_count"].astype("Int64")
         save_features('waveforms', df["waveforms"])
+
+        # Save other waveform featres in waveform directory.
+        waveforms_dir = save_dir / "waveforms"
+        waveforms_dir.mkdir(parents=True, exist_ok=True)
+        # save the waveforms to a file
+        np.save(waveforms_dir / "raw.npy", waveforms['raw'].astype(np.float16))
+        np.save(waveforms_dir / "denoised.npy", waveforms['denoised'].astype(np.float16))
+        np.save(waveforms_dir / "waveform_channels.npy", waveforms['channel_index'])
+        waveforms['df_spikes'].to_parquet(waveforms_dir / "spikes.pqt")
     else:
         df["waveforms"] = load_features('waveforms')
         if df["waveforms"] is None:
