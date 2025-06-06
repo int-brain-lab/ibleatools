@@ -9,14 +9,15 @@ This repository contains tools for computing electrophysiology features and perf
 conda activate iblenv
 ```
 
-2. Install the required packages using conda:
+2. Clone the `ibleatools` repository, and `cd` into it
 ```bash
-conda install --file requirements.txt
+cd ...yourpath/ibleatools
 ```
 
-If some packages are not available through conda, you can install them using pip:
+
+3. Once in the `ibleatools` folder, install the required packages using pip:
 ```bash
-pip install -r requirements.txt
+pip install -e .
 ```
 
 ## Usage
