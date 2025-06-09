@@ -281,8 +281,15 @@ def dart_subtraction_numpy(data, fs, geometry, **params):
     )
 
     # Ensure scratch directory exists
-    scratch_dir = Path.home().joinpath("scratch")
-    scratch_dir.mkdir(parents=True, exist_ok=True)
+    scratch_dir = Path("/scratch/prai1/dartsort/")
+    try:
+        scratch_dir.mkdir(parents=True, exist_ok=True)
+    except PermissionError as e:
+        logger.warning(f"PermissionError: {e}")
+        # Create scratch directory in /tmp
+        scratch_dir = Path("/tmp/prai1/dartsort/")
+        scratch_dir.mkdir(parents=True, exist_ok=True)
+
 
     detected_spikes, h5_filename = dartsort.subtract(
         rec_np,

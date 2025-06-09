@@ -6,6 +6,7 @@ import scipy.signal
 import scipy.fft
 import pandas as pd
 import numpy as np
+import iblatlas
 
 from brainbox.io.one import SpikeSortingLoader
 import ibldsp.voltage
@@ -65,13 +66,24 @@ def get_target_coordinates(pid=None, one=None, channels=None, traj_dict=None):
     else:
         raise ValueError("Either provide (pid, one) or traj_dict")
 
+    # Apply the pitch correction by using iblatlas.atlas.tilt_spherical()
+    new_theta, new_phi = iblatlas.atlas.tilt_spherical(traj['theta'], traj['phi'], tilt_angle = -5)
+    traj['theta'] = new_theta
+    traj['phi'] = new_phi
+    
     ins = Insertion.from_dict(traj, brain_atlas=needles)
-    # TODO: apply the pitch correction by using iblatlas.atlas.tilt_spherical()
+    
     txyz = np.flipud(ins.xyz)
     # we convert the coordinates from in-vivo to the Allen coordinate system
     txyz = allen.bc.i2xyz(needles.bc.xyz2i(txyz / 1e6, round=False, mode="clip")) * 1e6
     xyz_mm = interpolate_along_track(txyz, channels["axial_um"] / 1e6)
     # aid_mm = needles.get_labels(xyz=xyz_mm, mode="clip")
+
+    #Check if the rawInd data exists in the channels dictionary, otherwise use the default 384 channels based on the geometry.
+    if "rawInd" not in channels:
+        assert channels["axial_um"].size == 384
+        channels["rawInd"] = np.arange(384)
+
     # we interpolate the channels from the deepest point up. The neuropixel y coordinate is from the bottom of the probe
     dfc = pd.DataFrame(
         {"x_target": xyz_mm[:, 0], "y_target": xyz_mm[:, 1], "z_target": xyz_mm[:, 2]},
