@@ -284,7 +284,7 @@ def dart_subtraction_numpy(data, fs, geometry, **params):
     scratch_dir = Path("/scratch/prai1/dartsort/")
     try:
         scratch_dir.mkdir(parents=True, exist_ok=True)
-    except PermissionError as e:
+    except Exception as e:
         logger.warning(f"PermissionError: {e}")
         # Create scratch directory in /tmp
         scratch_dir = Path("/tmp/prai1/dartsort/")
