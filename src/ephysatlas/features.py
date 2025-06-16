@@ -281,8 +281,17 @@ def dart_subtraction_numpy(data, fs, geometry, **params):
     )
 
     # Ensure scratch directory exists
-    scratch_dir = Path.home().joinpath("scratch")
-    scratch_dir.mkdir(parents=True, exist_ok=True)
+    #This is for SDSC calculations
+    scratch_dir = Path("/scratch/prai1/dartsort/")
+    try:
+        scratch_dir.mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        #We are probably on a local machine
+        logger.warning(f"Error creating scratch directory: {e}")
+        # Create scratch directory in /tmp
+        scratch_dir = Path("/tmp/dartsort/")
+        scratch_dir.mkdir(parents=True, exist_ok=True)
+
 
     detected_spikes, h5_filename = dartsort.subtract(
         rec_np,

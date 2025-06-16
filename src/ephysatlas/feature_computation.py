@@ -1,11 +1,12 @@
 from functools import reduce
 import logging
 import os
-
+from deploy.iblsdsc import OneSdsc
 import scipy.signal
 import scipy.fft
 import pandas as pd
 import numpy as np
+import iblatlas
 
 from brainbox.io.one import SpikeSortingLoader
 import ibldsp.voltage
@@ -44,9 +45,18 @@ def get_target_coordinates(pid=None, one=None, channels=None, traj_dict=None):
     # Validate input combinations
     if pid is not None and one is not None:
         # Mode 1: Using Alyx database
-        trajs = one.alyx.rest(
-            "trajectories", "list", probe_insertion=pid, django="provenance__lte,30"
-        )
+        # Check if one is in local mode or remote mode,
+        # TODO - Doing this for SDSC computation but need to do it cleaner.
+        if one.mode == "local":
+            from one.api import ONE
+            one_remote = ONE(mode="remote")
+            trajs = one_remote.alyx.rest(
+                "trajectories", "list", probe_insertion=pid, django="provenance__lte,30"
+            )
+        else:
+            trajs = one.alyx.rest(
+                "trajectories", "list", probe_insertion=pid, django="provenance__lte,30"
+            )
         traj = next(
             (t for t in trajs if t["provenance"] == "Micro-manipulator"), trajs[0]
         )
@@ -56,13 +66,24 @@ def get_target_coordinates(pid=None, one=None, channels=None, traj_dict=None):
     else:
         raise ValueError("Either provide (pid, one) or traj_dict")
 
+    # Apply the pitch correction by using iblatlas.atlas.tilt_spherical()
+    new_theta, new_phi = iblatlas.atlas.tilt_spherical(traj['theta'], traj['phi'], tilt_angle = -5)
+    traj['theta'] = new_theta
+    traj['phi'] = new_phi
+    
     ins = Insertion.from_dict(traj, brain_atlas=needles)
-    # TODO: apply the pitch correction by using iblatlas.atlas.tilt_spherical()
+    
     txyz = np.flipud(ins.xyz)
     # we convert the coordinates from in-vivo to the Allen coordinate system
     txyz = allen.bc.i2xyz(needles.bc.xyz2i(txyz / 1e6, round=False, mode="clip")) * 1e6
     xyz_mm = interpolate_along_track(txyz, channels["axial_um"] / 1e6)
     # aid_mm = needles.get_labels(xyz=xyz_mm, mode="clip")
+
+    #Check if the rawInd data exists in the channels dictionary, otherwise use the default 384 channels based on the geometry.
+    if "rawInd" not in channels:
+        assert channels["axial_um"].size == 384
+        channels["rawInd"] = np.arange(384)
+
     # we interpolate the channels from the deepest point up. The neuropixel y coordinate is from the bottom of the probe
     dfc = pd.DataFrame(
         {"x_target": xyz_mm[:, 0], "y_target": xyz_mm[:, 1], "z_target": xyz_mm[:, 2]},
@@ -71,7 +92,7 @@ def get_target_coordinates(pid=None, one=None, channels=None, traj_dict=None):
     return dfc
 
 
-def online_feature_computation(sr_lf, sr_ap, t0, duration, channel_labels=None):
+def online_feature_computation(sr_lf, sr_ap, t0, duration, channel_labels=None, save_dir=Path(".")):
     """
     Compute features from SpikeGLX reader objects.
 
@@ -145,9 +166,10 @@ def online_feature_computation(sr_lf, sr_ap, t0, duration, channel_labels=None):
         fs_lf=sr_lf.fs,
         geometry=sr_ap.geometry,
         channel_labels=channel_labels,
+        save_dir=save_dir
     )
 
-
+# TODO - Need to be clear here , if I want to check based on SDSC or not, VS pid as dict or pid as string.
 def load_data_from_pid(pid, one):
     """
     Load data using a probe ID from the ONE database.
@@ -160,10 +182,25 @@ def load_data_from_pid(pid, one):
         tuple: (sr_ap, sr_lf, channels) SpikeGLX readers and channel information
     """
     logger.info(f"Loading data using PID: {pid}")
-    ssl = SpikeSortingLoader(pid=pid, one=one)
+    # if pid is a dict, then extract eid and probe_name from it
+    if isinstance(pid, dict):
+        # logger.info(f"Computing features for eid: {pid['eid']}, probe name: {pid['probe_name']}")
+        print(f"Computing features for eid: {pid['eid']}, probe name: {pid['probe_name']}, pid: {pid['pid']}")
+        eid = pid["eid"]
+        probe_name = pid["probe_name"]
+        ssl = SpikeSortingLoader(pid=pid["pid"], eid=eid, pname=probe_name, one=one)
+        if isinstance(one, OneSdsc):
+            stream = False
+        else:
+            stream = True
+        sr_ap = ssl.raw_electrophysiology(band="ap", stream=stream)
+        sr_lf = ssl.raw_electrophysiology(band="lf", stream=stream)
+    else:
+        assert isinstance(pid, str), "PID must be a string"
+        ssl = SpikeSortingLoader(pid=pid, one=one)
+        sr_ap = ssl.raw_electrophysiology(band="ap", stream=True)
+        sr_lf = ssl.raw_electrophysiology(band="lf", stream=True)
     channels = ssl.load_channels()
-    sr_ap = ssl.raw_electrophysiology(band="ap", stream=True)
-    sr_lf = ssl.raw_electrophysiology(band="lf", stream=True)
     logger.info(f"Session path: {ssl.session_path}, probe name: {ssl.pname}")
     return sr_ap, sr_lf, channels
 
@@ -196,6 +233,8 @@ def load_data_from_files(ap_file, lf_file):
         raise RuntimeError(f"Failed to load .cbin files: {str(e)}")
 
 
+# TODO - Allow pid to be a dict so that it can be used for SDSC computation.
+# Also change the name of the variable from pid to something else.
 def compute_features(
     pid=None,
     t_start=None,
@@ -204,6 +243,7 @@ def compute_features(
     ap_file=None,
     lf_file=None,
     traj_dict=None,
+    save_dir=Path("."),
 ):
     """
     Compute features from either PID or .cbin files.
@@ -250,7 +290,7 @@ def compute_features(
 
     # Compute features
     df = online_feature_computation(
-        sr_ap=sr_ap, sr_lf=sr_lf, t0=t_start, duration=duration
+        sr_ap=sr_ap, sr_lf=sr_lf, t0=t_start, duration=duration, save_dir=save_dir
     )
     # df.to_parquet("/Users/pranavrai/Work/int-brain-lab/temp/features/features_wo_target.parquet",index=True)
     # df = pd.read_parquet("/Users/pranavrai/Work/int-brain-lab/temp/features/features_wo_target.parquet")
@@ -258,7 +298,12 @@ def compute_features(
     # Add xyz target information if available
     if pid is not None and one is not None:
         # Mode 1: Using Alyx database
-        xyz_target = get_target_coordinates(pid=pid, one=one, channels=channels)
+        # if pid is a dict, then extract eid and probe_name from it
+        if isinstance(pid, dict):
+            probe_id = pid["pid"]
+        else:
+            probe_id = pid
+        xyz_target = get_target_coordinates(pid=probe_id, one=one, channels=channels)
         df = df.merge(xyz_target, left_index=True, right_index=True, how="left")
     elif traj_dict is not None:
         # Mode 2: Using direct trajectory dictionary
@@ -400,6 +445,15 @@ def compute_features_from_raw(
         df["waveforms"], waveforms = features.spikes(des_ap, fs=fs_ap, geometry=geometry)
         df["waveforms"]["spike_count"] = df["waveforms"]["spike_count"].astype("Int64")
         save_features('waveforms', df["waveforms"])
+
+        # Save other waveform featres in waveform directory.
+        waveforms_dir = save_dir / "waveforms"
+        waveforms_dir.mkdir(parents=True, exist_ok=True)
+        # save the waveforms to a file
+        np.save(waveforms_dir / "raw.npy", waveforms['raw'].astype(np.float16))
+        np.save(waveforms_dir / "denoised.npy", waveforms['denoised'].astype(np.float16))
+        np.save(waveforms_dir / "waveform_channels.npy", waveforms['channel_index'])
+        waveforms['df_spikes'].to_parquet(waveforms_dir / "spikes.pqt")
     else:
         df["waveforms"] = load_features('waveforms')
         if df["waveforms"] is None:

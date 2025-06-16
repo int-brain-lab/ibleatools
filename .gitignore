@@ -178,3 +178,7 @@ config.yaml
 Todos.md
 Issues.md
 testing.ipynb
+*.parquet
+scratch/
+.DS_Store
+random_testing_scripts.py
