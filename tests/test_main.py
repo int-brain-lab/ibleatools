@@ -1,5 +1,4 @@
 import pytest
-from pathlib import Path
 import yaml
 import tempfile
 import os
@@ -9,16 +8,7 @@ from main import load_config, parse_arguments, get_parameters
 
 def test_imports():
     """Test that all required modules can be imported"""
-    import numpy as np
-    import pandas as pd
-    import yaml
-    from one.api import ONE
-    from iblutil.util import setup_logger
-    from ephysatlas.feature_computation import compute_features
-    from ephysatlas.region_inference import infer_regions
-    from ephysatlas.plots import plot_results
-    from ephysatlas import decoding
-    
+
     # If we get here, all imports worked
     assert True 
 

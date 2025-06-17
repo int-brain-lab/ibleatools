@@ -1,6 +1,6 @@
 from one.api import ONE
 from ephysatlas.feature_computation import compute_features
-from ephysatlas.region_inference import infer_regions
+from ephysatlas.regionclassifier.region_inference import infer_regions
 from pathlib import Path
 import pandas as pd
 
