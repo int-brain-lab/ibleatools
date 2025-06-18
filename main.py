@@ -12,7 +12,7 @@ from iblutil.util import setup_logger
 from one.api import ONE
 
 from ephysatlas.feature_computation import compute_features
-from ephysatlas.regionclassifier.region_inference import infer_regions
+from ephysatlas.regionclassifier import infer_regions
 from ephysatlas.plots import plot_results
 from ephysatlas import decoding
 

@@ -7,8 +7,28 @@ from xgboost import XGBClassifier
 
 from iblutil.util import Bunch
 
+from ephysatlas import features
+
 
 def load_model(path_model):
+    """
+    Load a trained XGBoost classifier model from disk.
+
+    This function loads both the model binary and its associated metadata from the
+    specified directory. The model is expected to be in UBJ format, and the metadata
+    in YAML format.
+
+    Args:
+        path_model: Path or str
+            Path to the directory containing the model files.
+            The directory should contain 'model.ubj' and 'meta.yaml' files.
+
+    Returns:
+        dict_model: Bunch
+            A dictionary-like object containing:
+            - 'classifier': The loaded XGBClassifier model
+            - 'meta': Dictionary with model metadata loaded from meta.yaml
+    """
     path_model = Path(path_model)
     # load model
     with open(path_model.joinpath("meta.yaml")) as f:
@@ -111,3 +131,24 @@ def viterbi(
         state_sequence.append(state)
 
     return state_sequence[::-1], sequence_prob
+
+
+def infer_regions(df_inference, path_models):
+    for fold in range(n_folds):
+        dict_model = decoding.load_model(path_model.joinpath(f"FOLD0{fold}"))
+        classifier = dict_model["classifier"]
+
+        df_inference["outside"] = 0
+        df_inference_denoised = features.denoise_dataframe(df_inference)
+
+        x_test = df_inference_denoised.loc[:, dict_model["meta"]["FEATURES"]].values
+        y_pred = classifier.predict(x_test)
+        y_probas = classifier.predict_proba(x_test)
+
+        if fold == 0:
+            predicted_probas = np.zeros((n_folds, y_probas.shape[0], y_probas.shape[1]))
+            predicted_region = np.zeros((n_folds, y_pred.shape[0]))
+        predicted_probas[fold] = y_probas
+        predicted_region[fold] = y_pred
+
+    return predicted_probas, predicted_region
