@@ -6,7 +6,6 @@ import numpy as np
 from xgboost import XGBClassifier
 
 from iblutil.util import Bunch
-
 from ephysatlas import features
 
 
@@ -133,9 +132,9 @@ def viterbi(
     return state_sequence[::-1], sequence_prob
 
 
-def infer_regions(df_inference, path_models):
+def infer_regions(df_inference, path_model, n_folds=5):
     for fold in range(n_folds):
-        dict_model = decoding.load_model(path_model.joinpath(f"FOLD0{fold}"))
+        dict_model = load_model(path_model.joinpath(f"FOLD0{fold}"))
         classifier = dict_model["classifier"]
 
         df_inference["outside"] = 0
