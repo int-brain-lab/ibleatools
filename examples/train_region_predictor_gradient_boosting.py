@@ -9,6 +9,8 @@ from iblutil.numerical import ismember
 import ephysatlas.anatomy
 import ephysatlas.data
 import ephysatlas.regionclassifier
+
+
 # we are shooting for around 55% accuracy
 
 
@@ -65,7 +67,7 @@ def train(test_idx, fold_label):
     x_test = df_features.loc[test_idx, x_list].values
     y_train = df_features.loc[train_idx, TRAIN_LABEL].values
     y_test = df_features.loc[test_idx, TRAIN_LABEL].values
-    df_benchmarks = df_features.loc[ismember(df_features.index.get_level_values(0), ephys_atlas.data.BENCHMARK_PIDS)[0], :].copy()
+    df_benchmarks = df_features.loc[ismember(df_features.index.get_level_values(0), ephysatlas.data.BENCHMARK_PIDS)[0], :].copy()
     df_test = df_features.loc[test_idx, :].copy()
     classes = np.unique(df_features.loc[train_idx, TRAIN_LABEL])
 
@@ -89,8 +91,7 @@ def train(test_idx, fold_label):
     return classifier.predict_proba(x_test), classifier, accuracy
 
 # %%
-IDENTIFIER = 'lid-basket-sense'
-IDENTIFIER = 'voter-snap-pudding'
+
 n_folds = 5
 all_pids = np.array(df_features.index.get_level_values(0).unique())
 np.random.seed(12345)
@@ -111,7 +112,7 @@ for i in range(n_folds):
         CLASSES=[int(c) for c in all_classes],
         ACCURACY=accuracy,
         )
-    path_model = ephysatlas.regionclassifier.save_model(path_models, classifier, meta, subfolder=f'FOLD{i :02d}', identifier=IDENTIFIER)
+#    path_model = ephysatlas.regionclassifier.save_model(path_models, classifier, meta, subfolder=f'FOLD{i :02d}', identifier=IDENTIFIER)
 
 df_predictions.to_parquet(path_models / 'predictions_Cosmos.pqt')
 
