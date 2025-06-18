@@ -397,6 +397,7 @@ def compute_features_from_raw(
                 return pd.read_parquet(file_path)
         return None
 
+    #TODO add a new parameter to the compute_features_from_raw function, which checks if the it was called from PID and then calculate the full list of channels dataset.
     # Compute or load each feature set
     if 'channels' in features_to_compute:
         df["channels"] = pd.DataFrame(
