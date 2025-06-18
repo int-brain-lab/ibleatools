@@ -34,9 +34,8 @@ df_features = df_features.merge(pd.read_parquet(path_features / 'channels.pqt'),
 df_features = df_features.merge(pd.read_parquet(path_features / 'channels_labels.pqt').fillna(0), how='inner', right_index=True, left_index=True)
 ephysatlas.data.load_tables(local_path=path_features)
 
-
-FEATURE_SET = ['raw_lf', 'raw_lf_csd', 'raw_ap', 'localisation', 'waveforms', 'micro-manipulator']
 FEATURE_SET = ['raw_lf', 'raw_lf_csd', 'raw_ap', 'micro-manipulator']
+FEATURE_SET = ['raw_lf', 'raw_lf_csd', 'raw_ap', 'localisation', 'waveforms', 'micro-manipulator']
 x_list = ephysatlas.features.voltage_features_set(FEATURE_SET)
 
 df_features['outside'] = df_features['labels'] == 3
@@ -91,7 +90,6 @@ def train(test_idx, fold_label):
     return classifier.predict_proba(x_test), classifier, accuracy
 
 # %%
-
 n_folds = 5
 all_pids = np.array(df_features.index.get_level_values(0).unique())
 np.random.seed(12345)
@@ -112,6 +110,8 @@ for i in range(n_folds):
         CLASSES=[int(c) for c in all_classes],
         ACCURACY=accuracy,
         )
+
+
 #    path_model = ephysatlas.regionclassifier.save_model(path_models, classifier, meta, subfolder=f'FOLD{i :02d}', identifier=IDENTIFIER)
 
 df_predictions.to_parquet(path_models / 'predictions_Cosmos.pqt')

@@ -9,7 +9,9 @@ The EcondingAtlas is a version of the Allen Atlas relabeled to account for void 
 
 import numpy as np
 import scipy.spatial
+import scipy.sparse
 
+from iblutil.numerical import ismember
 import iblatlas.regions
 from iblatlas.atlas import AllenAtlas
 import iblatlas.regions
@@ -72,8 +74,8 @@ class ClassifierAtlas(AllenAtlas):
     labels and then splitting the void in two regions: one below the convex hull and one above
     """
 
-    def __init__(self):
-        super().__init__()
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
         self.compute_surface()
         self.regions = ClassifierRegions()
         self.assign_voids_inside_skull()
@@ -131,3 +133,60 @@ class ClassifierAtlas(AllenAtlas):
         # the output is the convex surface of the brain - note that we
         self.convex_top = np.zeros_like(self.top) * np.nan
         self.convex_top[iok] = z
+
+
+def regions_transition_matrix(ba=None, mapping=None):
+    """
+    Computes transition matrices between brain regions based on vertical adjacency.
+
+    This function calculates how brain regions are spatially connected to each other
+    by analyzing transitions between regions along the dorsal-ventral axis. It creates
+    a matrix where each element (i,j) represents the number of voxel transitions
+    from region i to region j when moving along the dorsal-ventral direction.
+
+    Parameters
+    ----------
+    ba : ClassifierAtlas, optional
+        Brain atlas object to use for the computation. If None, a new ClassifierAtlas
+        instance will be created.
+    mapping : str, optional
+        The region mapping to use (e.g., 'Allen', 'Cosmos', 'Beryl').
+        Defaults to 'Cosmos' if None.
+
+    Returns
+    -------
+    state_transitions : numpy.ndarray
+        A square matrix where element (i,j) represents the number of voxel
+        transitions from region i to region j along the dorsal-ventral axis.
+    voxel_occurences : numpy.ndarray
+        A vector containing the count of voxels for each region in the mapping.
+    region_ids : numpy.ndarray
+        The region IDs corresponding to the rows/columns in the transition matrix.
+    """
+    ba = ba if ba is not None else ClassifierAtlas()
+    ba.compute_surface()
+    mapping = mapping if mapping is not None else 'Cosmos'
+    # str_mapping = 'Allen'
+    volume = ba.regions.mappings['Cosmos'][ba.label]  # ap, ml, dv
+    mask = ba.mask()
+    volume[~mask] = -1
+
+    # getting the unique set of regions for the given mapping
+    aids_unique = np.unique(ba.regions.id[ba.regions.mappings[mapping]])
+    _, ir_unique = ismember(aids_unique, ba.regions.id)
+
+    up = volume[:, :, :-1].flatten()
+    lo = volume[:, :, 1:].flatten()
+    iok = np.logical_and(up >= 0, lo >= 0)
+    _, icc_up = ismember(up[iok], ir_unique)
+    _, icc_lo = ismember(lo[iok], ir_unique)
+
+    # here we count the number of voxel from each reagion
+    state_transitions = scipy.sparse.coo_matrix(  # (data, (i, j))
+        (np.ones_like(icc_lo), (icc_up, icc_lo)), shape=(ir_unique.size, ir_unique.size)
+    ).todense()
+    voxel_occurences = np.array(scipy.sparse.coo_matrix(
+        (np.ones_like(icc_lo), (icc_up, icc_up * 0)), shape=(ir_unique.size, 1)
+    ).todense())
+
+    return state_transitions, voxel_occurences.squeeze(), ba.regions.id[ir_unique]
