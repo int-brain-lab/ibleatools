@@ -72,7 +72,7 @@ def _step_viterbi(
     max_vals = pre_max[np.arange(len(max_prev_states)), max_prev_states]
     mu_new = max_vals * emission_probs[:, observed_state]
 
-    return mu_new, max_prev_states
+    return np.array(mu_new).flatten(), np.array(max_prev_states).flatten()
 
 
 def viterbi(
@@ -107,6 +107,8 @@ def viterbi(
     """
     num_hidden_states = transition_probs.shape[0]
     num_observed_states = emission_probs.shape[1]
+    transition_probs = np.array(transition_probs)  # if np.matrix, the dimensions are inconsistent
+    observed_states = np.array(observed_states).astype(int)
 
     assert transition_probs.shape == (num_hidden_states, num_hidden_states)
     assert transition_probs.sum(1).mean() == 1
@@ -116,20 +118,21 @@ def viterbi(
 
     # Runs the forward pass, storing the most likely previous state.
     mu = start_probs * emission_probs[:, observed_states[0]]
-    all_prev_states = []
-    for observed_state in observed_states[1:]:
+    previous_states = np.zeros((len(observed_states), num_hidden_states)).astype(observed_states.dtype)
+    all_prev_states = []  # tud
+    for i, observed_state in enumerate(observed_states[1:]):
         mu, prevs = _step_viterbi(mu, emission_probs, transition_probs, observed_state)
-        all_prev_states.append(prevs)
+        previous_states[i, :] = prevs
+        all_prev_states.append(prevs)  # tud
 
     # Traces backwards to get the maximum likelihood sequence.
-    state = np.argmax(mu)
-    sequence_prob = mu[state]
-    state_sequence = [state]
-    for prev_states in all_prev_states[::-1]:
-        state = prev_states[state]
-        state_sequence.append(state)
-
-    return state_sequence[::-1], sequence_prob
+    # Traces backwards
+    sequence = np.zeros_like(observed_states)
+    sequence[-1] = np.argmax(mu)
+    sequence_prob = mu[sequence[-1]]
+    for i in np.arange(len(observed_states) - 1, 0, -1):
+        sequence[i - 1] = previous_states[i - 1, sequence[i]]
+    return sequence, sequence_prob
 
 
 def infer_regions(df_inference, path_model, n_folds=5):

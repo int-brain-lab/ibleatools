@@ -33,5 +33,5 @@ class TestViterbi(unittest.TestCase):
         s, p = viterbi(
             emission_probs, transition_probs, init_hidden_probs, observed_states
         )
-        assert s == [2, 0, 2, 0]
+        np.testing.assert_array_equal(s, [2, 0, 2, 0])
         assert p == 0.0212625

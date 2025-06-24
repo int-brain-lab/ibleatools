@@ -6,6 +6,7 @@ The EcondingAtlas is a version of the Allen Atlas relabeled to account for void 
     from atlasview import atlasview
     av = atlasview.view(atlas=ea)
 """
+import functools
 
 import numpy as np
 import scipy.spatial
@@ -134,7 +135,7 @@ class ClassifierAtlas(AllenAtlas):
         self.convex_top = np.zeros_like(self.top) * np.nan
         self.convex_top[iok] = z
 
-
+@functools.lru_cache(maxsize=32)
 def regions_transition_matrix(ba=None, mapping=None):
     """
     Computes transition matrices between brain regions based on vertical adjacency.
@@ -182,9 +183,9 @@ def regions_transition_matrix(ba=None, mapping=None):
     _, icc_lo = ismember(lo[iok], ir_unique)
 
     # here we count the number of voxel from each reagion
-    state_transitions = scipy.sparse.coo_matrix(  # (data, (i, j))
+    state_transitions = np.array(scipy.sparse.coo_matrix(  # (data, (i, j))
         (np.ones_like(icc_lo), (icc_up, icc_lo)), shape=(ir_unique.size, ir_unique.size)
-    ).todense()
+    ).todense())
     voxel_occurences = np.array(scipy.sparse.coo_matrix(
         (np.ones_like(icc_lo), (icc_up, icc_up * 0)), shape=(ir_unique.size, 1)
     ).todense())
