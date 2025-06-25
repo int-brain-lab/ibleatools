@@ -47,6 +47,30 @@ ephysatlas = "src/ephysatlas"
 [tool.pdm.packages]
 include = ["src/ephysatlas"]
 
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+exclude = [
+  ".git",
+  ".venv",
+  "__pycache__",
+  "build",
+  "dist",
+  ".pdm-build",
+  ".vscode",
+  "scratch",
+  "*.parquet",
+]
+
+[tool.ruff.lint]
+select = ["E", "F"]  # pycodestyle, Pyflakes, bugbear, pyupgrade
+ignore = ["E501"]               # Ignore line-too-long
+
+# Example of per-file ignores
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]     # Ignore unused imports in __init__.py
+"tests/*" = ["S101"]          # Ignore assert statements in tests
+
 [dependency-groups]
 lint = ["ruff>=0.7.3"]
 dev = [
