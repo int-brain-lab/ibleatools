@@ -79,7 +79,7 @@ def add_target_coordinates(pid=None, one=None, channels=None, traj_dict=None):
     # aid_mm = needles.get_labels(xyz=xyz_mm, mode="clip")
 
     # Check if the rawInd data exists in the channels dictionary, otherwise use the default 384 channels
-    if "rawInd" not in channels:
+    if ("rawInd" not in channels) and ("channel" not in channels):
         assert channels["axial_um"].size == 384
         channels["rawInd"] = np.arange(384)
 
@@ -158,7 +158,7 @@ def online_feature_computation(sr_lf, sr_ap, t0, duration, channels=None, featur
             f"Failed to access LF data: {str(e)}. Check if time range or channel count is valid."
         )
 
-    if not channels.get('labels'):
+    if channels.get('labels') is None:
         channels['labels'], _ = ibldsp.voltage.detect_bad_channels(raw_ap, fs=sr_ap.fs)
 
     return channels, compute_features_from_raw(
@@ -174,7 +174,7 @@ def online_feature_computation(sr_lf, sr_ap, t0, duration, channels=None, featur
     )
 
 # TODO - Need to be clear here , if I want to check based on SDSC or not, VS pid as dict or pid as string.
-def load_data_from_pid(pid, one, probe_level_dir):
+def load_data_from_pid(pid, one, probe_level_dir, recompute_channels=False):
     """
     Load data using a probe ID from the ONE database.
 
@@ -190,8 +190,10 @@ def load_data_from_pid(pid, one, probe_level_dir):
     
     channel_labels = None
     # if pid is a dict, then extract eid and probe_name from it
+    #TODO Check if the new version of iblscripts can work here to get the eid directly if not specified.
+    #TODO - Check if the channel labels are being computed in all the cases.
     if isinstance(pid, dict):
-        print(f"Computing features for eid: {pid['eid']}, probe name: {pid['probe_name']}, pid: {pid['pid']}")
+        logger.info(f"Computing features for eid: {pid['eid']}, probe name: {pid['probe_name']}, pid: {pid['pid']}")
         eid = pid["eid"]
         probe_name = pid["probe_name"]
         ssl = SpikeSortingLoader(pid=pid["pid"], eid=eid, pname=probe_name, one=one)
@@ -212,14 +214,22 @@ def load_data_from_pid(pid, one, probe_level_dir):
     # Load the channels file
     #TODO - Check if the channels file exists, if not, then create it.
     file_channels = Path(probe_level_dir) / "channels.parquet"
-    try:
-        channels = ssl.load_channels()
-        if not channels.get('labels'):
+    if file_channels.exists() and (not recompute_channels):
+        logger.info(f"Loading channels from {file_channels}")
+        channels = pd.read_parquet(file_channels)
+        channels = {col: channels[col].to_numpy() for col in channels.columns}
+        if channels.get('labels') is None:
             channels['labels'] = channel_labels
-    except KeyError as e:
-        print(f"Channels key was not found: {str(e)}")
-    except Exception as e:
-        print(f"Failed to load channels: {str(e)}")
+    else:
+        logger.info(f"Recomputing channels")
+        try:
+            channels = ssl.load_channels()
+            if channels.get('labels') is None:
+                channels['labels'] = channel_labels
+        except KeyError as e:
+            logger.info(f"Channels key was not found: {str(e)}")
+        except Exception as e:
+            logger.info(f"Failed to load channels: {str(e)}")
     
     logger.info(f"Session path: {ssl.session_path}, probe name: {ssl.pname}")
     return sr_ap, sr_lf, channels
@@ -269,6 +279,7 @@ def compute_features(
     traj_dict=None,
     features_to_compute=None,
     output_dir=Path("."),
+    recompute_channels=False,
     **kwargs
 ):
     """
@@ -304,7 +315,7 @@ def compute_features(
             raise ValueError("ONE client instance is required when using PID")
         if ap_file is not None or lf_file is not None:
             raise ValueError("Cannot provide both PID and .cbin files")
-        sr_ap, sr_lf, channels = load_data_from_pid(pid, one, probe_level_dir)
+        sr_ap, sr_lf, channels = load_data_from_pid(pid, one, probe_level_dir, recompute_channels)
     else:
         if ap_file is None or lf_file is None:
             raise ValueError(
@@ -324,6 +335,7 @@ def compute_features(
         duration = float(duration)
 
     # Compute features
+
     channels, df = online_feature_computation(
         sr_ap=sr_ap, sr_lf=sr_lf, t0=t_start, duration=duration, 
         channels=channels, features_to_compute=features_to_compute, 
@@ -354,7 +366,7 @@ def compute_features(
             df_channels = pd.DataFrame(channels).rename(columns={'rawInd': 'channel'})
             df_channels.to_parquet(file_channels)
         except Exception as e:
-            print(f"Failed to export channels file: {str(e)}")
+            logger.info(f"Failed to export channels file: {str(e)}")
 
     return df
 
@@ -462,28 +474,43 @@ def compute_features_from_raw(
     #TODO - Write a loop here or a function to compute different features.
     
     if 'lf' in features_to_compute:
+        logger.info("Starting LF computation")
         df["lf"] = features.lf(des_lf, fs=fs_lf)
         save_features('lf', df["lf"])
     else:
-        df["lf"] = load_features('lf')
-        if df["lf"] is None:
-            raise ValueError("LF features not found in save directory")
+        logger.info("Loading LF features from save directory")
+        lf_data = load_features('lf')
+        if lf_data is not None:
+            df["lf"] = lf_data
+        else:
+            logger.warning("LF features not found in save directory. LF features will not be computed.")
+            # raise ValueError("LF features not found in save directory")
 
     if 'csd' in features_to_compute:
+        logger.info("Starting CSD computation")
         df["csd"] = features.csd(des_lf, fs=fs_lf, geometry=geometry, decimate=10)
         save_features('csd', df["csd"])
     else:
-        df["csd"] = load_features('csd')
-        if df["csd"] is None:
-            raise ValueError("CSD features not found in save directory")
+        logger.info("Loading CSD features from save directory")
+        csd_data = load_features('csd')
+        if csd_data is not None:
+            df["csd"] = csd_data
+        else:
+            logger.warning("CSD features not found in save directory. CSD features will not be computed.")
+            # raise ValueError("CSD features not found in save directory")
 
     if 'ap' in features_to_compute:
+        logger.info("Starting AP computation")
         df["ap"] = features.ap(des_ap, geometry=geometry)
         save_features('ap', df["ap"])
     else:
-        df["ap"] = load_features('ap')
-        if df["ap"] is None:
-            raise ValueError("AP features not found in save directory")
+        logger.info("Loading AP features from save directory")
+        ap_data = load_features('ap')
+        if ap_data is not None:
+            df["ap"] = ap_data
+        else:
+            logger.warning("AP features not found in save directory. AP features will not be computed.")
+            # raise ValueError("AP features not found in save directory")
 
     # this takes a long time !
     if 'waveforms' in features_to_compute:
