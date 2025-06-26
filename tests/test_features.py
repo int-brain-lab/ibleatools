@@ -14,11 +14,11 @@ TEST_DATA_PATH = Path("/home/olivier/scratch")
 
 
 class TestFeatureSets(unittest.TestCase):
-
     def test_sets(self):
-        self.assertEqual(len(ephysatlas.features.voltage_features_set('all')), 33)
-        self.assertEqual(len(ephysatlas.features.voltage_features_set(['raw_ap'])), 2)
+        self.assertEqual(len(ephysatlas.features.voltage_features_set("all")), 33)
+        self.assertEqual(len(ephysatlas.features.voltage_features_set(["raw_ap"])), 2)
         self.assertEqual(len(ephysatlas.features.voltage_features_set()), 23)
+
 
 @unittest.skip
 class TestLFPFeatures(unittest.TestCase):
@@ -35,6 +35,7 @@ class TestLFPFeatures(unittest.TestCase):
         df = ephysatlas.features.lf(self.data_lf, fs=2500)
         self.assertTrue(df.shape[0] == self.data_lf.shape[0])
 
+
 @unittest.skip
 class TestAPFeatures(unittest.TestCase):
     def setUp(self):
@@ -45,6 +46,7 @@ class TestAPFeatures(unittest.TestCase):
             self.data_ap[:, 10_000:11_000], geometry=neuropixel.trace_header(version=1)
         )
         self.assertTrue(df.shape[0] == self.data_ap.shape[0])
+
 
 @unittest.skip
 class TestWaveformFeatures(unittest.TestCase):

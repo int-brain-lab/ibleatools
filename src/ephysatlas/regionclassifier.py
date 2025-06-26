@@ -107,7 +107,9 @@ def viterbi(
     """
     num_hidden_states = transition_probs.shape[0]
     num_observed_states = emission_probs.shape[1]
-    transition_probs = np.array(transition_probs)  # if np.matrix, the dimensions are inconsistent
+    transition_probs = np.array(
+        transition_probs
+    )  # if np.matrix, the dimensions are inconsistent
     observed_states = np.array(observed_states).astype(int)
 
     assert transition_probs.shape == (num_hidden_states, num_hidden_states)
@@ -118,7 +120,9 @@ def viterbi(
 
     # Runs the forward pass, storing the most likely previous state.
     mu = start_probs * emission_probs[:, observed_states[0]]
-    previous_states = np.zeros((len(observed_states), num_hidden_states)).astype(observed_states.dtype)
+    previous_states = np.zeros((len(observed_states), num_hidden_states)).astype(
+        observed_states.dtype
+    )
     all_prev_states = []  # tud
     for i, observed_state in enumerate(observed_states[1:]):
         mu, prevs = _step_viterbi(mu, emission_probs, transition_probs, observed_state)

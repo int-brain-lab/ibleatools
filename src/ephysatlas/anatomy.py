@@ -6,6 +6,7 @@ The EcondingAtlas is a version of the Allen Atlas relabeled to account for void 
     from atlasview import atlasview
     av = atlasview.view(atlas=ea)
 """
+
 import functools
 
 import numpy as np
@@ -84,21 +85,21 @@ class ClassifierAtlas(AllenAtlas):
     def assign_voids_inside_skull(self):
         """
         Identifies and relabels void voxels that are inside the skull.
-        
+
         This method creates a mask of the brain's convex hull and identifies all voxels
         below this hull. Any voxels that were previously labeled as void (0) and are
         below the convex hull are relabeled as the new 'void_fluid' region.
-        
+
         The process involves:
         1. Finding non-NaN points on the convex top surface
         2. Creating a 3D mask of the convex hull
         3. Using cumulative sum to identify all voxels below the hull
         4. Adding the new void_fluid region to the brain regions
         5. Relabeling appropriate voxels with the new region ID
-        
+
         Parameters:
             None
-        
+
         Returns:
             None: The method modifies the atlas label volume in-place.
         """
@@ -135,6 +136,7 @@ class ClassifierAtlas(AllenAtlas):
         self.convex_top = np.zeros_like(self.top) * np.nan
         self.convex_top[iok] = z
 
+
 @functools.lru_cache(maxsize=32)
 def regions_transition_matrix(ba=None, mapping=None):
     """
@@ -166,9 +168,9 @@ def regions_transition_matrix(ba=None, mapping=None):
     """
     ba = ba if ba is not None else ClassifierAtlas()
     ba.compute_surface()
-    mapping = mapping if mapping is not None else 'Cosmos'
+    mapping = mapping if mapping is not None else "Cosmos"
     # str_mapping = 'Allen'
-    volume = ba.regions.mappings['Cosmos'][ba.label]  # ap, ml, dv
+    volume = ba.regions.mappings["Cosmos"][ba.label]  # ap, ml, dv
     mask = ba.mask()
     volume[~mask] = -1
 
@@ -183,11 +185,16 @@ def regions_transition_matrix(ba=None, mapping=None):
     _, icc_lo = ismember(lo[iok], ir_unique)
 
     # here we count the number of voxel from each reagion
-    state_transitions = np.array(scipy.sparse.coo_matrix(  # (data, (i, j))
-        (np.ones_like(icc_lo), (icc_up, icc_lo)), shape=(ir_unique.size, ir_unique.size)
-    ).todense())
-    voxel_occurences = np.array(scipy.sparse.coo_matrix(
-        (np.ones_like(icc_lo), (icc_up, icc_up * 0)), shape=(ir_unique.size, 1)
-    ).todense())
+    state_transitions = np.array(
+        scipy.sparse.coo_matrix(  # (data, (i, j))
+            (np.ones_like(icc_lo), (icc_up, icc_lo)),
+            shape=(ir_unique.size, ir_unique.size),
+        ).todense()
+    )
+    voxel_occurences = np.array(
+        scipy.sparse.coo_matrix(
+            (np.ones_like(icc_lo), (icc_up, icc_up * 0)), shape=(ir_unique.size, 1)
+        ).todense()
+    )
 
     return state_transitions, voxel_occurences.squeeze(), ba.regions.id[ir_unique]

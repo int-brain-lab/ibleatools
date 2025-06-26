@@ -431,12 +431,12 @@ def compute_features_from_raw(
     """
     # Assert input shapes and parameters
     assert raw_ap.ndim == 2 and raw_lf.ndim == 2, "Input arrays must be 2D"
-    assert raw_ap.shape[0] == raw_lf.shape[0], (
-        "Number of channels must match between AP and LF data"
-    )
-    assert raw_ap.shape[0] == len(geometry["x"]) == len(geometry["y"]), (
-        "Number of channels must match geometry"
-    )
+    assert (
+        raw_ap.shape[0] == raw_lf.shape[0]
+    ), "Number of channels must match between AP and LF data"
+    assert (
+        raw_ap.shape[0] == len(geometry["x"]) == len(geometry["y"])
+    ), "Number of channels must match geometry"
     assert fs_ap > 0 and fs_lf > 0, "Sampling frequencies must be positive"
 
     # Define available feature sets
@@ -589,7 +589,7 @@ def compute_features_from_raw(
             )
             # raise ValueError("Waveforms features not found in save directory")
 
-    # TODO - Should I output the features dataset here?? 
+    # TODO - Should I output the features dataset here??
     df_voltage = reduce(
         lambda left, right: pd.merge(left, right, on="channel", how="outer"),
         [df[k] for k in df.keys()],
