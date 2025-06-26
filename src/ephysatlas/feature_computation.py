@@ -78,9 +78,10 @@ def add_target_coordinates(pid=None, one=None, channels=None, traj_dict=None):
     # Convert the coordinates from in-vivo to the Allen coordinate system
     txyz = allen.bc.i2xyz(needles.bc.xyz2i(txyz / 1e6, round=False, mode="clip")) * 1e6
     xyz_mm = interpolate_along_track(txyz, channels["axial_um"] / 1e6)
+    # (Ask OW)
     # aid_mm = needles.get_labels(xyz=xyz_mm, mode="clip")
 
-    # Check if the rawInd data exists in the channels dictionary, otherwise use the default 384 channels
+    # Check if the rawInd data exists in the channels dictionary, otherwise use the default 384 channels (Ask OW)
     if ("rawInd" not in channels) and ("channel" not in channels):
         assert channels["axial_um"].size == 384
         channels["rawInd"] = np.arange(384)
@@ -186,6 +187,7 @@ def online_feature_computation(
 
 
 # TODO - Need to be clear here , if I want to check based on SDSC or not, VS pid as dict or pid as string.
+# (Ask OW) Recomputing channels when launching multiple jobs.
 def load_data_from_pid(pid, one, probe_level_dir, recompute_channels=False):
     """
     Load data using a probe ID from the ONE database.
@@ -587,12 +589,12 @@ def compute_features_from_raw(
             )
             # raise ValueError("Waveforms features not found in save directory")
 
-    # TODO - Should I output the features dataset here??
+    # TODO - Should I output the features dataset here?? 
     df_voltage = reduce(
         lambda left, right: pd.merge(left, right, on="channel", how="outer"),
         [df[k] for k in df.keys()],
     )
-    # TODO - Check whether the dropna is needed or not.
+    # TODO - Check whether the dropna is needed or not. (Ask OW)
     original_index = df_voltage.index.copy()
     df_voltage.dropna(inplace=True)
     dropped_indices = original_index.difference(df_voltage.index)

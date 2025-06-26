@@ -28,3 +28,18 @@ jobs:
     - name: Run Tests
       run: |
         pdm run -v pytest -v tests
+
+    - name: Run tests with coverage
+      run: |
+        pdm run coverage run -m unittest discover -s tests -v
+        pdm run coverage xml
+        pdm run coverage report
+      
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.xml
+        flags: unittests
+        name: codecov-umbrella
+        fail_ci_if_error: false
+        verbose: true 
