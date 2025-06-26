@@ -80,3 +80,39 @@ test = [
     "pytest>=8.3.5",
     "pytest-cov>=4.0.0",  # for coverage reports if needed
 ]
+
+[tool.coverage.run]
+source = ["src/ephysatlas"]
+omit = [
+    "*/tests/*",
+    "*/test_*",
+    "*/__pycache__/*",
+    "*/venv/*",
+    "*/env/*",
+    "*/.venv/*",
+    "*/.env/*",
+    "*/build/*",
+    "*/dist/*",
+    "*/.pytest_cache/*",
+    "*/.coverage*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "if self.debug:",
+    "if settings.DEBUG",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if 0:",
+    "if __name__ == .__main__.:",
+    "class .*\\bProtocol\\):",
+    "@(abc\\.)?abstractmethod",
+]
+show_missing = true
+skip_covered = false
+precision = 2
+
+[tool.coverage.html]
+directory = "htmlcov"
