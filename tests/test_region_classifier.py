@@ -9,6 +9,9 @@ class TestViterbi(unittest.TestCase):
         num_hidden_states = 3
         num_observed_states = 2
         num_time_steps = 4
+        print(
+            f"Testing viterbi with {num_hidden_states} hidden states, {num_observed_states} observed states, and {num_time_steps} time steps"
+        )
         # Initializes the transition probability matrix (nlatent, nlatent).
         transition_probs = np.array(
             [

@@ -16,7 +16,6 @@ import scipy.sparse
 from iblutil.numerical import ismember
 import iblatlas.regions
 from iblatlas.atlas import AllenAtlas
-import iblatlas.regions
 
 NEW_VOID = {
     "id": 2_000,
