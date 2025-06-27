@@ -69,8 +69,9 @@ The function returns a pandas DataFrame containing various electrophysiological 
 This function uses pre-trained models to infer brain regions from the computed features. It performs inference across multiple model folds and returns both the predicted regions and their probabilities.
 
 Basic usage:
+
 ```python
-from ephysatlas.region_inference import infer_regions
+from ephysatlas.regionclassifier.region_inference import infer_regions
 
 # Perform region inference
 predicted_probas, predicted_region = infer_regions(
