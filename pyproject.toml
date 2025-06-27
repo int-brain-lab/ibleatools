@@ -60,6 +60,7 @@ exclude = [
   ".vscode",
   "scratch",
   "*.parquet",
+  "examples"
 ]
 
 [tool.ruff.lint]

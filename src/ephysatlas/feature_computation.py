@@ -511,7 +511,7 @@ def compute_features_from_raw(
     #     if df["channels"] is None:
     #         raise ValueError("Channels features not found in save directory")
 
-    logger.info("Starting LF, CSD and AP computation")
+    logger.info(f"Starting {features_to_compute} computation")
     # TODO - Write a loop here or a function to compute different features.
 
     if "lf" in features_to_compute:
@@ -596,7 +596,8 @@ def compute_features_from_raw(
     )
     # TODO - Check whether the dropna is needed or not. (Ask OW)
     original_index = df_voltage.index.copy()
-    df_voltage.dropna(inplace=True)
+    # TODO Do the dropping when loading the data.
+    # df_voltage.dropna(inplace=True)
     dropped_indices = original_index.difference(df_voltage.index)
     if len(dropped_indices) > 0:
         logger.info(f"Dropped row indices: {dropped_indices.tolist()}")

@@ -42,6 +42,7 @@ class DartParameters(pydantic.BaseModel):
 
 class BaseChannelFeatures(pa.DataFrameModel):
     channel: int
+    # Add ibleatools version here.
 
 
 class ModelLfFeatures(BaseChannelFeatures):

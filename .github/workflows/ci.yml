@@ -7,6 +7,19 @@ on:
     branches: [ main ]
 
 jobs:
+  ruff:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: chartboost/ruff-action@v1
+        name: ruff check
+        with:
+          args: 'check --output-format=github'
+      - uses: chartboost/ruff-action@v1
+        name: ruff format
+        with:
+          args: 'format --check'
+
   test:
     runs-on: ubuntu-latest
     strategy:
@@ -23,23 +36,10 @@ jobs:
     
     - name: Install dependencies
       run: |
-        pdm install -dG test    
-
-    - name: Run Tests
-      run: |
-        pdm run -v pytest -v tests
+        pdm install -dG test
 
     - name: Run tests with coverage
       run: |
         pdm run coverage run -m unittest discover -s tests -v
         pdm run coverage xml
         pdm run coverage report
-      
-    - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v3
-      with:
-        file: ./coverage.xml
-        flags: unittests
-        name: codecov-umbrella
-        fail_ci_if_error: false
-        verbose: true 

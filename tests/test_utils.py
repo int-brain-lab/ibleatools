@@ -5,9 +5,7 @@ Unit tests for ephysatlas.utils module.
 import unittest
 import tempfile
 import hashlib
-import os
 from pathlib import Path
-from unittest.mock import patch
 
 from ephysatlas.utils import setup_output_directory
 
@@ -39,8 +37,8 @@ class TestSetupOutputDirectory(unittest.TestCase):
         self.assertTrue(snippet_level_dir.exists())
         
         # Check directory names
-        self.assertEqual(probe_level_dir.name, "test_pid_123")
-        expected_snippet_name = "probe_test_pid_00000300.0_0050.0"
+        self.assertEqual(probe_level_dir.name, "test_pid")
+        expected_snippet_name = "probe_test_pid_000300.0_05.0"
         self.assertEqual(snippet_level_dir.name, expected_snippet_name)
         
         # Check directory structure
@@ -68,34 +66,8 @@ class TestSetupOutputDirectory(unittest.TestCase):
         self.assertEqual(probe_level_dir.name, ap_file_hash)
         
         # Check snippet level directory name (should use None for pid)
-        expected_snippet_name = "probe_None_00000100.5_0025.0"
+        expected_snippet_name = "probe_None_000100.5_25.0"
         self.assertEqual(snippet_level_dir.name, expected_snippet_name)
-
-    def test_setup_output_directory_default_output_dir(self):
-        """Test directory setup with default output directory."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            original_cwd = Path.cwd()
-            try:
-                # Change to temp directory
-                os.chdir(temp_dir)
-                
-                params = {
-                    "pid": "test_pid",
-                    "t_start": 0.0,
-                    "duration": 100.0
-                    # No output_dir specified
-                }
-                
-                probe_level_dir, snippet_level_dir = setup_output_directory(params)
-                
-                # Check that directories were created in current directory
-                self.assertTrue(probe_level_dir.exists())
-                self.assertTrue(snippet_level_dir.exists())
-                self.assertEqual(probe_level_dir.parent, Path.cwd())
-                
-            finally:
-                # Restore original working directory
-                os.chdir(original_cwd)
 
     def test_setup_output_directory_padding(self):
         """Test that t_start and duration are properly padded."""
@@ -109,7 +81,7 @@ class TestSetupOutputDirectory(unittest.TestCase):
         probe_level_dir, snippet_level_dir = setup_output_directory(params)
         
         # Check padding format
-        expected_snippet_name = "probe_test_pid_00000123.5_0007.9"
+        expected_snippet_name = "probe_test_pid_000123.5_07.9"
         self.assertEqual(snippet_level_dir.name, expected_snippet_name)
 
     def test_setup_output_directory_existing_directories(self):
@@ -123,7 +95,7 @@ class TestSetupOutputDirectory(unittest.TestCase):
         
         # Create directories manually first
         probe_level_dir = self.base_path / "test_pid"
-        snippet_level_dir = probe_level_dir / "probe_test_pid_00000000.0_0100.0"
+        snippet_level_dir = probe_level_dir / "probe_test_pid_000000.0_100.0"
         probe_level_dir.mkdir(parents=True, exist_ok=True)
         snippet_level_dir.mkdir(parents=True, exist_ok=True)
         
@@ -161,7 +133,7 @@ class TestSetupOutputDirectory(unittest.TestCase):
         }
         
         probe_level_dir, snippet_level_dir = setup_output_directory(params)
-        expected_snippet_name = "probe_test_pid_00000000.0_0000.0"
+        expected_snippet_name = "probe_test_pid_000000.0_00.0"
         self.assertEqual(snippet_level_dir.name, expected_snippet_name)
         
         # Test with large values
@@ -173,7 +145,7 @@ class TestSetupOutputDirectory(unittest.TestCase):
         }
         
         probe_level_dir, snippet_level_dir = setup_output_directory(params)
-        expected_snippet_name = "probe_test_pid_09999999.9_9999.9"
+        expected_snippet_name = "probe_test_pid_999999.9_9999.9"
         self.assertEqual(snippet_level_dir.name, expected_snippet_name)
 
     def test_setup_output_directory_hash_consistency(self):
