@@ -19,6 +19,7 @@ class TestSetupOutputDirectory(unittest.TestCase):
 
     def tearDown(self):
         import shutil
+
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def test_setup_output_directory_with_pid(self):
@@ -27,20 +28,20 @@ class TestSetupOutputDirectory(unittest.TestCase):
             "pid": "test_pid",
             "t_start": 300.0,
             "duration": 5.0,
-            "output_dir": str(self.base_path)
+            "output_dir": str(self.base_path),
         }
-        
+
         probe_level_dir, snippet_level_dir = setup_output_directory(params)
-        
+
         # Check that directories were created
         self.assertTrue(probe_level_dir.exists())
         self.assertTrue(snippet_level_dir.exists())
-        
+
         # Check directory names
         self.assertEqual(probe_level_dir.name, "test_pid")
         expected_snippet_name = "probe_test_pid_000300.0_05.0"
         self.assertEqual(snippet_level_dir.name, expected_snippet_name)
-        
+
         # Check directory structure
         self.assertEqual(snippet_level_dir.parent, probe_level_dir)
         self.assertEqual(probe_level_dir.parent, self.base_path)
@@ -52,19 +53,19 @@ class TestSetupOutputDirectory(unittest.TestCase):
             "ap_file": "/path/to/test_ap.cbin",
             "t_start": 100.5,
             "duration": 25.0,
-            "output_dir": str(self.base_path)
+            "output_dir": str(self.base_path),
         }
-        
+
         probe_level_dir, snippet_level_dir = setup_output_directory(params)
-        
+
         # Check that directories were created
         self.assertTrue(probe_level_dir.exists())
         self.assertTrue(snippet_level_dir.exists())
-        
+
         # Check that probe level directory uses hash of AP filename
         ap_file_hash = hashlib.md5("test_ap.cbin".encode()).hexdigest()[:12]
         self.assertEqual(probe_level_dir.name, ap_file_hash)
-        
+
         # Check snippet level directory name (should use None for pid)
         expected_snippet_name = "probe_None_000100.5_25.0"
         self.assertEqual(snippet_level_dir.name, expected_snippet_name)
@@ -75,11 +76,11 @@ class TestSetupOutputDirectory(unittest.TestCase):
             "pid": "test_pid",
             "t_start": 123.456,
             "duration": 7.89,
-            "output_dir": str(self.base_path)
+            "output_dir": str(self.base_path),
         }
-        
+
         probe_level_dir, snippet_level_dir = setup_output_directory(params)
-        
+
         # Check padding format
         expected_snippet_name = "probe_test_pid_000123.5_07.9"
         self.assertEqual(snippet_level_dir.name, expected_snippet_name)
@@ -90,18 +91,18 @@ class TestSetupOutputDirectory(unittest.TestCase):
             "pid": "test_pid",
             "t_start": 0.0,
             "duration": 100.0,
-            "output_dir": str(self.base_path)
+            "output_dir": str(self.base_path),
         }
-        
+
         # Create directories manually first
         probe_level_dir = self.base_path / "test_pid"
         snippet_level_dir = probe_level_dir / "probe_test_pid_000000.0_100.0"
         probe_level_dir.mkdir(parents=True, exist_ok=True)
         snippet_level_dir.mkdir(parents=True, exist_ok=True)
-        
+
         # Call function again - should not raise error
         result_probe, result_snippet = setup_output_directory(params)
-        
+
         # Should return the same paths
         self.assertEqual(result_probe, probe_level_dir)
         self.assertEqual(result_snippet, snippet_level_dir)
@@ -112,12 +113,12 @@ class TestSetupOutputDirectory(unittest.TestCase):
             "pid": "test_pid",
             "t_start": 0.0,
             "duration": 100.0,
-            "output_dir": str(self.base_path / "nonexistent" / "subdir")
+            "output_dir": str(self.base_path / "nonexistent" / "subdir"),
         }
-        
+
         # Should create parent directories
         probe_level_dir, snippet_level_dir = setup_output_directory(params)
-        
+
         self.assertTrue(probe_level_dir.exists())
         self.assertTrue(snippet_level_dir.exists())
         self.assertTrue(probe_level_dir.parent.exists())
@@ -129,21 +130,21 @@ class TestSetupOutputDirectory(unittest.TestCase):
             "pid": "test_pid",
             "t_start": 0.0,
             "duration": 0.0,
-            "output_dir": str(self.base_path)
+            "output_dir": str(self.base_path),
         }
-        
+
         probe_level_dir, snippet_level_dir = setup_output_directory(params)
         expected_snippet_name = "probe_test_pid_000000.0_00.0"
         self.assertEqual(snippet_level_dir.name, expected_snippet_name)
-        
+
         # Test with large values
         params = {
             "pid": "test_pid",
             "t_start": 999999.9,
             "duration": 9999.9,
-            "output_dir": str(self.base_path)
+            "output_dir": str(self.base_path),
         }
-        
+
         probe_level_dir, snippet_level_dir = setup_output_directory(params)
         expected_snippet_name = "probe_test_pid_999999.9_9999.9"
         self.assertEqual(snippet_level_dir.name, expected_snippet_name)
@@ -155,37 +156,37 @@ class TestSetupOutputDirectory(unittest.TestCase):
             "ap_file": "/path/to/test_ap.cbin",
             "t_start": 0.0,
             "duration": 100.0,
-            "output_dir": str(self.base_path)
+            "output_dir": str(self.base_path),
         }
-        
+
         params2 = {
             "pid": None,
             "ap_file": "/different/path/to/test_ap.cbin",  # Same filename, different path
             "t_start": 0.0,
             "duration": 100.0,
-            "output_dir": str(self.base_path)
+            "output_dir": str(self.base_path),
         }
-        
+
         probe_level_dir1, _ = setup_output_directory(params1)
         probe_level_dir2, _ = setup_output_directory(params2)
-        
+
         # Should have same hash (same filename)
         self.assertEqual(probe_level_dir1.name, probe_level_dir2.name)
-        
+
         # Test with different filename
         params3 = {
             "pid": None,
             "ap_file": "/path/to/different_ap.cbin",
             "t_start": 0.0,
             "duration": 100.0,
-            "output_dir": str(self.base_path)
+            "output_dir": str(self.base_path),
         }
-        
+
         probe_level_dir3, _ = setup_output_directory(params3)
-        
+
         # Should have different hash
         self.assertNotEqual(probe_level_dir1.name, probe_level_dir3.name)
 
 
 if __name__ == "__main__":
-    unittest.main() 
+    unittest.main()
