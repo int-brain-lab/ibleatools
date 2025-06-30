@@ -13,6 +13,7 @@ from iblatlas.atlas import Insertion, NeedlesAtlas, AllenAtlas
 from ibllib.pipes.histology import interpolate_along_track
 
 from ephysatlas import features
+from ephysatlas import __version__ as ibleatools_version
 from pathlib import Path
 from ephysatlas.utils import setup_output_directory
 
@@ -517,6 +518,8 @@ def compute_features_from_raw(
     if "lf" in features_to_compute:
         logger.info("Starting LF computation")
         df["lf"] = features.lf(des_lf, fs=fs_lf)
+        # Add package version metadata to the DataFrame
+        df["lf"].attrs["ibleatools_version"] = ibleatools_version
         save_features("lf", df["lf"])
     else:
         logger.info("Loading LF features from save directory")
@@ -532,6 +535,8 @@ def compute_features_from_raw(
     if "csd" in features_to_compute:
         logger.info("Starting CSD computation")
         df["csd"] = features.csd(des_lf, fs=fs_lf, geometry=geometry, decimate=10)
+        # Add package version metadata to the DataFrame
+        df["csd"].attrs["ibleatools_version"] = ibleatools_version
         save_features("csd", df["csd"])
     else:
         logger.info("Loading CSD features from save directory")
@@ -547,6 +552,8 @@ def compute_features_from_raw(
     if "ap" in features_to_compute:
         logger.info("Starting AP computation")
         df["ap"] = features.ap(des_ap, geometry=geometry)
+        # Add package version metadata to the DataFrame
+        df["ap"].attrs["ibleatools_version"] = ibleatools_version
         save_features("ap", df["ap"])
     else:
         logger.info("Loading AP features from save directory")
@@ -566,6 +573,8 @@ def compute_features_from_raw(
             des_ap, fs=fs_ap, geometry=geometry
         )
         df["waveforms"]["spike_count"] = df["waveforms"]["spike_count"].astype("Int64")
+        # Add package version metadata to the DataFrame
+        df["waveforms"].attrs["ibleatools_version"] = ibleatools_version
         save_features("waveforms", df["waveforms"])
 
         if kwargs.get("save_waveforms", True):

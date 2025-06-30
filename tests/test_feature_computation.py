@@ -10,6 +10,8 @@ from ephysatlas.feature_computation import (
     compute_features_from_raw,
 )
 
+import ephysatlas
+
 
 class TestFeatureComputation(unittest.TestCase):
     def test_load_data_from_files_nonexistent_files(self):
@@ -163,8 +165,18 @@ class TestFeatureComputation(unittest.TestCase):
             # Check that output files were created
             if "lf" in features_to_compute:
                 self.assertTrue((output_dir / "lf_features.parquet").exists())
+                # Check that package version metadata is added to the lf_features.parquet file
+                with open(output_dir / "lf_features.parquet", "rb") as f:
+                    df = pd.read_parquet(f)
+                    self.assertIn("ibleatools_version", df.attrs)
+                    self.assertEqual(df.attrs["ibleatools_version"], ephysatlas.__version__)
             if "ap" in features_to_compute:
                 self.assertTrue((output_dir / "ap_features.parquet").exists())
+                # Check that package version metadata is added to the ap_features.parquet file
+                with open(output_dir / "ap_features.parquet", "rb") as f:
+                    df = pd.read_parquet(f)
+                    self.assertIn("ibleatools_version", df.attrs)
+                    self.assertEqual(df.attrs["ibleatools_version"], ephysatlas.__version__)
 
 
 if __name__ == "__main__":
