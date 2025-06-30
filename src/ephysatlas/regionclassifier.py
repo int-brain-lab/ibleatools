@@ -1,3 +1,4 @@
+import hashlib
 from typing import List, Tuple
 from pathlib import Path
 import yaml
@@ -5,8 +6,61 @@ import yaml
 import numpy as np
 from xgboost import XGBClassifier
 
+from one.api import ONE
 from iblutil.util import Bunch
+import iblutil.random
 from ephysatlas import features
+
+
+def save_model(path_model, classifier, meta, subfolder="", identifier=None):
+    """
+    Save model to disk in ubj format with associated meta-data and a hash
+    The model is a set of files in a folder named after the meta-data
+     'VINTAGE' and 'REGION_MAP' fields, with the hash as suffix e.g. 2023_W41_Cosmos_dfd731f0
+    :param classifier:
+    :param meta:
+    :param path_model:
+    :param identifier: optional identifier for the model, defaults to a 8 character hexdigest of the meta data
+    :param subfolder: optional level to add to the model path, for example 'FOLD01' will write to
+        2023_W41_Cosmos_dfd731f0/FOLD01/
+    :return:
+    """
+    meta["MODEL_CLASS"] = (
+        f"{classifier.__class__.__module__}.{classifier.__class__.__name__}"
+    )
+    if identifier is None:
+        identifier = iblutil.random.name_from_hash(hashlib.md5(yaml.dump(meta).encode("utf-8")))
+    path_model = path_model.joinpath(
+        f"{meta['VINTAGE']}_{meta['REGION_MAP']}_{identifier}", subfolder
+    )
+    path_model.mkdir(exist_ok=True, parents=True)
+    with open(path_model.joinpath("meta.yaml"), "w+") as fid:
+        fid.write(yaml.dump(dict(meta)))
+    classifier.save_model(path_model.joinpath("model.ubj"))
+    return path_model
+
+
+def download_model(
+    local_path: Path, model_name: str, one: ONE, overwrite=False
+) -> Path:
+    """
+    download_model(Path('/mnt/s0/ephys-atlas-decoding/models'), '2024_W50_Cosmos_lid-basket-sense', one=one)
+    :param local_path:
+    :param model_name:
+    :param one:
+    :param overwrite:
+    :return:
+    """
+    local_path = Path(local_path)
+    s3, bucket_name = aws.get_s3_from_alyx(alyx=one.alyx)
+    aws.s3_download_folder(
+        f"aggregates/atlas/models/{model_name}",
+        local_path.joinpath(model_name),
+        s3=s3,
+        bucket_name=bucket_name,
+        overwrite=overwrite,
+    )
+    return local_path.joinpath(model_name)
 
 
 def load_model(path_model):

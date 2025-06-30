@@ -5,6 +5,7 @@ h5py
 hdbscan
 iblatlas >= 0.3.0
 ibllib
+ibl_style
 linear_operator
 matplotlib
 mock
