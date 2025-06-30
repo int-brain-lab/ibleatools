@@ -169,14 +169,18 @@ class TestFeatureComputation(unittest.TestCase):
                 with open(output_dir / "lf_features.parquet", "rb") as f:
                     df = pd.read_parquet(f)
                     self.assertIn("ibleatools_version", df.attrs)
-                    self.assertEqual(df.attrs["ibleatools_version"], ephysatlas.__version__)
+                    self.assertEqual(
+                        df.attrs["ibleatools_version"], ephysatlas.__version__
+                    )
             if "ap" in features_to_compute:
                 self.assertTrue((output_dir / "ap_features.parquet").exists())
                 # Check that package version metadata is added to the ap_features.parquet file
                 with open(output_dir / "ap_features.parquet", "rb") as f:
                     df = pd.read_parquet(f)
                     self.assertIn("ibleatools_version", df.attrs)
-                    self.assertEqual(df.attrs["ibleatools_version"], ephysatlas.__version__)
+                    self.assertEqual(
+                        df.attrs["ibleatools_version"], ephysatlas.__version__
+                    )
 
 
 if __name__ == "__main__":
