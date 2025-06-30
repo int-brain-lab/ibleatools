@@ -1,5 +1,8 @@
 # IBL Electrophysiology Feature Computation and Region Inference
 
+[![Coverage Status](https://coveralls.io/repos/github/int-brain-lab/ibleatools/badge.svg?branch=main)](https://coveralls.io/github/int-brain-lab/ibleatools?branch=main) 
+![CI](https://github.com/int-brain-lab/ibleatools/actions/workflows/ci.yml/badge.svg)
+
 This repository contains tools for computing electrophysiology features and performing region inference from neural recordings.
 
 ## Installation

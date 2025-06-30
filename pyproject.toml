@@ -4,7 +4,7 @@ description = "Tools for IBL data analysis and processing"
 authors = [
     {name = "International Brain Laboratory", email = "software-devs@internationalbrainlab.org"},
 ]
-requires-python = ">=3.10"
+requires-python = "<3.13,>=3.10"
 readme = "README.md"
 license = {text = "MIT"}
 classifiers = [
@@ -34,19 +34,6 @@ dependencies = [
 requires = ["pdm-backend"]
 build-backend = "pdm.backend"
 
-[tool.pdm]
-distribution = true
-
-[tool.pdm.version]
-source = "file"
-path = 'src/ephysatlas/__init__.py'
-
-[tool.pdm.package-dir]
-ephysatlas = "src/ephysatlas"
-
-[tool.pdm.packages]
-include = ["src/ephysatlas"]
-
 [tool.ruff]
 line-length = 88
 target-version = "py310"
@@ -72,6 +59,20 @@ ignore = ["E501"]               # Ignore line-too-long
 "__init__.py" = ["F401"]     # Ignore unused imports in __init__.py
 "tests/*" = ["S101"]          # Ignore assert statements in tests
 
+
+[tool.pdm]
+distribution = true
+
+[tool.pdm.version]
+source = "file"
+path = 'src/ephysatlas/__init__.py'
+
+[tool.pdm.package-dir]
+ephysatlas = "src/ephysatlas"
+
+[tool.pdm.packages]
+include = ["src/ephysatlas"]
+
 [dependency-groups]
 lint = ["ruff>=0.7.3"]
 dev = [
@@ -79,7 +80,8 @@ dev = [
 ]
 test = [
     "pytest>=8.3.5",
-    "pytest-cov>=4.0.0",  # for coverage reports if needed
+    "pytest-cov>=4.0.0",
+    "coveralls>=4.0.1",
 ]
 
 [tool.coverage.run]
