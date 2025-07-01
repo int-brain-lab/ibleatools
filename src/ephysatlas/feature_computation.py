@@ -14,6 +14,7 @@ from ibllib.pipes.histology import interpolate_along_track
 
 from ephysatlas import features
 from ephysatlas import __version__ as ibleatools_version
+from ephysatlas.features import __features_version__ as features_version
 from pathlib import Path
 from ephysatlas.utils import setup_output_directory
 
@@ -520,6 +521,7 @@ def compute_features_from_raw(
         df["lf"] = features.lf(des_lf, fs=fs_lf)
         # Add package version metadata to the DataFrame
         df["lf"].attrs["ibleatools_version"] = ibleatools_version
+        df["lf"].attrs["features_version"] = features_version
         save_features("lf", df["lf"])
     else:
         logger.info("Loading LF features from save directory")
@@ -537,6 +539,7 @@ def compute_features_from_raw(
         df["csd"] = features.csd(des_lf, fs=fs_lf, geometry=geometry, decimate=10)
         # Add package version metadata to the DataFrame
         df["csd"].attrs["ibleatools_version"] = ibleatools_version
+        df["csd"].attrs["features_version"] = features_version
         save_features("csd", df["csd"])
     else:
         logger.info("Loading CSD features from save directory")
@@ -554,6 +557,7 @@ def compute_features_from_raw(
         df["ap"] = features.ap(des_ap, geometry=geometry)
         # Add package version metadata to the DataFrame
         df["ap"].attrs["ibleatools_version"] = ibleatools_version
+        df["ap"].attrs["features_version"] = features_version
         save_features("ap", df["ap"])
     else:
         logger.info("Loading AP features from save directory")
@@ -575,6 +579,7 @@ def compute_features_from_raw(
         df["waveforms"]["spike_count"] = df["waveforms"]["spike_count"].astype("Int64")
         # Add package version metadata to the DataFrame
         df["waveforms"].attrs["ibleatools_version"] = ibleatools_version
+        df["waveforms"].attrs["features_version"] = features_version
         save_features("waveforms", df["waveforms"])
 
         if kwargs.get("save_waveforms", True):

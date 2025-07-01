@@ -21,6 +21,9 @@ import ibldsp.voltage
 # Set up logger
 logger = logging.getLogger(__name__)
 
+# Features version
+__features_version__ = "2025.07.01"
+
 floats = Annotated[pa.Float, pa.Float32]
 BANDS = {
     "delta": [0, 4],

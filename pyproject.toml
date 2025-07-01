@@ -4,7 +4,7 @@ description = "Tools for IBL data analysis and processing"
 authors = [
     {name = "International Brain Laboratory", email = "software-devs@internationalbrainlab.org"},
 ]
-requires-python = "<3.13,>=3.10"
+requires-python = "<3.14,>=3.10"
 readme = "README.md"
 license = {text = "MIT"}
 classifiers = [
@@ -81,7 +81,7 @@ dev = [
 test = [
     "pytest>=8.3.5",
     "pytest-cov>=4.0.0",
-    "coveralls>=4.0.1",
+    "coveralls",
 ]
 
 [tool.coverage.run]
