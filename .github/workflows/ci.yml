@@ -7,6 +7,19 @@ on:
     branches: [ main ]
 
 jobs:
+  ruff:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: chartboost/ruff-action@v1
+        name: ruff check
+        with:
+          args: 'check --output-format=github'
+      - uses: chartboost/ruff-action@v1
+        name: ruff format
+        with:
+          args: 'format --check'
+
   test:
     runs-on: ubuntu-latest
     strategy:
@@ -15,16 +28,23 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-    
-    - name: Set up PDM
-      uses: pdm-project/setup-pdm@v4
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v2
       with:
         python-version: ${{ matrix.python-version }}
-    
-    - name: Install dependencies
-      run: |
-        pdm install -dG test    
 
-    - name: Run Tests
+    - name: Install deps
       run: |
-        pdm run -v pytest -v tests
+        python -m pip install --upgrade pip
+        pip install -e .
+        pip install --group test
+
+    - name: Run tests with coverage
+      run: |
+        coverage run -m unittest discover -s tests -v
+        coverage xml
+        coverage report
+    
+    - name: Coveralls
+      uses: coverallsapp/github-action@v2

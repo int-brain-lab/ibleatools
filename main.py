@@ -1,6 +1,4 @@
 import argparse
-import random
-import string
 from typing import List, Optional, Dict, Any
 from pathlib import Path
 import os
@@ -14,7 +12,7 @@ from iblutil.util import setup_logger
 from one.api import ONE
 
 from ephysatlas.feature_computation import compute_features
-from ephysatlas.region_inference import infer_regions
+from ephysatlas.regionclassifier import infer_regions
 from ephysatlas.plots import plot_results
 from ephysatlas import decoding
 
@@ -87,13 +85,16 @@ def setup_output_directory(params: Dict[str, Any]) -> Path:
         # Create a hash of the filename
         ap_file_hash = hashlib.md5(ap_file.encode()).hexdigest()[:12]
         first_level_dir = base_dir / ap_file_hash
-    
+
     first_level_dir.mkdir(parents=True, exist_ok=True)
 
     # Create second level subdirectory with probe parameters
-    second_level_dir = first_level_dir / f"probe_{params['pid']}_{params['t_start']}_{params['duration']}"
+    second_level_dir = (
+        first_level_dir
+        / f"probe_{params['pid']}_{params['t_start']}_{params['duration']}"
+    )
     second_level_dir.mkdir(parents=True, exist_ok=True)
-    
+
     # Change to the final output directory
     os.chdir(second_level_dir)
 
@@ -102,10 +103,11 @@ def setup_output_directory(params: Dict[str, Any]) -> Path:
 
 def main(args: Optional[List[str]] = None) -> int:
     """Main function that can be called with arguments or use command line arguments."""
-    
-    # Function was called with CLI. 
+
+    # Function was called with CLI.
     if args is None:
         import sys
+
         args = sys.argv[1:]
 
     # Parse arguments
@@ -116,7 +118,7 @@ def main(args: Optional[List[str]] = None) -> int:
 
     # Set up output directory and change to it
     output_dir = setup_output_directory(params)
-    
+
     # Set up logger with config path
     logger = setup_logger(__name__, file=params.get("log_path"))
     logger.info("Starting main function")
@@ -183,7 +185,9 @@ def main(args: Optional[List[str]] = None) -> int:
         np_probas_path = output_dir / "prediction_probabilities.npy"
         np_regions_path = output_dir / "predicted_regions.npy"
 
-        logger.info(f"Saving prediction probabilities as numpy array to {np_probas_path}")
+        logger.info(
+            f"Saving prediction probabilities as numpy array to {np_probas_path}"
+        )
         np.save(np_probas_path, predicted_probas)
 
         logger.info(f"Saving predicted regions as numpy array to {np_regions_path}")
@@ -204,4 +208,5 @@ def main(args: Optional[List[str]] = None) -> int:
 if __name__ == "__main__":
     exit_code = main()
     import sys
+
     sys.exit(exit_code)

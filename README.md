@@ -1,5 +1,8 @@
 # IBL Electrophysiology Feature Computation and Region Inference
 
+[![Coverage Status](https://coveralls.io/repos/github/int-brain-lab/ibleatools/badge.svg?branch=main)](https://coveralls.io/github/int-brain-lab/ibleatools?branch=main) 
+![CI](https://github.com/int-brain-lab/ibleatools/actions/workflows/ci.yml/badge.svg)
+
 This repository contains tools for computing electrophysiology features and performing region inference from neural recordings.
 
 ## Installation
@@ -69,8 +72,9 @@ The function returns a pandas DataFrame containing various electrophysiological 
 This function uses pre-trained models to infer brain regions from the computed features. It performs inference across multiple model folds and returns both the predicted regions and their probabilities.
 
 Basic usage:
+
 ```python
-from ephysatlas.region_inference import infer_regions
+from ephysatlas.regionclassifier.region_inference import infer_regions
 
 # Perform region inference
 predicted_probas, predicted_region = infer_regions(

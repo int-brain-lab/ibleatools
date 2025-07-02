@@ -1,7 +1,7 @@
 # Configuration for electrophysiology feature computation and region inference
 pid: "afe87fbb-3a17-461f-b333-e22903f1d70d"  # Probe ID
 t_start: 300.0  # Start time in seconds
-duration: 5  # Duration in seconds
+duration: 1  # Duration in seconds
 
 #Big .cbin files
 # ap_file: "/Users/pranavrai/Downloads/ONE/alyx.internationalbrainlab.org/angelakilab/Subjects/NYU-48/2021-06-28/001/raw_ephys_data/probe00/_spikeglx_ephysData_g0_t0.imec0.ap.cbin"

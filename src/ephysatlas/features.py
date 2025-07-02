@@ -7,7 +7,7 @@ import string
 
 import numpy as np
 import pandas as pd
-import pandera
+import pandera.pandas as pa
 import pydantic
 import scipy.signal
 import skimage.restoration
@@ -21,7 +21,10 @@ import ibldsp.voltage
 # Set up logger
 logger = logging.getLogger(__name__)
 
-floats = Annotated[pandera.Float, pandera.Float32]
+# Features version
+__features_version__ = "2025.07.01"
+
+floats = Annotated[pa.Float, pa.Float32]
 BANDS = {
     "delta": [0, 4],
     "theta": [4, 10],
@@ -40,72 +43,72 @@ class DartParameters(pydantic.BaseModel):
     trough_offset: pydantic.PositiveInt = (42,)
 
 
-class BaseChannelFeatures(pandera.DataFrameModel):
+class BaseChannelFeatures(pa.DataFrameModel):
     channel: int
 
 
 class ModelLfFeatures(BaseChannelFeatures):
-    rms_lf: Series[float] = pandera.Field(coerce=True)
-    psd_delta: Series[float] = pandera.Field(coerce=True)
-    psd_theta: Series[float] = pandera.Field(coerce=True)
-    psd_alpha: Series[float] = pandera.Field(coerce=True)
-    psd_beta: Series[float] = pandera.Field(coerce=True)
-    psd_gamma: Series[float] = pandera.Field(coerce=True)
-    psd_lfp: Series[float] = pandera.Field(coerce=True)
+    rms_lf: Series[float] = pa.Field(coerce=True)
+    psd_delta: Series[float] = pa.Field(coerce=True)
+    psd_theta: Series[float] = pa.Field(coerce=True)
+    psd_alpha: Series[float] = pa.Field(coerce=True)
+    psd_beta: Series[float] = pa.Field(coerce=True)
+    psd_gamma: Series[float] = pa.Field(coerce=True)
+    psd_lfp: Series[float] = pa.Field(coerce=True)
 
 
 class ModelCsdFeatures(BaseChannelFeatures):
-    rms_lf_csd: Series[float] = pandera.Field(coerce=True)
-    psd_delta_csd: Series[float] = pandera.Field(coerce=True)
-    psd_theta_csd: Series[float] = pandera.Field(coerce=True)
-    psd_alpha_csd: Series[float] = pandera.Field(coerce=True)
-    psd_beta_csd: Series[float] = pandera.Field(coerce=True)
-    psd_gamma_csd: Series[float] = pandera.Field(coerce=True)
-    psd_lfp_csd: Series[float] = pandera.Field(coerce=True)
+    rms_lf_csd: Series[float] = pa.Field(coerce=True)
+    psd_delta_csd: Series[float] = pa.Field(coerce=True)
+    psd_theta_csd: Series[float] = pa.Field(coerce=True)
+    psd_alpha_csd: Series[float] = pa.Field(coerce=True)
+    psd_beta_csd: Series[float] = pa.Field(coerce=True)
+    psd_gamma_csd: Series[float] = pa.Field(coerce=True)
+    psd_lfp_csd: Series[float] = pa.Field(coerce=True)
 
 
 class ModelApFeatures(BaseChannelFeatures):
-    rms_ap: Series[float] = pandera.Field(coerce=True)
-    cor_ratio: Series[float] = pandera.Field(coerce=True)
+    rms_ap: Series[float] = pa.Field(coerce=True)
+    cor_ratio: Series[float] = pa.Field(coerce=True)
 
 
 class ModelSpikeFeatures(BaseChannelFeatures):
-    alpha_mean: Series[float] = pandera.Field(coerce=True)
-    alpha_std: Series[float] = pandera.Field(coerce=True)
-    depolarisation_slope: Series[float] = pandera.Field(coerce=True)
-    peak_time_secs: Series[float] = pandera.Field(coerce=True)
-    peak_val: Series[float] = pandera.Field(coerce=True)
-    polarity: Series[float] = pandera.Field(coerce=True)
-    recovery_slope: Series[float] = pandera.Field(coerce=True)
-    recovery_time_secs: Series[float] = pandera.Field(coerce=True)
-    repolarisation_slope: Series[float] = pandera.Field(coerce=True)
-    spike_count: int = pandera.Field(
+    alpha_mean: Series[float] = pa.Field(coerce=True)
+    alpha_std: Series[float] = pa.Field(coerce=True)
+    depolarisation_slope: Series[float] = pa.Field(coerce=True)
+    peak_time_secs: Series[float] = pa.Field(coerce=True)
+    peak_val: Series[float] = pa.Field(coerce=True)
+    polarity: Series[float] = pa.Field(coerce=True)
+    recovery_slope: Series[float] = pa.Field(coerce=True)
+    recovery_time_secs: Series[float] = pa.Field(coerce=True)
+    repolarisation_slope: Series[float] = pa.Field(coerce=True)
+    spike_count: int = pa.Field(
         coerce=True, metadata={"transform": lambda x: x.astype(float)}
     )
-    tip_time_secs: Series[float] = pandera.Field(coerce=True)
-    tip_val: Series[float] = pandera.Field(coerce=True)
-    trough_time_secs: Series[float] = pandera.Field(coerce=True)
-    trough_val: Series[float] = pandera.Field(coerce=True)
+    tip_time_secs: Series[float] = pa.Field(coerce=True)
+    tip_val: Series[float] = pa.Field(coerce=True)
+    trough_time_secs: Series[float] = pa.Field(coerce=True)
+    trough_val: Series[float] = pa.Field(coerce=True)
 
 
 class ModelChannelLayout(BaseChannelFeatures):
-    axial_um: Series[float] = pandera.Field(coerce=True)
-    lateral_um: Series[float] = pandera.Field(coerce=True)
-    labels: Series[int] = pandera.Field(coerce=True, nullable=True)
+    axial_um: Series[float] = pa.Field(coerce=True)
+    lateral_um: Series[float] = pa.Field(coerce=True)
+    labels: Series[int] = pa.Field(coerce=True, nullable=True)
 
 
 class ModelHistologyPlanned(BaseChannelFeatures):
-    x_target: Series[float] = pandera.Field(coerce=True)
-    y_target: Series[float] = pandera.Field(coerce=True)
-    z_target: Series[float] = pandera.Field(coerce=True)
+    x_target: Series[float] = pa.Field(coerce=True)
+    y_target: Series[float] = pa.Field(coerce=True)
+    z_target: Series[float] = pa.Field(coerce=True)
 
 
 class ModelHistologyResolved(BaseChannelFeatures):
-    x: Series[float] = pandera.Field(coerce=True)
-    y: Series[float] = pandera.Field(coerce=True)
-    z: Series[float] = pandera.Field(coerce=True)
-    atlas_id: Series[int] = pandera.Field(coerce=True)
-    acronym: Series[str] = pandera.Field(coerce=True)
+    x: Series[float] = pa.Field(coerce=True)
+    y: Series[float] = pa.Field(coerce=True)
+    z: Series[float] = pa.Field(coerce=True)
+    atlas_id: Series[int] = pa.Field(coerce=True)
+    acronym: Series[str] = pa.Field(coerce=True)
 
 
 class ModelRawFeatures(
@@ -281,17 +284,16 @@ def dart_subtraction_numpy(data, fs, geometry, **params):
     )
 
     # Ensure scratch directory exists
-    #This is for SDSC calculations
+    # This is for SDSC calculations
     scratch_dir = Path("/scratch/prai1/dartsort/")
     try:
         scratch_dir.mkdir(parents=True, exist_ok=True)
     except Exception as e:
-        #We are probably on a local machine
+        # We are probably on a local machine
         logger.warning(f"Error creating scratch directory: {e}")
         # Create scratch directory in /tmp
         scratch_dir = Path("/tmp/dartsort/")
         scratch_dir.mkdir(parents=True, exist_ok=True)
-
 
     detected_spikes, h5_filename = dartsort.subtract(
         rec_np,
