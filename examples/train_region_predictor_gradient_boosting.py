@@ -13,7 +13,7 @@ import ephysatlas.data
 import ephysatlas.regionclassifier
 import ephysatlas.fixtures
 
-LOWQ = ephysatlas.fixtures.low_quality_labels
+LOWQ = ephysatlas.fixtures.misaligned_pids
 path_features = Path('/Users/olivier/Documents/datadisk/ephys-atlas-decoding/features/2024_W50')  # mac
 path_features = Path('/mnt/s0/ephys-atlas-decoding/features/2024_W50')  # parede
 
