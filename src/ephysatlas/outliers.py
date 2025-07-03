@@ -25,7 +25,7 @@ def compute_histogram(series, bins=None):
 
 
 def detect_outlier_kstest(train_data: np.ndarray, test_data: np.ndarray):
-    '''
+    """
     For a single feature, compute channel by channel the KS test against the distribution
 
     Parameters:
@@ -34,9 +34,11 @@ def detect_outlier_kstest(train_data: np.ndarray, test_data: np.ndarray):
 
     Returns:
     - outlier_statistic: (M,) numpy array, KS statistic of each test sample being an outlier.
-    '''
+    """
     out = np.zeros(test_data.shape)
-    for count, sample in enumerate(test_data):  # Test on each channel value independently
+    for count, sample in enumerate(
+        test_data
+    ):  # Test on each channel value independently
         ks_stat = stats.kstest(sample, train_data)
         out[count] = ks_stat.statistic
     return out
@@ -44,8 +46,11 @@ def detect_outlier_kstest(train_data: np.ndarray, test_data: np.ndarray):
 
 ##
 
-def kde_proba_distribution(train_data, test_data, n_samples=50, bandwidth_factor=16, interp_kind='linear'):
-    '''
+
+def kde_proba_distribution(
+    train_data, test_data, n_samples=50, bandwidth_factor=16, interp_kind="linear"
+):
+    """
     For a single feature, compute channel by channel the outlier score using KDE for
     the test set against the training distribution.
 
@@ -65,9 +70,11 @@ def kde_proba_distribution(train_data, test_data, n_samples=50, bandwidth_factor
     - outp: (M,) numpy array, outlier probability statistic of each test sample being an outlier.
     - x_train: (E, ) numpy array, x values of the histogram formed using training dataset
     - hist_train: (E, ) numpy array, y values of the histogram formed using training dataset
-    '''
+    """
     # Step 0 : Filter the train data to remove large outliers
-    train_data = train_data[np.abs(train_data - np.median(train_data)) < 5 * iqr(train_data)]
+    train_data = train_data[
+        np.abs(train_data - np.median(train_data)) < 5 * iqr(train_data)
+    ]
 
     # Step 1: Compute the histogram using KDE, on linearly spaced vector x_train
     # Note that for n_samples > 50 the performance of kde.score_samples drops and run takes longer
@@ -75,13 +82,17 @@ def kde_proba_distribution(train_data, test_data, n_samples=50, bandwidth_factor
     bin_width = x_train[1] - x_train[0]
     # Fit KDE
     # Note : STD/16 is fragile to use when there is bimodal or outliers
-    robust_std = iqr(train_data) / 1.349  # approximate standard deviation assuming normality
+    robust_std = (
+        iqr(train_data) / 1.349
+    )  # approximate standard deviation assuming normality
     bandwidth = robust_std / bandwidth_factor
-    kde = KernelDensity(bandwidth=bandwidth, kernel='gaussian')
+    kde = KernelDensity(bandwidth=bandwidth, kernel="gaussian")
     kde.fit(train_data.reshape(-1, 1))  # Reshape for usage in kde
     # Get probability score
     # The KDE returns the log_pdf. A density can exceed 1 and is not necessarily between 0 and 1.
-    density = np.exp(kde.score_samples(x_train.reshape(-1, 1)))  # Reshape for usage in kde
+    density = np.exp(
+        kde.score_samples(x_train.reshape(-1, 1))
+    )  # Reshape for usage in kde
     # Normalize to get probability-like values between 0-1
     hist_train = density / np.sum(density)
     n_original = hist_train.shape[0]
@@ -96,7 +107,9 @@ def kde_proba_distribution(train_data, test_data, n_samples=50, bandwidth_factor
     n_below = 0
     if np.max(test_data) > np.max(x_train):
         # Pad above
-        add_x = np.arange(np.max(x_train), np.max(test_data) + n_padbin_add * bin_width, bin_width)
+        add_x = np.arange(
+            np.max(x_train), np.max(test_data) + n_padbin_add * bin_width, bin_width
+        )
         add_y = np.zeros(np.shape(add_x))
         n_above = add_x.shape[0]
         x_train = np.concatenate((x_train, add_x))
@@ -104,7 +117,9 @@ def kde_proba_distribution(train_data, test_data, n_samples=50, bandwidth_factor
 
     if np.min(test_data) < np.min(x_train):
         # Pad below
-        add_x = np.arange(np.min(test_data) - n_padbin_add * bin_width, np.min(x_train), bin_width)
+        add_x = np.arange(
+            np.min(test_data) - n_padbin_add * bin_width, np.min(x_train), bin_width
+        )
         add_y = np.zeros(np.shape(add_x))
         n_below = add_x.shape[0]
         x_train = np.concatenate((add_x, x_train))
@@ -114,7 +129,9 @@ def kde_proba_distribution(train_data, test_data, n_samples=50, bandwidth_factor
 
     # Create the interpolation function
     y_train = hist_train
-    interp_func = interp1d(x_train, y_train, kind=interp_kind)  # 'linear' or 'cubic', 'quadratic', etc.
+    interp_func = interp1d(
+        x_train, y_train, kind=interp_kind
+    )  # 'linear' or 'cubic', 'quadratic', etc.
 
     # Generate new y-values from test data
     y_test = interp_func(test_data)
@@ -127,28 +144,29 @@ def kde_proba_distribution(train_data, test_data, n_samples=50, bandwidth_factor
 
 def kde_proba_1pid(df_base, df_new, features, mapping, p_thresh=0.999999, min_ch=15):
     # Regions
-    regions = np.unique(df_new[mapping + '_id']).astype(int)
+    regions = np.unique(df_new[mapping + "_id"]).astype(int)
     # Store the features that are outlier per brain region in a dict
     dictout = dict((el, list()) for el in regions.tolist())
-    dictout['mapping'] = mapping
-    dictout['features'] = features
+    dictout["mapping"] = mapping
+    dictout["features"] = features
 
     for count, region in tqdm.tqdm(enumerate(regions), total=len(regions)):
-
         # Get channel indices that are in region, but keeping all info besides features
-        idx_reg = np.where(df_new[mapping + '_id'] == region)
+        idx_reg = np.where(df_new[mapping + "_id"] == region)
         df_new_compute = df_new.iloc[idx_reg].copy()
-        df_new_compute['has_outliers'] = False
+        df_new_compute["has_outliers"] = False
 
         listout = list()
         for feature in features:
             # Load data for that regions
-            df_train = select_series(df_base, features=[feature],
-                                     acronym=None, id=region, mapping=mapping)
+            df_train = select_series(
+                df_base, features=[feature], acronym=None, id=region, mapping=mapping
+            )
 
             # Get channel indices that are in region, keeping only feature values
-            df_test = select_series(df_new, features=[feature],
-                                    acronym=None, id=region, mapping=mapping)
+            df_test = select_series(
+                df_new, features=[feature], acronym=None, id=region, mapping=mapping
+            )
 
             # For all channels at once, test if outside the distribution for the given features
             train_data = df_train.to_numpy()
@@ -156,16 +174,22 @@ def kde_proba_1pid(df_base, df_new, features, mapping, p_thresh=0.999999, min_ch
             score_out, _, _ = kde_proba_distribution(train_data, test_data)
             # score_out, _, _ = detect_outlier_histV2(train_data, test_data)
             # Save into new column
-            df_new_compute[feature + '_q'] = score_out
-            df_new_compute[feature + '_extremes'] = 0
-            df_new_compute.loc[df_new_compute[feature + '_q'] > p_thresh, feature + '_extremes'] = 1
+            df_new_compute[feature + "_q"] = score_out
+            df_new_compute[feature + "_extremes"] = 0
+            df_new_compute.loc[
+                df_new_compute[feature + "_q"] > p_thresh, feature + "_extremes"
+            ] = 1
             # A region is assigned as having outliers if more than half its channels are outliers
             # Condition on N minimum channel.
-            has_outliers = sum(df_new_compute[feature + '_extremes']) > np.floor(len(test_data) / 2)
+            has_outliers = sum(df_new_compute[feature + "_extremes"]) > np.floor(
+                len(test_data) / 2
+            )
             if len(test_data) >= min_ch and has_outliers:
                 listout.append(feature)
-                if sum(df_new_compute['has_outliers'] == 0):  # Reassign only if entirely False
-                    df_new_compute['has_outliers'] = True
+                if sum(
+                    df_new_compute["has_outliers"] == 0
+                ):  # Reassign only if entirely False
+                    df_new_compute["has_outliers"] = True
         # Save appended list of feature in dict
         dictout[region] = listout
 
@@ -175,13 +199,12 @@ def kde_proba_1pid(df_base, df_new, features, mapping, p_thresh=0.999999, min_ch
         else:
             df_save = pd.concat([df_save, df_new_compute])
 
-    if df_save['has_outliers'].sum() > 0:
+    if df_save["has_outliers"].sum() > 0:
         has_outlier = True
     else:
         has_outlier = False
 
     return df_save, dictout, has_outlier
-
 
 
 def save_score_kde(df_save, dictout, has_outlier, local_save_data, filenamebase):
@@ -190,8 +213,8 @@ def save_score_kde(df_save, dictout, has_outlier, local_save_data, filenamebase)
 
     if has_outlier:
         # Save only if outlier are present
-        df_save.to_parquet(local_save_data.joinpath(f'{filenamebase}_df_save.pqt'))
-        np.save(local_save_data.joinpath(f'{filenamebase}_dictout.npy'), dictout)
+        df_save.to_parquet(local_save_data.joinpath(f"{filenamebase}_df_save.pqt"))
+        np.save(local_save_data.joinpath(f"{filenamebase}_dictout.npy"), dictout)
 
 
 def compute_misaligned_proba(aids, aids_ch, predicted_probas):
@@ -224,7 +247,9 @@ def remap_df__original_to_model(df_new, mapping_original, mapping_model, regions
     # remap Beryl onto Cosmos as the model only runs on Cosmos
     if mapping_original != mapping_model:
         df_new[mapping_model + "_id"] = regions.remap(
-            df_new[mapping_original + "_id"], source_map=mapping_original, target_map=mapping_model
+            df_new[mapping_original + "_id"],
+            source_map=mapping_original,
+            target_map=mapping_model,
         )
         df_new[mapping_model + "_acronym"] = regions.id2acronym(
             df_new[mapping_model + "_id"]
@@ -238,11 +263,13 @@ def df_add_channel_label(df, pid, one=None):
         one = ONE()
     ssl = SpikeSortingLoader(pid=pid, one=one)
     channels = ssl.load_channels()
-    assert channels.get('labels') is not None
+    assert channels.get("labels") is not None
 
-    df_label = pd.DataFrame(channels)[['labels', 'rawInd']].rename(columns={'rawInd': 'channel'})
-    df_label['pid'] = pid
-    df_label = df_label.set_index(['pid', 'channel'])
+    df_label = pd.DataFrame(channels)[["labels", "rawInd"]].rename(
+        columns={"rawInd": "channel"}
+    )
+    df_label["pid"] = pid
+    df_label = df_label.set_index(["pid", "channel"])
 
     # Merge to get the labels column
     df = df.merge(df_label, left_index=True, right_index=True)

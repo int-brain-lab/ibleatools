@@ -30,7 +30,9 @@ def save_model(path_model, classifier, meta, subfolder="", identifier=None):
         f"{classifier.__class__.__module__}.{classifier.__class__.__name__}"
     )
     if identifier is None:
-        identifier = iblutil.random.name_from_hash(hashlib.md5(yaml.dump(meta).encode("utf-8")))
+        identifier = iblutil.random.name_from_hash(
+            hashlib.md5(yaml.dump(meta).encode("utf-8"))
+        )
     path_model = path_model.joinpath(
         f"{meta['VINTAGE']}_{meta['REGION_MAP']}_{identifier}", subfolder
     )

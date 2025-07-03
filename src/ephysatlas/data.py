@@ -449,7 +449,12 @@ def read_correlogram(file_correlogram, nclusters):
 
 
 def download_tables(
-    local_path, label="2024_W50", one=None, verify=False, overwrite=False, extended=False
+    local_path,
+    label="2024_W50",
+    one=None,
+    verify=False,
+    overwrite=False,
+    extended=False,
 ):
     """
     :param local_path: pathlib.Path() where the data will be stored locally

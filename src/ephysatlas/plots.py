@@ -87,13 +87,13 @@ def plot_results(df, predicted_probas, dict_model, regions=None):
     return fig, ax
 
 
-def select_series(df, features=None, acronym=None, id=None, mapping='Allen'):
+def select_series(df, features=None, acronym=None, id=None, mapping="Allen"):
     if features is None:  # Take the whole set
         features = ephysatlas.features.voltage_features_set()
     if acronym is not None:
-        series = df.loc[df[f'{mapping}_acronym'] == acronym, features]
+        series = df.loc[df[f"{mapping}_acronym"] == acronym, features]
     elif id is not None:
-        series = df.loc[df[f'{mapping}_id'] == id, features]
+        series = df.loc[df[f"{mapping}_id"] == id, features]
     return series
 
 
@@ -110,7 +110,6 @@ def get_color_br(pid_ch_df, br, mapping="Allen"):
     region_info = br.get(pid_ch_df[mapping + "_id"])
     color = region_info.rgb / 255
     return color
-
 
 
 def plot_probe_rect(xy, color, ax, width=16, height=40):
@@ -141,6 +140,7 @@ def plot_probe_rect(xy, color, ax, width=16, height=40):
     ax.set_xlim([min(xy[:, 0]) - width / 2, max(xy[:, 0]) + width / 2])
     ax.set_ylim([min(xy[:, 1]) - height / 2, max(xy[:, 1]) + height / 2])
     # plt.show()
+
 
 def plot_probe_rect2(xy, color, ax, width=16, height=40):
     """
@@ -178,7 +178,7 @@ def plot_probe_rect2(xy, color, ax, width=16, height=40):
         j1 = min(X, round(a_x + hw) + 1)
         im[i0:i1, j0:j1, :3] = a_color.ravel()[:3]
 
-    ax.imshow(im, extent=extent, origin='lower', aspect='auto')
+    ax.imshow(im, extent=extent, origin="lower", aspect="auto")
 
     ax.set_xlim(*extent[:2])
     ax.set_xticks([])
@@ -187,10 +187,17 @@ def plot_probe_rect2(xy, color, ax, width=16, height=40):
     ax.set_yticks(yticks, labels=map(int, yticks * k))
 
 
-
 def figure_features_chspace(
-    pid_df, features, xy, pid, fig=None, axs=None, br=None, mapping="Cosmos",
-    plot_rect=plot_probe_rect, cmap="viridis"
+    pid_df,
+    features,
+    xy,
+    pid,
+    fig=None,
+    axs=None,
+    br=None,
+    mapping="Cosmos",
+    plot_rect=plot_probe_rect,
+    cmap="viridis",
 ):
     """
 
