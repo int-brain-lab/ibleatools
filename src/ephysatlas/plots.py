@@ -196,7 +196,7 @@ def figure_features_chspace(
     axs=None,
     br=None,
     mapping="Cosmos",
-    plot_rect=plot_probe_rect,
+    plot_rect=plot_probe_rect2,
     cmap="viridis",
 ):
     """
