@@ -1,29 +1,23 @@
 from pathlib import Path
+import tqdm
 
 import pandas as pd
 import numpy as np
+
 import sklearn.metrics
 from xgboost import XGBClassifier  # pip install xgboost  # https://xgboost.readthedocs.io/en/stable/prediction.html
+
 import iblutil.numerical
 import ephysatlas.anatomy
 import ephysatlas.data
 import ephysatlas.regionclassifier
 import ephysatlas.fixtures
-# we are shooting for around 55% accuracy
 
 LOWQ = ephysatlas.fixtures.low_quality_labels
-
-# import ephys_atlas.data
-# from one.api import ONE
-# one = ONE(base_url='https://alyx.internationalbrainlab.org', mode='remote')
-# df_voltage, _, df_channels, df_probes = ephys_atlas.data.download_tables(local_path='/datadisk/Data/paper-ephys-atlas/ephys-atlas-decoding/features', label='2024_W50', one=one)
-
-
-brain_atlas = ephysatlas.anatomy.ClassifierAtlas()
-# brain_atlas = ephys_atlas.anatomy.AllenAtlas()  # Accuracy: 0.5536619920744102
-
 path_features = Path('/Users/olivier/Documents/datadisk/ephys-atlas-decoding/features/2024_W50')  # mac
 path_features = Path('/mnt/s0/ephys-atlas-decoding/features/2024_W50')  # parede
+
+brain_atlas = ephysatlas.anatomy.ClassifierAtlas()
 
 path_models = path_features.parents[1].joinpath('models')
 path_models.mkdir(exist_ok=True)
@@ -55,7 +49,6 @@ x_list = ephysatlas.features.voltage_features_set(FEATURE_SET)
 
 df_features["outside"] = df_features["labels"] == 3
 x_list.append("outside")
-
 
 aids = brain_atlas.get_labels(df_features.loc[:, ["x", "y", "z"]].values, mode="clip")
 df_features["Allen_id"] = aids
@@ -165,6 +158,8 @@ def hmm_post_process(probas, rids, emission=None, transmission=None, priors=None
     down2up = up2down.T / np.sum(up2down.T, axis=1)[:, np.newaxis]
     priors = priors / np.sum(priors)
     nd, nr = probas.shape[0], hmm_rids.size
+    if nd <= 2:
+        return np.argmax(probas, axis=1)
     all_obs = np.zeros((nd, n_runs), dtype=int)
     all_vit = np.zeros((nd, n_runs))
     vprobs = np.zeros(n_runs)
@@ -227,7 +222,6 @@ def process_pid(pid, df_features, **kwargs):
     _, idpth = iblutil.numerical.ismember(df_features.loc[pid]['axial_um'].to_numpy(), df_predictions_depths.index)
     return hpred[idpth]
 
-import tqdm
 
 transmission, hmm_priors, hmm_rids = ephysatlas.anatomy.regions_transition_matrix(ba=brain_atlas, mapping='Cosmos')
 hmm_kwargs = {

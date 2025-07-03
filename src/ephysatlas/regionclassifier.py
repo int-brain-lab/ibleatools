@@ -6,6 +6,7 @@ import yaml
 import numpy as np
 from xgboost import XGBClassifier
 
+from one.remote import aws
 from one.api import ONE
 from iblutil.util import Bunch
 import iblutil.random
