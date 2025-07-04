@@ -1,5 +1,6 @@
 from pathlib import Path
 import tqdm
+import shutil
 
 import pandas as pd
 import numpy as np
@@ -10,6 +11,7 @@ from xgboost import XGBClassifier  # pip install xgboost  # https://xgboost.read
 import iblutil.numerical
 import ephysatlas.anatomy
 import ephysatlas.data
+import ephysatlas.fixtures
 import ephysatlas.regionclassifier
 import ephysatlas.fixtures
 
@@ -25,7 +27,6 @@ path_models.mkdir(exist_ok=True)
 
 df_features = ephysatlas.data.read_features_from_disk(path_features, brain_atlas=brain_atlas)
 
-FEATURE_SET = ["raw_lf", "raw_lf_csd", "raw_ap", "micro-manipulator"]
 FEATURE_SET = [
     "raw_lf",
     "raw_lf_csd",
@@ -40,20 +41,19 @@ x_list.append("outside")
 TRAIN_LABEL = "Cosmos_id"  # ['Beryl_id', 'Cosmos_id']
 
 test_sets = {
-    "benchmark": ephysatlas.data.BENCHMARK_PIDS,
-    "nemo": ephysatlas.data.NEMO_TEST_PIDS,
+    "benchmark": ephysatlas.fixtures.benchmark_pids,
+    "nemo": ephysatlas.fixtures.nemo_test_pids,
 }
 rids = np.unique(df_features.loc[:, TRAIN_LABEL])
 
-def train(test_idx, fold_label, train_idx=None):
-    train_idx = ~test_idx if train_idx is None else train_idx
+def train(test_idx, fold_label=''):
+    train_idx = ~test_idx
     print(f"{fold_label}: {df_features.shape[0]} channels", f'training set {np.sum(test_idx) / test_idx.size}')
     df_features.loc[train_idx, :].groupby(TRAIN_LABEL).count()
     x_train = df_features.loc[train_idx, x_list].values
     x_test = df_features.loc[test_idx, x_list].values
     y_train = df_features.loc[train_idx, TRAIN_LABEL].values
     y_test = df_features.loc[test_idx, TRAIN_LABEL].values
-    df_benchmarks = df_features.loc[iblutil.numerical.ismember(df_features.index.get_level_values(0), ephysatlas.data.BENCHMARK_PIDS)[0], :].copy()
     df_test = df_features.loc[test_idx, :].copy()
     classes = np.unique(df_features.loc[train_idx, TRAIN_LABEL])
 
@@ -85,11 +85,12 @@ def train(test_idx, fold_label, train_idx=None):
 n_folds = 5
 df_features = df_features[~df_features.index.get_level_values(0).isin(LOWQ)]
 all_pids = np.array(df_features.index.get_level_values(0).unique())
-np.random.seed(12345)
+rs = np.random.seed(12345)
 np.random.shuffle(all_pids)
 ifold = np.floor(np.arange(len(all_pids)) / len(all_pids) * n_folds)
 
-df_predictions = pd.DataFrame(index=df_features.index, columns=list(rids))
+
+df_predictions = pd.DataFrame(index=df_features.index, columns=list(rids) + ['prediction', 'fold'], dtype=float)
 for i in range(n_folds):
     test_pids = all_pids[ifold == i]
     train_pids = all_pids[ifold!= i]
@@ -97,10 +98,11 @@ for i in range(n_folds):
     probas, classifier, accuracy, confusion_matrix = train(
         test_idx=test_idx, fold_label=f"fold {i}"
     )
-
     df_predictions.loc[test_idx, rids] = probas
+    df_predictions.loc[test_idx, 'fold'] = i
+    df_predictions.loc[test_idx, 'prediction'] = rids[np.argmax(probas, axis=1)]
     meta = dict(
-        RANDOM_SEED=12345,
+        RANDOM_SEED=rs,
         VINTAGE="2024_W50",
         REGION_MAP="Cosmos",
         FEATURES=x_list,
@@ -114,10 +116,36 @@ for i in range(n_folds):
         ),
     )
     # here we will use the confusion matrix as an emission matrix P(observation|state) = P(prediction|class)
-    path_model = ephysatlas.regionclassifier.save_model(path_models, classifier, meta, subfolder=f"FOLD{i:02}", identifier='medical-rosewood-kestrel')
-print(f"Model saved to {path_model}")
+    path_model_fold = ephysatlas.regionclassifier.save_model(path_models, classifier, meta, subfolder=f"FOLD{i:02}", identifier='tmp')
 
-# df_predictions.to_parquet(path_models / 'predictions_Cosmos.pqt')
+
+
+accuracy = sklearn.metrics.accuracy_score(df_features[TRAIN_LABEL].values, df_predictions['prediction'].values.astype(int))
+_, classifier, _, _ = train(test_idx=np.zeros(df_features.shape[0], dtype=bool))
+meta = dict(
+    RANDOM_SEED=12345,
+    VINTAGE="2024_W50",
+    REGION_MAP="Cosmos",
+    FEATURES=rs,
+    CLASSES=[int(c) for c in rids],
+    ACCURACY=accuracy,
+    TRAINING=dict(
+        training_size=len(all_pids),
+        testing_size=0,
+        hash_training=iblutil.numerical.hash_uuids(all_pids),
+        hash_testing=None
+    ),
+)
+
+
+path_model = ephysatlas.regionclassifier.save_model(path_models, classifier, meta)
+print(f"Model saved to {path_model.parent}")
+df_predictions.to_parquet(path_model / 'predictions.pqt')
+
+if path_model.joinpath('folds').exists():
+    shutil.rmtree(path_model.joinpath('folds'))
+shutil.move(path_model_fold.parent, path_model.joinpath('folds'))
+
 # lid_basket_sense
 # fold 0: 384215 channels training set 0.2008120453391981
 # fold 0 Accuracy: 0.6679541183332254

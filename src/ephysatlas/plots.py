@@ -7,6 +7,8 @@ import matplotlib.patches
 from iblatlas.atlas import BrainRegions
 from iblutil.numerical import ismember
 from ibl_style.style import figure_style
+from ibl_style.utils import MM_TO_INCH
+import brainbox.ephys_plots
 
 import ephysatlas.features
 
@@ -97,10 +99,12 @@ def select_series(df, features=None, acronym=None, id=None, mapping="Allen"):
     return series
 
 
-def get_color_feat(x, cmap_name="viridis"):
+def get_color_feat(x, cmap_name="viridis", min_val=None, max_val=None):
+    min_val = np.min(x) if min_val is None else min_val
+    max_val = np.max(x) if max_val is None else max_val
     # Normalise between 0-1
     cmap = matplotlib.colormaps[cmap_name]
-    x_norm = (x - np.min(x)) / (np.max(x) - np.min(x))
+    x_norm = (x - min_val) / (max_val - min_val)
     # x_norm = scipy.stats.zscore(x)
     color = cmap(x_norm)
     return color
@@ -187,7 +191,7 @@ def plot_probe_rect2(xy, color, ax, width=16, height=40):
     ax.set_yticks(yticks, labels=map(int, yticks * k))
 
 
-def figure_features_chspace(
+def figure_features_channel_space(
     pid_df,
     features,
     xy,
@@ -200,47 +204,123 @@ def figure_features_chspace(
     cmap="viridis",
 ):
     """
+    Create a figure displaying electrophysiological features and brain regions along a probe.
 
-    :param pid_df: Dataframe containing channels and voltage information for a given PID
-    Example on how to prepare it:
-    # Merge the voltage and channels dataframe
-    df_voltage = pd.merge(df_voltage, df_channels, left_index=True, right_index=True).dropna()
-    # Select a PID and create the single probe dataframe
-    pid = '0228bcfd-632e-49bd-acd4-c334cf9213e9'
-    pid_df = df_voltage[df_voltage.index.get_level_values(0).isin([pid])].copy()
+    This function visualizes multiple features along a probe's channels in physical space,
+    as well as brain region information. It creates a multi-panel figure where each panel
+    shows a different feature or brain region mapping.
 
-    :param features: list of feature names to display, e.g. ['rms_lf', 'psd_delta', 'rms_ap']
-    These have to bey columns keys of the pid_df
-    :param xy: Matrix of spatial channel position (in um), lateral_um (x) and axial_um (y) [N channel x2]
-    :return:
+    Parameters
+    ----------
+    pid_df : pandas.DataFrame
+        Dataframe containing channels and voltage information for a given probe ID (PID).
+        Must contain columns for the specified features and brain region mapping.
+        Example on how to prepare it:
+        # Merge the voltage and channels dataframe
+        df_voltage = pd.merge(df_voltage, df_channels, left_index=True, right_index=True).dropna()
+        # Select a PID and create the single probe dataframe
+        pid = '0228bcfd-632e-49bd-acd4-c334cf9213e9'
+        pid_df = df_voltage[df_voltage.index.get_level_values(0).isin([pid])].copy()
+
+    features : list
+        List of feature names to display, e.g. ['rms_lf', 'psd_delta', 'rms_ap'].
+        These must be column keys in pid_df.
+
+    xy : numpy.ndarray
+        Matrix of spatial channel positions (in μm), with shape [N_channels x 2].
+        First column is lateral_um (x) and second column is axial_um (y).
+
+    pid : str
+        Probe ID to be displayed in the figure title.
+
+    fig : matplotlib.figure.Figure, optional
+        Existing figure to plot on. If None, a new figure is created.
+
+    axs : array of matplotlib.axes.Axes, optional
+        Existing axes to plot on. If None, new axes are created.
+
+    br : iblatlas.atlas.BrainRegions, optional
+        BrainRegions object for region color mapping. If None, a new one is created.
+
+    mapping : str, default "Cosmos"
+        Brain region mapping to use. The function will look for columns named
+        "{mapping}_id" in pid_df.
+
+    plot_rect : function, default plot_probe_rect2
+        Function to use for plotting rectangles. Should accept xy, color, and ax parameters.
+
+    cmap : str, default "viridis"
+        Colormap name to use for feature visualization.
+
+    Returns
+    -------
+    fig : matplotlib.figure.Figure
+        The figure object containing the plots.
+
+    axs : array of matplotlib.axes.Axes
+        The axes objects for each subplot.
     """
     if br is None:
         br = BrainRegions()
     if fig is None or axs is None:
-        fig, axs = plt.subplots(1, len(features) + 2, sharey=True)  # +2
+        fig, axs = plt.subplots(1, len(features) + 4, sharey=False)
+
+    brainbox.ephys_plots.plot_brain_regions(
+        pid_df["atlas_id"].values,
+        channel_depths=xy[:, 1],
+        brain_regions=br,
+        display=True,
+        ax=axs[0],
+    )
+    axs[0].set_title("Allen", rotation=90)
 
     for i_feat, feature in enumerate(features):
+        ax = axs[i_feat + 4]
         feat_arr = pid_df[[feature]].to_numpy()
         # Plot feature
+        # todo OW use the min/max values from the pandera schemes instead
         color = get_color_feat(feat_arr, cmap_name=cmap)
-        plot_rect(xy, color, ax=axs[i_feat])
-        axs[i_feat].set_title(feature, rotation=90)
+        plot_rect(xy, color, ax=ax)
+        ax.set_title(feature, rotation=90)
+        ax.set_xticklabels([])
+        ax.set_yticklabels([])
 
     # Plot brain region in space in unique colors
-    # TODO Change to use rectangle function as plot_probe does not work anymore
+    ax = axs[2]
     d_uni = np.unique(pid_df[mapping + "_id"].to_numpy(), return_inverse=True)[1]
     d_uni = d_uni.astype(np.float32)
-    color = get_color_feat(d_uni)
-    plot_rect(xy, color, ax=axs[len(features)])
-    axs[len(features)].set_title("unique region", rotation=90)
+    color = get_color_feat(d_uni, cmap_name="Blues")
+    plot_probe_rect2(xy, color, ax=axs[2])
+    ax.set_title("unique region", rotation=90)
+    ax.set_xticklabels([])
+    ax.set_yticklabels([])
 
     # Plot brain region along probe depth with color code
+    ax = axs[1]
     color = get_color_br(pid_df, br, mapping=mapping)
-    plot_rect(xy, color, ax=axs[len(features) + 1])  # + 1
-    axs[len(features) + 1].set_title(mapping, rotation=90)
+    plot_probe_rect2(xy, color, ax=ax)
+    ax.set_title(mapping, rotation=90)
+    ax.set_xticklabels([])
+    ax.set_yticklabels([])
 
+    axs[3].axis("off")
     # Add pid as suptitle
     # pid = pid_df.index[0][0]
-    fig.suptitle(f"PID {pid}", y=0.08)
+    fig.suptitle(f"PID {pid}", y=0.08, fontweight="bold")
+
+    # now adjust the figure
+    adjust = 7.5
+    # Depending on the location of axis labels leave a bit more space
+    extra_left = 7.5
+    extra_top = 20
+    extra_bottom = 4
+    width, height = fig.get_size_inches() / MM_TO_INCH
+    fig.subplots_adjust(
+        top=1 - (extra_top + adjust) / height,
+        bottom=(adjust + extra_bottom) / height,
+        left=(adjust + extra_left) / width,
+        right=1 - adjust / width,
+        wspace=0,
+    )
 
     return fig, axs

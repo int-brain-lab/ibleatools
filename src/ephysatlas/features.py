@@ -37,6 +37,11 @@ BANDS = {
 FEATURES_LIST = ["raw_ap", "raw_lf", "localisation", "waveforms"]
 
 
+def get_feature_cmin(feature_name):
+    # todo
+    pass
+
+
 class DartParameters(pydantic.BaseModel):
     localization_radius: pydantic.PositiveFloat = 150
     chunk_length_samples: pydantic.PositiveInt = 2**15
@@ -48,7 +53,9 @@ class BaseChannelFeatures(pa.DataFrameModel):
 
 
 class ModelLfFeatures(BaseChannelFeatures):
-    rms_lf: Series[float] = pa.Field(coerce=True)
+    rms_lf: Series[float] = pa.Field(
+        coerce=True, metadata={"transform": lambda x: 20 * np.log10(x)}
+    )
     psd_delta: Series[float] = pa.Field(coerce=True)
     psd_theta: Series[float] = pa.Field(coerce=True)
     psd_alpha: Series[float] = pa.Field(coerce=True)
@@ -58,7 +65,9 @@ class ModelLfFeatures(BaseChannelFeatures):
 
 
 class ModelCsdFeatures(BaseChannelFeatures):
-    rms_lf_csd: Series[float] = pa.Field(coerce=True)
+    rms_lf_csd: Series[float] = pa.Field(
+        coerce=True, metadata={"transform": lambda x: 20 * np.log10(x)}
+    )
     psd_delta_csd: Series[float] = pa.Field(coerce=True)
     psd_theta_csd: Series[float] = pa.Field(coerce=True)
     psd_alpha_csd: Series[float] = pa.Field(coerce=True)
@@ -68,7 +77,9 @@ class ModelCsdFeatures(BaseChannelFeatures):
 
 
 class ModelApFeatures(BaseChannelFeatures):
-    rms_ap: Series[float] = pa.Field(coerce=True)
+    rms_ap: Series[float] = pa.Field(
+        coerce=True, metadata={"transform": lambda x: 20 * np.log10(x)}
+    )
     cor_ratio: Series[float] = pa.Field(coerce=True)
 
 
@@ -78,12 +89,14 @@ class ModelSpikeFeatures(BaseChannelFeatures):
     depolarisation_slope: Series[float] = pa.Field(coerce=True)
     peak_time_secs: Series[float] = pa.Field(coerce=True)
     peak_val: Series[float] = pa.Field(coerce=True)
-    polarity: Series[float] = pa.Field(coerce=True)
+    polarity: Series[float] = pa.Field(
+        coerce=True, metadata={"transform": lambda x: np.log10(x + 1 + 1e-6)}
+    )
     recovery_slope: Series[float] = pa.Field(coerce=True)
     recovery_time_secs: Series[float] = pa.Field(coerce=True)
     repolarisation_slope: Series[float] = pa.Field(coerce=True)
     spike_count: int = pa.Field(
-        coerce=True, metadata={"transform": lambda x: x.astype(float)}
+        coerce=True, metadata={"transform": lambda x: np.log2(x.astype(float))}
     )
     tip_time_secs: Series[float] = pa.Field(coerce=True)
     tip_val: Series[float] = pa.Field(coerce=True)
@@ -472,6 +485,7 @@ def denoise_shank(
 def denoise_dataframe(df_pid, feature_names=None, fac=1):
     """
     Applies total variation filter denoising to the features of a single pid datframe.
+    If a transformation is defined in the metadata of the schema, it will be applied before denoising
     :param df_pid:
     :param feature_names:
     :param fac:

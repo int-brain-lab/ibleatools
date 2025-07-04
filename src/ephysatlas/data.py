@@ -9,7 +9,7 @@ import neuropixel
 from one.remote import aws
 
 import iblatlas.atlas
-
+import ephysatlas.anatomy
 
 _logger = logging.getLogger("ibllib")
 
@@ -187,6 +187,9 @@ def read_features_from_disk(
         and brain region mappings.
     """
     mappings = ["Cosmos", "Beryl"] if mappings is None else mappings
+    brain_atlas = (
+        brain_atlas if brain_atlas is not None else ephysatlas.anatomy.ClassifierAtlas()
+    )
     assert brain_atlas is not None, "Brain atlas is required to map labels to regions"
     assert all(mapping in brain_atlas.regions.mappings for mapping in mappings), (
         f"Unknown mapping: {mappings}"
