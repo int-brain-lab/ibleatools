@@ -9,6 +9,7 @@ import neuropixel
 from one.remote import aws
 
 import iblatlas.atlas
+import ephysatlas.features
 import ephysatlas.anatomy
 
 _logger = logging.getLogger("ibllib")
@@ -196,18 +197,22 @@ def read_features_from_disk(
     )
     # merge the channel information with the features
     df_features = pd.read_parquet(path_features / "raw_ephys_features_denoised.pqt")
+    df_channels = pd.read_parquet(path_features / "channels.pqt")
+    duplicate_cols = set(df_features.columns).intersection(set(df_channels.columns))
+    df_channels = df_channels.drop(columns=duplicate_cols)
     df_features = df_features.merge(
-        pd.read_parquet(path_features / "channels.pqt"),
+        df_channels,
         how="inner",
         right_index=True,
         left_index=True,
     )
-    df_features = df_features.merge(
-        pd.read_parquet(path_features / "channels_labels.pqt").fillna(0),
-        how="inner",
-        right_index=True,
-        left_index=True,
-    )
+    if "labels" not in df_features.columns:
+        df_features = df_features.merge(
+            pd.read_parquet(path_features / "channels_labels.pqt").fillna(0),
+            how="inner",
+            right_index=True,
+            left_index=True,
+        )
     df_features["outside"] = df_features["labels"] == 3
 
     aids = brain_atlas.get_labels(
@@ -216,7 +221,9 @@ def read_features_from_disk(
     df_features["Allen_id"] = aids
     for mapping in mappings:
         df_features[f"{mapping}_id"] = brain_atlas.regions.remap(aids, "Allen", mapping)
-    return df_features
+
+    # this will make sure that the features dataframe is compatible and healthy
+    return pd.DataFrame(ephysatlas.features.ModelRawFeatures(df_features))
 
 
 def compute_depth_dataframe(df_raw_features, df_clusters, df_channels):

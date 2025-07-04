@@ -11,7 +11,7 @@ import pandera.pandas as pa
 import pydantic
 import scipy.signal
 import skimage.restoration
-from pandera.typing import Series, Index
+from pandera.typing import Series
 
 import ibldsp.waveforms
 import ibldsp.cadzow
@@ -49,7 +49,7 @@ class DartParameters(pydantic.BaseModel):
 
 
 class BaseChannelFeatures(pa.DataFrameModel):
-    pass # channel: Index[int] = pa.Field(check_name=True)
+    pass  # channel: Index[int] = pa.Field(check_name=True)
 
 
 class ModelLfFeatures(BaseChannelFeatures):
@@ -485,12 +485,12 @@ def denoise_shank(
 def denoise_dataframe(df_pid, feature_names=None, fac=1):
     """
     Applies total variation filter denoising to the features of a single probe insertion dataframe.
-    
+
     This function processes electrophysiological features by applying a total variation filter
     to denoise them. If a transformation is defined in the metadata schema for a feature,
     it will be applied before denoising. Channels marked with non-zero labels are treated
     as invalid and their values are interpolated from neighboring channels.
-    
+
     Parameters
     ----------
     df_pid : pandas.DataFrame
@@ -503,7 +503,7 @@ def denoise_dataframe(df_pid, feature_names=None, fac=1):
     fac : float, default=1
         Factor for the TV denoising in median deviation units. Higher values
         result in stronger denoising.
-        
+
     Returns
     -------
     pandas.DataFrame

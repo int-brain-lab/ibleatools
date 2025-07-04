@@ -15,10 +15,15 @@ import ephysatlas.fixtures
 import ephysatlas.regionclassifier
 import ephysatlas.fixtures
 
-
+VINTAGE = '2024_W50'
+VINTAGE = '2025_W27'
+path_features = Path(f'/mnt/s0/ephys-atlas-decoding/features/{VINTAGE}')  # parede
+path_features = Path(f'/Users/olivier/Documents/datadisk/ephys-atlas-decoding/features/{VINTAGE}')  # mac
+if not path_features.exists():
+    from one.api import ONE
+    one = ONE()
+    ephysatlas.data.download_tables(path_features.parent, label=VINTAGE, one=one)
 LOWQ = ephysatlas.fixtures.misaligned_pids
-path_features = Path('/Users/olivier/Documents/datadisk/ephys-atlas-decoding/features/2024_W50')  # mac
-path_features = Path('/mnt/s0/ephys-atlas-decoding/features/2024_W50')  # parede
 
 brain_atlas = ephysatlas.anatomy.ClassifierAtlas()
 
@@ -103,7 +108,7 @@ for i in range(n_folds):
     df_predictions.loc[test_idx, 'prediction'] = rids[np.argmax(probas, axis=1)]
     meta = dict(
         RANDOM_SEED=rs,
-        VINTAGE="2024_W50",
+        VINTAGE=VINTAGE,
         REGION_MAP="Cosmos",
         FEATURES=x_list,
         CLASSES=[int(c) for c in rids],
@@ -118,15 +123,13 @@ for i in range(n_folds):
     # here we will use the confusion matrix as an emission matrix P(observation|state) = P(prediction|class)
     path_model_fold = ephysatlas.regionclassifier.save_model(path_models, classifier, meta, subfolder=f"FOLD{i:02}", identifier='tmp')
 
-
-
 accuracy = sklearn.metrics.accuracy_score(df_features[TRAIN_LABEL].values, df_predictions['prediction'].values.astype(int))
 _, classifier, _, _ = train(test_idx=np.zeros(df_features.shape[0], dtype=bool))
 meta = dict(
-    RANDOM_SEED=12345,
-    VINTAGE="2024_W50",
+    RANDOM_SEED=rs,
+    VINTAGE=VINTAGE,
     REGION_MAP="Cosmos",
-    FEATURES=rs,
+    FEATURES=x_list,
     CLASSES=[int(c) for c in rids],
     ACCURACY=accuracy,
     TRAINING=dict(
@@ -139,7 +142,8 @@ meta = dict(
 
 
 path_model = ephysatlas.regionclassifier.save_model(path_models, classifier, meta)
-print(f"Model saved to {path_model.parent}")
+print(f"Global Accuracy: {accuracy}")
+print(f"Model saved to {path_model}")
 df_predictions.to_parquet(path_model / 'predictions.pqt')
 
 if path_model.joinpath('folds').exists():
