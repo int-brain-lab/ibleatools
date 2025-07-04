@@ -13,6 +13,7 @@ import ephysatlas.data
 import ephysatlas.regionclassifier
 import ephysatlas.fixtures
 
+
 LOWQ = ephysatlas.fixtures.misaligned_pids
 path_features = Path('/Users/olivier/Documents/datadisk/ephys-atlas-decoding/features/2024_W50')  # mac
 path_features = Path('/mnt/s0/ephys-atlas-decoding/features/2024_W50')  # parede
@@ -21,20 +22,8 @@ brain_atlas = ephysatlas.anatomy.ClassifierAtlas()
 
 path_models = path_features.parents[1].joinpath('models')
 path_models.mkdir(exist_ok=True)
-df_features = pd.read_parquet(path_features / "raw_ephys_features_denoised.pqt")
-df_features = df_features.merge(
-    pd.read_parquet(path_features / "channels.pqt"),
-    how="inner",
-    right_index=True,
-    left_index=True,
-)
-df_features = df_features.merge(
-    pd.read_parquet(path_features / "channels_labels.pqt").fillna(0),
-    how="inner",
-    right_index=True,
-    left_index=True,
-)
-ephysatlas.data.load_tables(local_path=path_features)
+
+df_features = ephysatlas.data.read_features_from_disk(path_features, brain_atlas=brain_atlas)
 
 FEATURE_SET = ["raw_lf", "raw_lf_csd", "raw_ap", "micro-manipulator"]
 FEATURE_SET = [
@@ -46,14 +35,7 @@ FEATURE_SET = [
     "micro-manipulator",
 ]
 x_list = ephysatlas.features.voltage_features_set(FEATURE_SET)
-
-df_features["outside"] = df_features["labels"] == 3
 x_list.append("outside")
-
-aids = brain_atlas.get_labels(df_features.loc[:, ["x", "y", "z"]].values, mode="clip")
-df_features["Allen_id"] = aids
-df_features["Cosmos_id"] = brain_atlas.regions.remap(aids, "Allen", "Cosmos")
-df_features["Beryl_id"] = brain_atlas.regions.remap(aids, "Allen", "Beryl")
 
 TRAIN_LABEL = "Cosmos_id"  # ['Beryl_id', 'Cosmos_id']
 

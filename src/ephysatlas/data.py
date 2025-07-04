@@ -109,74 +109,6 @@ def atlas_pids(one, tracing=False):
     return [item["id"] for item in insertions], insertions
 
 
-def load_voltage_features(local_path, regions=None, mapping="Cosmos", dropna=True):
-    """
-    Load the voltage features, drop  NaNs and merge the channel information at the Allen, Beryl and Cosmos levels
-    :param local_path: full path to folder containing the features table "/data/ephys-atlas/2023_W34"
-    :param regions:
-    :param mapping: Level of hierarchy, Cosmos, Beryl or Allen
-    :return:
-    """
-    list_mapping = ["Cosmos", "Beryl", "Allen"]
-    if mapping not in list_mapping:
-        raise ValueError(f"mapping should be in {list_mapping}")
-
-    regions = iblatlas.atlas.BrainRegions() if regions is None else regions
-    if local_path is None:
-        ## data loading section
-        config = get_config()
-        # this path contains channels.pqt, clusters.pqt and raw_ephys_features.pqt
-        local_path = Path(config["paths"]["features"]).joinpath("latest")
-    df_voltage, df_clusters, df_channels, df_probes = load_tables(Path(local_path))
-    df_voltage = pd.merge(df_voltage, df_channels, left_index=True, right_index=True)
-    df_voltage = df_voltage.rename(
-        columns={"atlas_id": "Allen_id", "acronym": "Allen_acronym"}
-    )
-    df_voltage = prep_voltage_dataframe(df_voltage, mapping=mapping, regions=regions)
-    df_voltage["pids"] = df_voltage.index.get_level_values(0)
-    _logger.info(f"Loaded {df_voltage.shape[0]} channels")
-    if dropna:
-        df_voltage = df_voltage.dropna()
-    _logger.info(f"Remains {df_voltage.shape[0]} channels after NaNs filtering")
-
-    return df_voltage, df_clusters, df_channels, df_probes
-
-
-def prep_voltage_dataframe(df_voltage, mapping="Allen", regions=None):
-    regions = iblatlas.atlas.BrainRegions() if regions is None else regions
-    df_voltage.replace([np.inf, -np.inf], np.nan, inplace=True)
-    if mapping != "Allen":
-        df_voltage[mapping + "_id"] = regions.remap(
-            df_voltage["Allen_id"], source_map="Allen", target_map=mapping
-        )
-        df_voltage[mapping + "_acronym"] = regions.id2acronym(
-            df_voltage[mapping + "_id"]
-        )
-    return df_voltage
-
-
-def load_tables(local_path, verify=False):
-    """
-    :param local_path: path to the folder containing the tables
-    """
-    local_path = Path(local_path)
-    local_path.mkdir(exist_ok=True)  # no parent here
-    if not (
-        file_raw_features := local_path.joinpath("raw_ephys_features_denoised.pqt")
-    ).exists():
-        file_raw_features = local_path.joinpath("raw_ephys_features.pqt")
-    df_channels = pd.read_parquet(local_path.joinpath("channels.pqt"))
-    df_voltage = pd.read_parquet(file_raw_features)
-    df_probes = pd.read_parquet(local_path.joinpath("probes.pqt"))
-    if local_path.joinpath("clusters.pqt").exists():
-        df_clusters = pd.read_parquet(local_path.joinpath("clusters.pqt"))
-    else:
-        df_clusters = None
-    if verify:
-        verify_tables(df_voltage, df_clusters, df_channels)
-    return df_voltage, df_clusters, df_channels, df_probes
-
-
 def read_correlogram(file_correlogram, nclusters):
     nbins = int(Path(file_correlogram).stat().st_size / nclusters / 4)
     mmap_correlogram = np.memmap(
@@ -222,20 +154,66 @@ def download_tables(
             overwrite=overwrite,
         )
     assert len(local_files), f"aggregates/atlas/{label} not found on AWS"
-    return load_tables(local_path=local_path, verify=verify)
+    return local_path
 
 
-def verify_tables(df_voltage, df_clusters, df_channels):
+def read_features_from_disk(
+    path_features: Path,
+    brain_atlas: "iblatlas.atlas.BrainAtlas" = None,
+    mappings: list[str] = None,
+) -> pd.DataFrame:
     """
-    Verify that the tables have the correct format and indices
-    :param df_clusters:
-    :param df_channels:
-    :param df_voltage:
-    :return:
+    Read electrophysiology features from disk and merge with channel information.
+
+    This function loads raw electrophysiology features, channel information, and channel labels
+    from parquet files, merges them into a single dataframe, and adds brain region mapping
+    information using the provided brain atlas.
+
+    Parameters
+    ----------
+    path_features : pathlib.Path
+        Path to the directory containing the feature parquet files.
+    brain_atlas : iblatlas.atlas.BrainAtlas
+        Brain atlas object used to map coordinates to brain regions.
+        Must be provided to enable region mapping.
+    mappings : list, optional
+        List of brain region mapping ontologies to include.
+        Default is ['Cosmos', 'Beryl'].
+
+    Returns
+    -------
+    pandas.DataFrame
+        DataFrame containing merged electrophysiology features with channel information
+        and brain region mappings.
     """
-    assert df_clusters.index.names == ["pid", "cluster_id"]
-    assert df_channels.index.names == ["pid", "channel"]
-    assert df_voltage.index.names == ["pid", "channel"]
+    mappings = ["Cosmos", "Beryl"] if mappings is None else mappings
+    assert brain_atlas is not None, "Brain atlas is required to map labels to regions"
+    assert all(mapping in brain_atlas.regions.mappings for mapping in mappings), (
+        f"Unknown mapping: {mappings}"
+    )
+    # merge the channel information with the features
+    df_features = pd.read_parquet(path_features / "raw_ephys_features_denoised.pqt")
+    df_features = df_features.merge(
+        pd.read_parquet(path_features / "channels.pqt"),
+        how="inner",
+        right_index=True,
+        left_index=True,
+    )
+    df_features = df_features.merge(
+        pd.read_parquet(path_features / "channels_labels.pqt").fillna(0),
+        how="inner",
+        right_index=True,
+        left_index=True,
+    )
+    df_features["outside"] = df_features["labels"] == 3
+
+    aids = brain_atlas.get_labels(
+        df_features.loc[:, ["x", "y", "z"]].values, mode="clip"
+    )
+    df_features["Allen_id"] = aids
+    for mapping in mappings:
+        df_features[f"{mapping}_id"] = brain_atlas.regions.remap(aids, "Allen", mapping)
+    return df_features
 
 
 def compute_depth_dataframe(df_raw_features, df_clusters, df_channels):
