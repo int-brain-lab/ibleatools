@@ -13,7 +13,6 @@ import ephysatlas.anatomy
 import ephysatlas.data
 import ephysatlas.fixtures
 import ephysatlas.regionclassifier
-import ephysatlas.fixtures
 
 VINTAGE = '2024_W50'
 VINTAGE = '2025_W27'
