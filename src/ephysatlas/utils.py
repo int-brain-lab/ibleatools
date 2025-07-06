@@ -11,8 +11,11 @@ logger = logging.getLogger(__name__)
 def setup_output_directory(params: Dict[str, Any]) -> Path:
     """Set up the output directory structure and change to it."""
 
+    if params.get("output_dir") is None:
+        return None, None
+
     # Create base output directory if specified, otherwise use current directory
-    base_dir = Path(params.get("output_dir", "."))
+    base_dir = Path(params.get("output_dir"))
     base_dir.mkdir(parents=True, exist_ok=True)
 
     # Create probe level subdirectory (pid or hash of ap_file)

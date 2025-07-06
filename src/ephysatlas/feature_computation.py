@@ -1,6 +1,5 @@
 from functools import reduce
 import logging
-from deploy.iblsdsc import OneSdsc
 import scipy.fft
 import pandas as pd
 import numpy as np
@@ -211,7 +210,7 @@ def load_data_from_pid(pid, one, probe_level_dir, recompute_channels=False, eid=
     """
     logger.info(f"Loading data using PID: {pid}")
 
-    if isinstance(one, OneSdsc):
+    if one.__class__.__name__ == "OneSdsc":
         assert pid is not None and eid is not None and probe_name is not None, \
             "pid, eid, and probe_name are required for OneSdsc"
         ssl = SpikeSortingLoader(pid=pid, eid=eid, pname=probe_name, one=one)
@@ -226,8 +225,10 @@ def load_data_from_pid(pid, one, probe_level_dir, recompute_channels=False, eid=
     sr_lf = ssl.raw_electrophysiology(band="lf", stream=stream)
 
     # Load the channels file
-    file_channels = Path(probe_level_dir) / "channels.parquet"
-    if file_channels.exists() and (not recompute_channels):
+    if probe_level_dir is not None:
+        file_channels = Path(probe_level_dir) / "channels.parquet"
+
+    if probe_level_dir is not None and file_channels.exists() and (not recompute_channels):
         logger.info(f"Loading channels from {file_channels}")
         channels = pd.read_parquet(file_channels)
         channels = {col: channels[col].to_numpy() for col in channels.columns}
@@ -401,7 +402,7 @@ def compute_features_from_pid(
     duration=None,
     one=None,
     features_to_compute=None,
-    output_dir=Path("."),
+    output_dir=None,
     recompute_channels=False,
     **kwargs,
 ):
@@ -416,7 +417,7 @@ def compute_features_from_pid(
         duration (float, optional): Duration in seconds. If None, will use the entire available duration.
         one (ONE): ONE client instance (required)
         features_to_compute (list, optional): List of feature sets to compute
-        output_dir (Path, optional): Output directory for saving features
+        output_dir (Path, optional): Output directory for saving features. If None, will not save features.
         recompute_channels (bool, optional): Whether to recompute channels even if cached
         **kwargs: Additional keyword arguments
 
@@ -437,7 +438,7 @@ def compute_features_from_pid(
     # Validate input
     if one is None:
         raise ValueError("ONE client instance is required when using PID")
-    elif isinstance(one, OneSdsc):
+    elif one.__class__.__name__ == "OneSdsc":
         assert pid is not None, "PID is required when using SDSC"
         assert eid is not None, "EID is required when using SDSC"
         assert probe_name is not None, "Probe name is required when using SDSC"
