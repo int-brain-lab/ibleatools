@@ -193,7 +193,9 @@ def online_feature_computation(
 
 # TODO - Need to be clear here , if I want to check based on SDSC or not, VS pid as dict or pid as string.
 # (Ask OW) Recomputing channels when launching multiple jobs.
-def load_data_from_pid(pid, one, probe_level_dir, recompute_channels=False, eid=None, probe_name=None):
+def load_data_from_pid(
+    pid, one, probe_level_dir, recompute_channels=False, eid=None, probe_name=None
+):
     """
     Load data using a probe ID from the ONE database.
 
@@ -211,11 +213,12 @@ def load_data_from_pid(pid, one, probe_level_dir, recompute_channels=False, eid=
     logger.info(f"Loading data using PID: {pid}")
 
     if one.__class__.__name__ == "OneSdsc":
-        assert pid is not None and eid is not None and probe_name is not None, \
+        assert pid is not None and eid is not None and probe_name is not None, (
             "pid, eid, and probe_name are required for OneSdsc"
+        )
         ssl = SpikeSortingLoader(pid=pid, eid=eid, pname=probe_name, one=one)
         stream = False
-        
+
     else:
         assert pid is not None, "PID must be a string"
         ssl = SpikeSortingLoader(pid=pid, one=one)
@@ -228,7 +231,11 @@ def load_data_from_pid(pid, one, probe_level_dir, recompute_channels=False, eid=
     if probe_level_dir is not None:
         file_channels = Path(probe_level_dir) / "channels.parquet"
 
-    if probe_level_dir is not None and file_channels.exists() and (not recompute_channels):
+    if (
+        probe_level_dir is not None
+        and file_channels.exists()
+        and (not recompute_channels)
+    ):
         logger.info(f"Loading channels from {file_channels}")
         channels = pd.read_parquet(file_channels)
         channels = {col: channels[col].to_numpy() for col in channels.columns}
@@ -473,11 +480,8 @@ def compute_features_from_pid(
 
     # Add metadata to all parquet files in subdirectories
     snippet_attrs = {"pid": pid, "t_start": t_start, "duration": duration}
-    
-    add_metadata_to_parquet_files(
-        directory=probe_level_dir,
-        **snippet_attrs
-    ) 
+
+    add_metadata_to_parquet_files(directory=probe_level_dir, **snippet_attrs)
 
     # Add xyz target information using Alyx database
     channels = add_target_coordinates(pid=pid, one=one, channels=channels)
@@ -485,8 +489,7 @@ def compute_features_from_pid(
     # Export the channels file
     file_channels = probe_level_dir / "channels.parquet"
 
-
-    #TODO have another condition that checks if the existing channels file has all channels or if it matches the channels dict.
+    # TODO have another condition that checks if the existing channels file has all channels or if it matches the channels dict.
     if not file_channels.exists() or (recompute_channels):
         try:
             df_channels = pd.DataFrame(channels).rename(columns={"rawInd": "channel"})
@@ -626,7 +629,8 @@ def compute_features_from_raw(
     )
     assert fs_ap > 0 and fs_lf > 0, "Sampling frequencies must be positive"
 
-    assert channel_labels, "Channel labels are required"
+    if channel_labels is None:
+        channel_labels = np.zeros(raw_ap.shape[0])
 
     # Define available feature sets
     available_features = ["lf", "csd", "ap", "waveforms"]
@@ -698,29 +702,33 @@ def compute_features_from_raw(
     #         raise ValueError("Channels features not found in save directory")
 
     logger.info(f"Starting {features_to_compute} computation")
-    
+
     # Define feature computation configurations
     feature_configs = {
         "lf": {
             "func": features.lf,
-            "args": {"des_lf": des_lf, "fs": fs_lf},
-            "kwargs": {}
+            "args": {"data": des_lf, "fs": fs_lf},
+            "kwargs": {},
         },
         "csd": {
             "func": features.csd,
-            "args": {"des_lf": des_lf, "fs": fs_lf, "geometry": geometry},
-            "kwargs": {"decimate": 10}
+            "args": {"data": des_lf, "fs": fs_lf, "geometry": geometry},
+            "kwargs": {"decimate": 10},
         },
         "ap": {
             "func": features.ap,
-            "args": {"des_ap": des_ap, "geometry": geometry, "channel_labels": channel_labels},
-            "kwargs": {}
+            "args": {
+                "data": des_ap,
+                "geometry": geometry,
+                "channel_labels": channel_labels,
+            },
+            "kwargs": {},
         },
         "waveforms": {
             "func": features.spikes,
-            "args": {"des_ap": des_ap, "fs": fs_ap, "geometry": geometry},
-            "kwargs": {}
-        }
+            "args": {"data": des_ap, "fs": fs_ap, "geometry": geometry},
+            "kwargs": {},
+        },
     }
 
     def compute_and_save_feature(feature_name, config):
@@ -730,33 +738,44 @@ def compute_features_from_raw(
         if skip_saved:
             existing_features = load_features(feature_name)
             if existing_features is not None:
-                logger.info(f"Skipping {feature_name.upper()} computation - file already exists")
+                logger.info(
+                    f"Skipping {feature_name.upper()} computation - file already exists"
+                )
                 df[feature_name] = existing_features
                 return
-        
+
         logger.info(f"Starting {feature_name.upper()} computation")
-        
+
         # Compute the feature
         if feature_name == "waveforms":
             # Special handling for waveforms which returns tuple
-            df[feature_name], waveforms = config["func"](**config["args"], **config["kwargs"])
-            df[feature_name]["spike_count"] = df[feature_name]["spike_count"].astype("Int64")
-            
+            df[feature_name], waveforms = config["func"](
+                **config["args"], **config["kwargs"]
+            )
+            df[feature_name]["spike_count"] = df[feature_name]["spike_count"].astype(
+                "Int64"
+            )
+
             # Save waveform files if requested from the functoin call of compute_features_from_raw
             if kwargs.get("save_waveforms", True):
                 waveforms_dir = output_dir / "waveforms"
                 waveforms_dir.mkdir(parents=True, exist_ok=True)
                 np.save(waveforms_dir / "raw.npy", waveforms["raw"].astype(np.float16))
-                np.save(waveforms_dir / "denoised.npy", waveforms["denoised"].astype(np.float16))
-                np.save(waveforms_dir / "waveform_channels.npy", waveforms["channel_index"])
+                np.save(
+                    waveforms_dir / "denoised.npy",
+                    waveforms["denoised"].astype(np.float16),
+                )
+                np.save(
+                    waveforms_dir / "waveform_channels.npy", waveforms["channel_index"]
+                )
                 waveforms["df_spikes"].to_parquet(waveforms_dir / "spikes.pqt")
         else:
             df[feature_name] = config["func"](**config["args"], **config["kwargs"])
-        
+
         # Add package version metadata
         df[feature_name].attrs["ibleatools_version"] = ibleatools_version
         df[feature_name].attrs[f"{feature_name}_version"] = features_version
-        
+
         # Save the feature
         save_features(feature_name, df[feature_name])
 

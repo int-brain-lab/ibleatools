@@ -15,9 +15,9 @@ TEST_DATA_PATH = Path("/home/olivier/scratch")
 
 class TestFeatureSets(unittest.TestCase):
     def test_sets(self):
-        self.assertEqual(len(ephysatlas.features.voltage_features_set("all")), 33)
-        self.assertEqual(len(ephysatlas.features.voltage_features_set(["raw_ap"])), 2)
-        self.assertEqual(len(ephysatlas.features.voltage_features_set()), 23)
+        self.assertEqual(len(ephysatlas.features.voltage_features_set("all")), 34)
+        self.assertEqual(len(ephysatlas.features.voltage_features_set(["raw_ap"])), 3)
+        self.assertEqual(len(ephysatlas.features.voltage_features_set()), 24)
 
 
 @unittest.skip
