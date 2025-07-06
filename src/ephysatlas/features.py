@@ -70,6 +70,7 @@ class ModelCsdFeatures(BaseChannelFeatures):
 class ModelApFeatures(BaseChannelFeatures):
     rms_ap: Series[float] = pa.Field(coerce=True)
     cor_ratio: Series[float] = pa.Field(coerce=True)
+    channel_labels: Series[int] = pa.Field(coerce=True)
 
 
 class ModelSpikeFeatures(BaseChannelFeatures):
@@ -220,18 +221,20 @@ def csd(data, fs, geometry, bands=None, decimate=10):
     return df_csd
 
 
-def ap(data, geometry=None):
+def ap(data, geometry=None, channel_labels=None):
     """
     Computes the LF features from a numpy array
     :param data: numpy array with the AP band data (channels, samples)
     :return: pandas dataframe with the columns ['channel', 'rms_ap']
     """
     assert geometry is not None, "Geometry is required for AP band computation"
+    assert channel_labels is not None, "Channel labels are required"
     df_ap = pd.DataFrame()
     nc = data.shape[0]  # number of channels
     df_ap["channel"] = np.arange(nc)
     df_ap["rms_ap"] = ibldsp.utils.rms(data, axis=-1)
     df_ap["cor_ratio"] = xcor_acor_ratio(data, geometry=geometry)
+    df_ap["channel_labels"] = channel_labels
     ModelApFeatures.validate(df_ap)
     return df_ap
 
