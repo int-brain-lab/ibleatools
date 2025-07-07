@@ -1,6 +1,5 @@
 from functools import reduce
 import logging
-from deploy.iblsdsc import OneSdsc
 import scipy.fft
 import pandas as pd
 import numpy as np
@@ -215,7 +214,7 @@ def load_data_from_pid(pid, one, probe_level_dir, recompute_channels=False):
         eid = pid["eid"]
         probe_name = pid["probe_name"]
         ssl = SpikeSortingLoader(pid=pid["pid"], eid=eid, pname=probe_name, one=one)
-        if isinstance(one, OneSdsc):
+        if one.__class__.__name__ == "OneSdsc":  # not best practice but avoids import
             stream = False
         else:
             stream = True

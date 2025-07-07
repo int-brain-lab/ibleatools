@@ -94,8 +94,12 @@ class TestFeatureComputation(unittest.TestCase):
     def test_compute_features_from_raw_with_destriped_files(self):
         """Test compute_features_from_raw using the available destriped data files"""
         # Load the destriped data files
-        ap_data = np.load("ap_destriped.npy")
-        lf_data = np.load("lf_destriped.npy")
+        ap_data = np.load(
+            Path(__file__).parent.joinpath("fixtures", "ap_destriped.npy")
+        )
+        lf_data = np.load(
+            Path(__file__).parent.joinpath("fixtures", "lf_destriped.npy")
+        )
 
         # Define sampling frequencies (typical values for Neuropixel)
         fs_ap = 30000.0  # 30 kHz for AP data
