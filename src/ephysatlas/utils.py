@@ -10,7 +10,20 @@ logger = logging.getLogger(__name__)
 
 
 def setup_output_directory(params: Dict[str, Any]) -> Path:
-    """Set up the output directory structure and change to it."""
+    """Set up the output directory structure and change to it.
+    
+    The function creates a hierarchical directory structure:
+    - Probe level subdirectory (using pid or hash of ap_file)
+    - Snippet level subdirectory (using probe info, t_start, and duration)
+    
+    Example output structure:
+    |-- 76ed566f-59dd-47ff-8ba7-59b11d09b67c
+    |   |-- probe_76ed566f-59dd-47ff-8ba7-59b11d09b67c_000300.0_05.0
+    |   `-- probe_76ed566f-59dd-47ff-8ba7-59b11d09b67c_003000.0_05.0
+    `-- af0a0534-9cdc-4a29-93c0-1342891d74ec
+        |-- probe_af0a0534-9cdc-4a29-93c0-1342891d74ec_000300.0_05.0
+        `-- probe_af0a0534-9cdc-4a29-93c0-1342891d74ec_003000.0_05.0
+    """
 
     if params.get("output_dir") is None:
         return None, None
