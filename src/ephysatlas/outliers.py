@@ -158,6 +158,7 @@ def kde_proba_1pid(df_base, df_new, features, mapping, p_thresh=0.999999, min_ch
 
         listout = list()
         for feature in features:
+            print(f'{feature} [{region}]')
             # Load data for that regions
             df_train = select_series(
                 df_base, features=[feature], acronym=None, id=region, mapping=mapping
