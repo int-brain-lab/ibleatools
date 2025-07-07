@@ -10,6 +10,9 @@ from iblutil.numerical import ismember
 from ibl_style.style import figure_style
 from ibl_style.utils import MM_TO_INCH
 import brainbox.ephys_plots
+from matplotlib import (
+    cm,
+)  # This is deprecated, but cannot import matplotlib.colormaps as cm
 
 import ephysatlas.features
 
@@ -33,6 +36,9 @@ def plot_histogram(series, ax=None, quantiles=None, bins=None, xlabel=None, titl
 
     color_indices = np.digitize(bin_centers, quantile_values, right=True)
     colors = cm.viridis(color_indices / color_indices.max())
+
+    if ax is None:
+        fig, ax = plt.subplots()
 
     ax.bar(bin_edges[:-1], hist_values, width=np.diff(bin_edges), color=colors, align='edge')
 
