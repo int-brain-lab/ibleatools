@@ -105,6 +105,9 @@ def kde_proba_distribution(
     n_padbin_add = 3
     n_above = 0
     n_below = 0
+
+    # TODO for extremely high value (e.g. >10 IQR), remove them, put outlier score to 1
+
     if np.max(test_data) > np.max(x_train):
         # Pad above
         add_x = np.arange(
