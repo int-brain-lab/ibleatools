@@ -41,7 +41,7 @@ one = ONE(base_url="https://alyx.internationalbrainlab.org")
 ba = ephysatlas.anatomy.ClassifierAtlas()
 path_features = Path("/mnt/s0/ephys-atlas-decoding/features/2024_W50")  # parede
 path_model = Path(
-    "/mnt/s0/ephys-atlas-decoding/models/2024_W50_Cosmos_medical-rosewood-kestrel/"
+    "/mnt/s0/ephys-atlas-decoding/models/2024_W50_Cosmos_garrulous-vanilla-porcupine"
 )
 pid = "749cb2b7-e57e-4453-a794-f6230e4d0226"  # mrsicflogellab/Subjects/SWC_038/2020-07-30/001/alf/probe01
 
@@ -49,9 +49,9 @@ ssl = SpikeSortingLoader(pid=pid, one=one)
 raw_ap = ssl.raw_electrophysiology(band="ap", stream=STREAM)
 raw_lf = ssl.raw_electrophysiology(band="lf", stream=STREAM)
 
-df_features = ephysatlas.data.read_features_from_disk(path_features)
+df_features = ephysatlas.data.read_features_from_disk(path_features, strict=False)
 df_pid = df_features.loc[pid]
-df_predictions = pd.read_parquet(path_model.joinpath("cross_validation.pqt"))
+df_predictions = pd.read_parquet(path_model.joinpath("predictions.pqt"))
 # TODO tilt
 
 # %% Figure 01
@@ -65,8 +65,10 @@ fig, axs = ephysatlas.plots.figure_features_channel_space(
 
 
 # %% Figure 02
+classifier, model_info = ephysatlas.regionclassifier.load_model(path_model)
 ephysatlas.regionclassifier.load_model(path_model.joinpath("FOLD00"))
 df_predictions
+
 
 # TODO clims / hlims using quantiles
 # clim = np.array([np.nanquantile(feature, 0.1), np.nanquantile(feature, 0.9)])

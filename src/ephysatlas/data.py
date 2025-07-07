@@ -162,6 +162,7 @@ def read_features_from_disk(
     path_features: Path,
     brain_atlas: "iblatlas.atlas.BrainAtlas" = None,
     mappings: list[str] = None,
+    strict: bool = True,
 ) -> pd.DataFrame:
     """
     Read electrophysiology features from disk and merge with channel information.
@@ -180,7 +181,9 @@ def read_features_from_disk(
     mappings : list, optional
         List of brain region mapping ontologies to include.
         Default is ['Cosmos', 'Beryl'].
-
+    strict : bool, optional
+        Whether to raise an error on panderas validation
+        Default is True.
     Returns
     -------
     pandas.DataFrame
@@ -223,7 +226,10 @@ def read_features_from_disk(
         df_features[f"{mapping}_id"] = brain_atlas.regions.remap(aids, "Allen", mapping)
 
     # this will make sure that the features dataframe is compatible and healthy
-    return pd.DataFrame(ephysatlas.features.ModelRawFeatures(df_features))
+    if strict:
+        df_features = pd.DataFrame(ephysatlas.features.ModelRawFeatures(df_features))
+
+    return df_features
 
 
 def compute_depth_dataframe(df_raw_features, df_clusters, df_channels):

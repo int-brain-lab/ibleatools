@@ -8,7 +8,6 @@ from xgboost import XGBClassifier
 
 from one.remote import aws
 from one.api import ONE
-from iblutil.util import Bunch
 import iblutil.random
 from ephysatlas import features
 
@@ -80,25 +79,17 @@ def load_model(path_model):
             The directory should contain 'model.ubj' and 'meta.yaml' files.
 
     Returns:
-        dict_model: Bunch
-            A dictionary-like object containing:
-            - 'classifier': The loaded XGBClassifier model
-            - 'meta': Dictionary with model metadata loaded from meta.yaml
+        classifier: depends on the model class, usually an XGBClassifier object.
+        model_info: dict
     """
     path_model = Path(path_model)
     # load model
     with open(path_model.joinpath("meta.yaml")) as f:
-        dict_model = Bunch(
-            {
-                # TODO: it should be possible to use different model kinds
-                "classifier": XGBClassifier(
-                    model_file=path_model.joinpath("model.ubj")
-                ),
-                "meta": yaml.safe_load(f),
-            }
-        )
-    dict_model.classifier.load_model(path_model.joinpath("model.ubj"))
-    return dict_model
+        model_info = yaml.safe_load(f)
+    # todo: this should support multiple model classes
+    classifier = XGBClassifier(model_file=path_model.joinpath("model.ubj"))
+    classifier.load_model(path_model.joinpath("model.ubj"))
+    return classifier, model_info
 
 
 def _step_viterbi(
