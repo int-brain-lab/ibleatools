@@ -16,6 +16,45 @@ import ephysatlas.features
 figure_style()
 
 
+QUANTILES = [0.01, 0.1, 0.9, 0.99]
+BINS = 50
+
+
+def plot_histogram(series, ax=None, quantiles=None, bins=None, xlabel=None, title=None, normalise=False):
+    quantiles = quantiles if quantiles is not None else QUANTILES
+    quantile_values = np.quantile(series, quantiles)
+
+    bins = bins if bins is not None else BINS
+
+    hist_values, bin_edges = np.histogram(series, bins=bins)
+    if normalise:
+        hist_values = hist_values/len(series)
+    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+
+    color_indices = np.digitize(bin_centers, quantile_values, right=True)
+    colors = cm.viridis(color_indices / color_indices.max())
+
+    ax.bar(bin_edges[:-1], hist_values, width=np.diff(bin_edges), color=colors, align='edge')
+
+    ax.set_xlabel(xlabel)
+    if normalise:
+        ax.set_ylabel('Normalised Count')
+    else:
+        ax.set_ylabel('Count')
+    ax.set_title(title)
+    ax.text(
+        0.95, 0.95, f"{len(series):,} samples",
+        transform=ax.transAxes, ha='right', va='top', fontsize=12,
+    )
+
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.tick_params(axis='both', which='both', direction='out', length=6)
+    ax.set_facecolor('#f9f9f9')
+    plt.tight_layout()
+
+
+
 def plot_cumulative_probas(probas, depths, aids, regions=None, ax=None, legend=False):
     """
     :param probas: (ndepths x nregions) array of probabilities for each region that sum to 1 for each depth
