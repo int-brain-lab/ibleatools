@@ -101,6 +101,7 @@ def online_feature_computation(
     channels=None,
     features_to_compute=None,
     output_dir=Path("."),
+    scratch_dir=None,
     **kwargs,
 ):
     """
@@ -187,6 +188,7 @@ def online_feature_computation(
         channel_labels=channels.get("labels"),
         features_to_compute=features_to_compute,
         output_dir=output_dir,
+        scratch_dir=scratch_dir,
         **kwargs,
     )
 
@@ -213,6 +215,7 @@ def load_data_from_pid(
     logger.info(f"Loading data using PID: {pid}")
 
     if one.__class__.__name__ == "OneSdsc":
+        logger.info(f"Loading data using OneSdsc: {pid}")
         assert pid is not None and eid is not None and probe_name is not None, (
             "pid, eid, and probe_name are required for OneSdsc"
         )
@@ -226,6 +229,8 @@ def load_data_from_pid(
 
     sr_ap = ssl.raw_electrophysiology(band="ap", stream=stream)
     sr_lf = ssl.raw_electrophysiology(band="lf", stream=stream)
+
+    assert sr_ap is not None and sr_lf is not None, "Failed to load data"
 
     # Load the channels file
     if probe_level_dir is not None:
@@ -245,8 +250,10 @@ def load_data_from_pid(
             channels = ssl.load_channels()
         except KeyError as e:
             logger.info(f"Channels key was not found: {str(e)}")
+            channels = {}
         except Exception as e:
             logger.info(f"Failed to load channels: {str(e)}")
+            channels = {}
 
     logger.info(f"Session path: {ssl.session_path}, probe name: {ssl.pname}")
     return sr_ap, sr_lf, channels
@@ -411,6 +418,7 @@ def compute_features_from_pid(
     features_to_compute=None,
     output_dir=None,
     recompute_channels=False,
+    scratch_dir=None,
     **kwargs,
 ):
     """
@@ -426,6 +434,7 @@ def compute_features_from_pid(
         features_to_compute (list, optional): List of feature sets to compute
         output_dir (Path, optional): Output directory for saving features. If None, will not save features.
         recompute_channels (bool, optional): Whether to recompute channels even if cached
+        scratch_dir (Path, optional): Directory for temporary files (dartsort scratch)
         **kwargs: Additional keyword arguments
 
     Returns:
@@ -475,6 +484,7 @@ def compute_features_from_pid(
         channels=channels,
         features_to_compute=features_to_compute,
         output_dir=snippet_level_dir,
+        scratch_dir=scratch_dir,
         **kwargs,
     )
 
@@ -508,6 +518,7 @@ def compute_features_from_file(
     traj_dict=None,
     features_to_compute=None,
     output_dir=Path("."),
+    scratch_dir=None,
     **kwargs,
 ):
     """
@@ -524,6 +535,7 @@ def compute_features_from_file(
             Required if want to add xyz target information.
         features_to_compute (list, optional): List of feature sets to compute
         output_dir (Path, optional): Output directory for saving features
+        scratch_dir (Path, optional): Directory for temporary files (dartsort scratch)
         **kwargs: Additional keyword arguments
 
     Returns:
@@ -567,6 +579,7 @@ def compute_features_from_file(
         channels=channels,
         features_to_compute=features_to_compute,
         output_dir=snippet_level_dir,
+        scratch_dir=scratch_dir,
         **kwargs,
     )
 
@@ -599,6 +612,7 @@ def compute_features_from_raw(
     channel_labels=None,
     features_to_compute=None,
     output_dir=Path("."),
+    scratch_dir=None,
     **kwargs,
 ):
     """
@@ -727,7 +741,7 @@ def compute_features_from_raw(
         "waveforms": {
             "func": features.spikes,
             "args": {"data": des_ap, "fs": fs_ap, "geometry": geometry},
-            "kwargs": {},
+            "kwargs": {"scratch_dir": scratch_dir},
         },
     }
 
@@ -757,7 +771,7 @@ def compute_features_from_raw(
             )
 
             # Save waveform files if requested from the functoin call of compute_features_from_raw
-            if kwargs.get("save_waveforms", True):
+            if (output_dir is not None) and kwargs.get("save_waveforms", False):
                 waveforms_dir = output_dir / "waveforms"
                 waveforms_dir.mkdir(parents=True, exist_ok=True)
                 np.save(waveforms_dir / "raw.npy", waveforms["raw"].astype(np.float16))

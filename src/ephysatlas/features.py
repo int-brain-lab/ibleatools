@@ -4,6 +4,7 @@ import logging
 import random
 import shutil
 import string
+import tempfile
 
 import numpy as np
 import pandas as pd
@@ -24,6 +25,36 @@ logger = logging.getLogger(__name__)
 # Features version
 __features_version__ = "2025.07.01"
 
+
+def _setup_scratch_directory(scratch_dir=None):
+    """
+    Set up scratch directory with fallback logic.
+    
+    Args:
+        scratch_dir (Path or str, optional): Preferred scratch directory path.
+            If None, will try system defaults.
+    
+    Returns:
+        Path: Path to the created scratch directory
+    """
+    if scratch_dir is not None:
+        scratch_path = Path(scratch_dir)
+    else:
+        # Try SDSC scratch directory first
+        scratch_path = Path("/scratch/dartsort/")
+    
+    try:
+        scratch_path.mkdir(parents=True, exist_ok=True)
+        logger.info(f"Using scratch directory: {scratch_path}")
+        return scratch_path
+    except Exception as e:
+        # Fallback to system temp directory if preferred directory fails
+        logger.warning(f"Error creating scratch directory {scratch_path}: {e}")
+        fallback_path = Path(tempfile.gettempdir()) / "dartsort"
+        fallback_path.mkdir(parents=True, exist_ok=True)
+        logger.info(f"Using fallback scratch directory: {fallback_path}")
+        return fallback_path
+
 floats = Annotated[pa.Float, pa.Float32]
 BANDS = {
     "delta": [0, 4],
@@ -41,6 +72,7 @@ class DartParameters(pydantic.BaseModel):
     localization_radius: pydantic.PositiveFloat = 150
     chunk_length_samples: pydantic.PositiveInt = 2**15
     trough_offset: pydantic.PositiveInt = (42,)
+    scratch_dir: pydantic.Field(default=None, description="Scratch directory for temporary files. If None, will use system defaults.")
 
 
 class BaseChannelFeatures(pa.DataFrameModel):
@@ -287,16 +319,7 @@ def dart_subtraction_numpy(data, fs, geometry, **params):
     )
 
     # Ensure scratch directory exists
-    # This is for SDSC calculations
-    scratch_dir = Path("/scratch/prai1/dartsort/")
-    try:
-        scratch_dir.mkdir(parents=True, exist_ok=True)
-    except Exception as e:
-        # We are probably on a local machine
-        logger.warning(f"Error creating scratch directory: {e}")
-        # Create scratch directory in /tmp
-        scratch_dir = Path("/tmp/dartsort/")
-        scratch_dir.mkdir(parents=True, exist_ok=True)
+    scratch_dir = _setup_scratch_directory(params.scratch_dir)
 
     detected_spikes, h5_filename = dartsort.subtract(
         rec_np,
@@ -330,7 +353,7 @@ def dart_subtraction_numpy(data, fs, geometry, **params):
     return df_spikes, d_waveforms
 
 
-def spikes(data, fs: int, geometry: dict, return_waveforms=True, **params):
+def spikes(data, fs: int, geometry: dict, return_waveforms=True, scratch_dir=None, **params):
     """
     :param data:
     :param fs:
@@ -340,6 +363,9 @@ def spikes(data, fs: int, geometry: dict, return_waveforms=True, **params):
     """
     params = DartParameters() if params is None else DartParameters(**params)
     logger.info("Starting spike detection")
+    # Update params with scratch_dir if provided
+    if scratch_dir is not None:
+        params.scratch_dir = scratch_dir
     df_spikes_, d_waveforms = dart_subtraction_numpy(data, fs, geometry, params=params)
     logger.info("Spike detection completed")
     df_waveforms = ibldsp.waveforms.compute_spike_features(d_waveforms["denoised"])
