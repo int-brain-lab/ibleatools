@@ -273,7 +273,7 @@ def figure_features_channel_space(
         fig, axs = plt.subplots(1, len(features) + 4, sharey=False)
 
     brainbox.ephys_plots.plot_brain_regions(
-        pid_df["atlas_id"].values,
+        pid_df["Allen_id"].values,
         channel_depths=xy[:, 1],
         brain_regions=br,
         display=True,
