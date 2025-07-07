@@ -16,8 +16,8 @@ import ephysatlas.regionclassifier
 
 VINTAGE = '2024_W50'
 VINTAGE = '2025_W27'
-path_features = Path(f'/mnt/s0/ephys-atlas-decoding/features/{VINTAGE}')  # parede
 path_features = Path(f'/Users/olivier/Documents/datadisk/ephys-atlas-decoding/features/{VINTAGE}')  # mac
+path_features = Path(f'/mnt/s0/ephys-atlas-decoding/features/{VINTAGE}')  # parede
 if not path_features.exists():
     from one.api import ONE
     one = ONE()

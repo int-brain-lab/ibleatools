@@ -3,6 +3,7 @@ import scipy.stats
 import matplotlib.pyplot as plt
 import matplotlib
 import matplotlib.patches
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 from iblatlas.atlas import BrainRegions
 from iblutil.numerical import ismember
@@ -146,7 +147,7 @@ def plot_probe_rect(xy, color, ax, width=16, height=40):
     # plt.show()
 
 
-def plot_probe_rect2(xy, color, ax, width=16, height=40):
+def plot_probe_rect2(xy, color, ax, width=16, height=40, colorbar=False):
     """
     This function uses imshow to draw rectangles painted around the yx coordinates
     :param xy:
@@ -154,6 +155,7 @@ def plot_probe_rect2(xy, color, ax, width=16, height=40):
     :param ax:
     :param width:
     :param height:
+    :param colorbar: if True, add a colorbar to the plot
     :return:
     """
 
@@ -182,13 +184,18 @@ def plot_probe_rect2(xy, color, ax, width=16, height=40):
         j1 = min(X, round(a_x + hw) + 1)
         im[i0:i1, j0:j1, :3] = a_color.ravel()[:3]
 
-    ax.imshow(im, extent=extent, origin="lower", aspect="auto")
+    img = ax.imshow(im, extent=extent, origin="lower", aspect="auto")
 
     ax.set_xlim(*extent[:2])
     ax.set_xticks([])
     ax.set_ylim(ymin, ymax + 1)
     yticks = np.arange(0, ymax, 500)
     ax.set_yticks(yticks, labels=map(int, yticks * k))
+
+    if colorbar:
+        divider = make_axes_locatable(ax)
+        cax = divider.append_axes("right", size="10%", pad=0.05)
+        plt.colorbar(img, cax=cax)
 
 
 def figure_features_channel_space(
