@@ -72,7 +72,7 @@ class DartParameters(pydantic.BaseModel):
     localization_radius: pydantic.PositiveFloat = 150
     chunk_length_samples: pydantic.PositiveInt = 2**15
     trough_offset: pydantic.PositiveInt = (42,)
-    scratch_dir: pydantic.Field(default=None, description="Scratch directory for temporary files. If None, will use system defaults.")
+    scratch_dir: Path | str | None = pydantic.Field(default=None, description="Scratch directory for temporary files. If None, will use system defaults.")
 
 
 class BaseChannelFeatures(pa.DataFrameModel):

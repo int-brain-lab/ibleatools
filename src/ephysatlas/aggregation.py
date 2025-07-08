@@ -18,12 +18,12 @@ def function_to_aggregate_raw_features(input_df: pd.DataFrame):
     """
     Aggregate raw features from the input dataframe.
     """
-    pass
+    pass #TODO: Implement this function
 
 
 def function_to_denoise_raw_features_data():
-    pass
+    pass #TODO: Implement this function
 
 
 def function_to_aggreagte_channels_data():
-    pass
+    pass #TODO: Implement this function
