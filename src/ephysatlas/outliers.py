@@ -48,7 +48,7 @@ def detect_outlier_kstest(train_data: np.ndarray, test_data: np.ndarray):
 
 
 def kde_proba_distribution(
-    train_data, test_data, n_samples=50, bandwidth_factor=16, interp_kind="linear"
+    train_data, test_data, n_samples=50, bandwidth_factor=16, interp_kind="linear", n_min_sample_train=300
 ):
     """
     For a single feature, compute channel by channel the outlier score using KDE for
@@ -65,16 +65,18 @@ def kde_proba_distribution(
     - n_samples: int, default 50, number of samples used to estimate density from KDE fit
     - bandwidth_factor: int, default 16, dividing factor for the bandwidth of the KDE fit
     - interp_kind: string, default 'linear', type of interpolation for the KDE fit
+    - n_min_sample_train: int, default 300, number of samples minimal to remove outliers from based distribution
 
     Returns:
     - outp: (M,) numpy array, outlier probability statistic of each test sample being an outlier.
     - x_train: (E, ) numpy array, x values of the histogram formed using training dataset
     - hist_train: (E, ) numpy array, y values of the histogram formed using training dataset
     """
-    # Step 0 : Filter the train data to remove large outliers
-    train_data = train_data[
-        np.abs(train_data - np.median(train_data)) <= 5 * iqr(train_data)
-    ]
+    if len(train_data) > n_min_sample_train:
+        # Step 0 : Filter the train data to remove large outliers
+        train_data = train_data[
+            np.abs(train_data - np.median(train_data)) <= 5 * iqr(train_data)
+        ]
 
     # Step 1: Compute the histogram using KDE, on linearly spaced vector x_train
     # Note that for n_samples > 50 the performance of kde.score_samples drops and run takes longer
@@ -85,6 +87,8 @@ def kde_proba_distribution(
     robust_std = (
         iqr(train_data) / 1.349
     )  # approximate standard deviation assuming normality
+    if robust_std == 0.:  # Fall back in case IQR is 0
+        robust_std = np.std(train_data)/16
     bandwidth = robust_std / bandwidth_factor
     kde = KernelDensity(bandwidth=bandwidth, kernel="gaussian")
     kde.fit(train_data.reshape(-1, 1))  # Reshape for usage in kde
