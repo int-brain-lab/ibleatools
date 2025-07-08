@@ -73,7 +73,7 @@ def kde_proba_distribution(
     """
     # Step 0 : Filter the train data to remove large outliers
     train_data = train_data[
-        np.abs(train_data - np.median(train_data)) < 5 * iqr(train_data)
+        np.abs(train_data - np.median(train_data)) <= 5 * iqr(train_data)
     ]
 
     # Step 1: Compute the histogram using KDE, on linearly spaced vector x_train
