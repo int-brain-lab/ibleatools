@@ -212,6 +212,8 @@ def kde_proba_1pid(df_base, df_new, features, mapping, p_thresh=0.999999, min_ch
     else:
         has_outlier = False
 
+    # Resort by channel
+    df_save = df_save.sort_values(by=['channel'])
     return df_save, dictout, has_outlier
 
 
