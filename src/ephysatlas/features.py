@@ -29,11 +29,11 @@ __features_version__ = "2025.07.01"
 def _setup_scratch_directory(scratch_dir=None):
     """
     Set up scratch directory with fallback logic.
-    
+
     Args:
         scratch_dir (Path or str, optional): Preferred scratch directory path.
             If None, will try system defaults.
-    
+
     Returns:
         Path: Path to the created scratch directory
     """
@@ -42,7 +42,7 @@ def _setup_scratch_directory(scratch_dir=None):
     else:
         # Try SDSC scratch directory first
         scratch_path = Path("/scratch/dartsort/")
-    
+
     try:
         scratch_path.mkdir(parents=True, exist_ok=True)
         logger.info(f"Using scratch directory: {scratch_path}")
@@ -54,6 +54,7 @@ def _setup_scratch_directory(scratch_dir=None):
         fallback_path.mkdir(parents=True, exist_ok=True)
         logger.info(f"Using fallback scratch directory: {fallback_path}")
         return fallback_path
+
 
 floats = Annotated[pa.Float, pa.Float32]
 BANDS = {
@@ -77,7 +78,10 @@ class DartParameters(pydantic.BaseModel):
     localization_radius: pydantic.PositiveFloat = 150
     chunk_length_samples: pydantic.PositiveInt = 2**15
     trough_offset: pydantic.PositiveInt = (42,)
-    scratch_dir: Path | str | None = pydantic.Field(default=None, description="Scratch directory for temporary files. If None, will use system defaults.")
+    scratch_dir: Path | str | None = pydantic.Field(
+        default=None,
+        description="Scratch directory for temporary files. If None, will use system defaults.",
+    )
 
 
 class BaseChannelFeatures(pa.DataFrameModel):
@@ -366,7 +370,9 @@ def dart_subtraction_numpy(data, fs, geometry, **params):
     return df_spikes, d_waveforms
 
 
-def spikes(data, fs: int, geometry: dict, return_waveforms=True, scratch_dir=None, **params):
+def spikes(
+    data, fs: int, geometry: dict, return_waveforms=True, scratch_dir=None, **params
+):
     """
     :param data:
     :param fs:

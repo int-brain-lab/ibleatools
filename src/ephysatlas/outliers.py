@@ -48,7 +48,12 @@ def detect_outlier_kstest(train_data: np.ndarray, test_data: np.ndarray):
 
 
 def kde_proba_distribution(
-    train_data, test_data, n_samples=50, bandwidth_factor=16, interp_kind="linear", n_min_sample_train=300
+    train_data,
+    test_data,
+    n_samples=50,
+    bandwidth_factor=16,
+    interp_kind="linear",
+    n_min_sample_train=300,
 ):
     """
     For a single feature, compute channel by channel the outlier score using KDE for
@@ -87,8 +92,8 @@ def kde_proba_distribution(
     robust_std = (
         iqr(train_data) / 1.349
     )  # approximate standard deviation assuming normality
-    if robust_std == 0.:  # Fall back in case IQR is 0
-        robust_std = np.std(train_data)/16
+    if robust_std == 0.0:  # Fall back in case IQR is 0
+        robust_std = np.std(train_data) / 16
     bandwidth = robust_std / bandwidth_factor
     kde = KernelDensity(bandwidth=bandwidth, kernel="gaussian")
     kde.fit(train_data.reshape(-1, 1))  # Reshape for usage in kde
@@ -165,7 +170,7 @@ def kde_proba_1pid(df_base, df_new, features, mapping, p_thresh=0.999999, min_ch
 
         listout = list()
         for feature in features:
-            print(f'{feature} [{region}]')
+            print(f"{feature} [{region}]")
             # Load data for that regions
             df_train = select_series(
                 df_base, features=[feature], acronym=None, id=region, mapping=mapping
@@ -213,7 +218,7 @@ def kde_proba_1pid(df_base, df_new, features, mapping, p_thresh=0.999999, min_ch
         has_outlier = False
 
     # Resort by channel
-    df_save = df_save.sort_values(by=['channel'])
+    df_save = df_save.sort_values(by=["channel"])
     return df_save, dictout, has_outlier
 
 

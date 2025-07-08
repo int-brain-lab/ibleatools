@@ -2,7 +2,6 @@ import hashlib
 from pathlib import Path
 from typing import Any, Dict
 import pandas as pd
-import os
 import logging
 
 # Set up logger
@@ -11,11 +10,11 @@ logger = logging.getLogger(__name__)
 
 def setup_output_directory(params: Dict[str, Any]) -> Path:
     """Set up the output directory structure and change to it.
-    
+
     The function creates a hierarchical directory structure:
     - Probe level subdirectory (using pid or hash of ap_file)
     - Snippet level subdirectory (using probe info, t_start, and duration)
-    
+
     Example output structure:
     |-- 76ed566f-59dd-47ff-8ba7-59b11d09b67c
     |   |-- probe_76ed566f-59dd-47ff-8ba7-59b11d09b67c_000300.0_05.0
