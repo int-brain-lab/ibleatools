@@ -68,6 +68,11 @@ BANDS = {
 FEATURES_LIST = ["raw_ap", "raw_lf", "localisation", "waveforms"]
 
 
+def get_feature_cmin(feature_name):
+    # todo
+    pass
+
+
 class DartParameters(pydantic.BaseModel):
     localization_radius: pydantic.PositiveFloat = 150
     chunk_length_samples: pydantic.PositiveInt = 2**15
@@ -76,11 +81,13 @@ class DartParameters(pydantic.BaseModel):
 
 
 class BaseChannelFeatures(pa.DataFrameModel):
-    channel: int
+    pass  # channel: Index[int] = pa.Field(check_name=True)
 
 
 class ModelLfFeatures(BaseChannelFeatures):
-    rms_lf: Series[float] = pa.Field(coerce=True)
+    rms_lf: Series[float] = pa.Field(
+        coerce=True, metadata={"transform": lambda x: 20 * np.log10(x)}
+    )
     psd_delta: Series[float] = pa.Field(coerce=True)
     psd_theta: Series[float] = pa.Field(coerce=True)
     psd_alpha: Series[float] = pa.Field(coerce=True)
@@ -90,7 +97,9 @@ class ModelLfFeatures(BaseChannelFeatures):
 
 
 class ModelCsdFeatures(BaseChannelFeatures):
-    rms_lf_csd: Series[float] = pa.Field(coerce=True)
+    rms_lf_csd: Series[float] = pa.Field(
+        coerce=True, metadata={"transform": lambda x: 20 * np.log10(x)}
+    )
     psd_delta_csd: Series[float] = pa.Field(coerce=True)
     psd_theta_csd: Series[float] = pa.Field(coerce=True)
     psd_alpha_csd: Series[float] = pa.Field(coerce=True)
@@ -100,7 +109,9 @@ class ModelCsdFeatures(BaseChannelFeatures):
 
 
 class ModelApFeatures(BaseChannelFeatures):
-    rms_ap: Series[float] = pa.Field(coerce=True)
+    rms_ap: Series[float] = pa.Field(
+        coerce=True, metadata={"transform": lambda x: 20 * np.log10(x)}
+    )
     cor_ratio: Series[float] = pa.Field(coerce=True)
     channel_labels: Series[int] = pa.Field(coerce=True)
 
@@ -111,12 +122,14 @@ class ModelSpikeFeatures(BaseChannelFeatures):
     depolarisation_slope: Series[float] = pa.Field(coerce=True)
     peak_time_secs: Series[float] = pa.Field(coerce=True)
     peak_val: Series[float] = pa.Field(coerce=True)
-    polarity: Series[float] = pa.Field(coerce=True)
+    polarity: Series[float] = pa.Field(
+        coerce=True, metadata={"transform": lambda x: np.log10(x + 1 + 1e-6)}
+    )
     recovery_slope: Series[float] = pa.Field(coerce=True)
     recovery_time_secs: Series[float] = pa.Field(coerce=True)
     repolarisation_slope: Series[float] = pa.Field(coerce=True)
     spike_count: int = pa.Field(
-        coerce=True, metadata={"transform": lambda x: x.astype(float)}
+        coerce=True, metadata={"transform": lambda x: np.log2(x.astype(float))}
     )
     tip_time_secs: Series[float] = pa.Field(coerce=True)
     tip_val: Series[float] = pa.Field(coerce=True)
@@ -500,11 +513,31 @@ def denoise_shank(
 
 def denoise_dataframe(df_pid, feature_names=None, fac=1):
     """
-    Applies total variation filter denoising to the features of a single pid datframe.
-    :param df_pid:
-    :param feature_names:
-    :param fac:
-    :return:
+    Applies total variation filter denoising to the features of a single probe insertion dataframe.
+
+    This function processes electrophysiological features by applying a total variation filter
+    to denoise them. If a transformation is defined in the metadata schema for a feature,
+    it will be applied before denoising. Channels marked with non-zero labels are treated
+    as invalid and their values are interpolated from neighboring channels.
+
+    Parameters
+    ----------
+    df_pid : pandas.DataFrame
+        DataFrame containing probe insertion data with features to denoise.
+        Must contain 'lateral_um', 'axial_um', and 'labels' columns.
+    feature_names : list, optional
+        List of feature column names to denoise. If None (default), will use all available
+        voltage features from raw_ap, raw_lf, raw_lf_csd, and waveforms categories that
+        exist in the dataframe.
+    fac : float, default=1
+        Factor for the TV denoising in median deviation units. Higher values
+        result in stronger denoising.
+
+    Returns
+    -------
+    pandas.DataFrame
+        A new dataframe with the same structure as the input, but with denoised feature values.
+        Non-feature columns are copied without modification.
     """
     if feature_names is None:
         feature_names = list(

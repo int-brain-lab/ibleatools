@@ -219,6 +219,7 @@ def load_data_from_pid(
         assert pid is not None and eid is not None and probe_name is not None, (
             "pid, eid, and probe_name are required for OneSdsc"
         )
+
         ssl = SpikeSortingLoader(pid=pid, eid=eid, pname=probe_name, one=one)
         stream = False
 
