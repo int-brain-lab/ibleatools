@@ -15,7 +15,7 @@ from ephysatlas import features
 from ephysatlas import __version__ as ibleatools_version
 from ephysatlas.features import __features_version__ as features_version
 from pathlib import Path
-from ephysatlas.utils import setup_output_directory
+from ephysatlas.utils import setup_output_directory, add_metadata_to_parquet_files
 
 # Set up logger
 logger = logging.getLogger(__name__)
@@ -79,8 +79,6 @@ def add_target_coordinates(pid=None, one=None, channels=None, traj_dict=None):
     # Convert the coordinates from in-vivo to the Allen coordinate system
     txyz = allen.bc.i2xyz(needles.bc.xyz2i(txyz / 1e6, round=False, mode="clip")) * 1e6
     xyz_mm = interpolate_along_track(txyz, channels["axial_um"] / 1e6)
-    # (Ask OW)
-    # aid_mm = needles.get_labels(xyz=xyz_mm, mode="clip")
 
     # Check if the rawInd data exists in the channels dictionary, otherwise use the default 384 channels (Ask OW)
     if ("rawInd" not in channels) and ("channel" not in channels):
@@ -103,6 +101,7 @@ def online_feature_computation(
     channels=None,
     features_to_compute=None,
     output_dir=Path("."),
+    scratch_dir=None,
     **kwargs,
 ):
     """
@@ -172,7 +171,13 @@ def online_feature_computation(
         )
 
     if channels.get("labels") is None:
-        channels["labels"], _ = ibldsp.voltage.detect_bad_channels(raw_ap, fs=sr_ap.fs)
+        # If we have access to the whole recording, then we can detect bad channels from the cbin file.
+        if sr_ap.file_bin is not None:
+            channel_labels = ibldsp.voltage.detect_bad_channels_cbin(sr_ap.file_bin)
+        # Else we can detect bad channels fromm the snippet of data.
+        else:
+            channel_labels, _ = ibldsp.voltage.detect_bad_channels(raw_ap, fs=sr_ap.fs)
+        channels["labels"] = channel_labels
 
     return channels, compute_features_from_raw(
         raw_ap=raw_ap,
@@ -183,70 +188,73 @@ def online_feature_computation(
         channel_labels=channels.get("labels"),
         features_to_compute=features_to_compute,
         output_dir=output_dir,
+        scratch_dir=scratch_dir,
         **kwargs,
     )
 
 
 # TODO - Need to be clear here , if I want to check based on SDSC or not, VS pid as dict or pid as string.
 # (Ask OW) Recomputing channels when launching multiple jobs.
-def load_data_from_pid(pid, one, probe_level_dir, recompute_channels=False):
+def load_data_from_pid(
+    pid, one, probe_level_dir, recompute_channels=False, eid=None, probe_name=None
+):
     """
     Load data using a probe ID from the ONE database.
 
     Args:
-        pid (str or dict): Probe ID or dictionary containing probe information
+        pid (str): Probe ID
         one (ONE): ONE client instance
         probe_level_dir (Path): Directory for probe-level data
+        recompute_channels (bool, optional): Whether to recompute channels even if cached
+        eid (str, optional): Session ID (required for OneSdsc)
+        probe_name (str, optional): Probe name (required for OneSdsc)
 
     Returns:
         tuple: (sr_ap, sr_lf, channels) SpikeGLX readers and channel information
     """
     logger.info(f"Loading data using PID: {pid}")
 
-    channel_labels = None
-    # if pid is a dict, then extract eid and probe_name from it
-    # TODO Check if the new version of iblscripts can work here to get the eid directly if not specified.
-    # TODO - Check if the channel labels are being computed in all the cases.
-    if isinstance(pid, dict):
-        logger.info(
-            f"Computing features for eid: {pid['eid']}, probe name: {pid['probe_name']}, pid: {pid['pid']}"
+    if one.__class__.__name__ == "OneSdsc":
+        logger.info(f"Loading data using OneSdsc: {pid}")
+        assert pid is not None and eid is not None and probe_name is not None, (
+            "pid, eid, and probe_name are required for OneSdsc"
         )
-        eid = pid["eid"]
-        probe_name = pid["probe_name"]
-        ssl = SpikeSortingLoader(pid=pid["pid"], eid=eid, pname=probe_name, one=one)
-        if one.__class__.__name__ == "OneSdsc":  # not best practice but avoids import
-            stream = False
-        else:
-            stream = True
-        sr_ap = ssl.raw_electrophysiology(band="ap", stream=stream)
-        sr_lf = ssl.raw_electrophysiology(band="lf", stream=stream)
-        # TODO - Check is this is the best place to detect bad channels. I am doing it before loading the channels file.
-        channel_labels = ibldsp.voltage.detect_bad_channels_cbin(sr_ap.file_bin)
+
+        ssl = SpikeSortingLoader(pid=pid, eid=eid, pname=probe_name, one=one)
+        stream = False
+
     else:
-        assert isinstance(pid, str), "PID must be a string"
+        assert pid is not None, "PID must be a string"
         ssl = SpikeSortingLoader(pid=pid, one=one)
-        sr_ap = ssl.raw_electrophysiology(band="ap", stream=True)
-        sr_lf = ssl.raw_electrophysiology(band="lf", stream=True)
+        stream = True
+
+    sr_ap = ssl.raw_electrophysiology(band="ap", stream=stream)
+    sr_lf = ssl.raw_electrophysiology(band="lf", stream=stream)
+
+    assert sr_ap is not None and sr_lf is not None, "Failed to load data"
 
     # Load the channels file
-    # TODO - Check if the channels file exists, if not, then create it.
-    file_channels = Path(probe_level_dir) / "channels.parquet"
-    if file_channels.exists() and (not recompute_channels):
+    if probe_level_dir is not None:
+        file_channels = Path(probe_level_dir) / "channels.parquet"
+
+    if (
+        probe_level_dir is not None
+        and file_channels.exists()
+        and (not recompute_channels)
+    ):
         logger.info(f"Loading channels from {file_channels}")
         channels = pd.read_parquet(file_channels)
         channels = {col: channels[col].to_numpy() for col in channels.columns}
-        if channels.get("labels") is None:
-            channels["labels"] = channel_labels
     else:
         logger.info("Recomputing channels")
         try:
             channels = ssl.load_channels()
-            if channels.get("labels") is None:
-                channels["labels"] = channel_labels
         except KeyError as e:
             logger.info(f"Channels key was not found: {str(e)}")
+            channels = {}
         except Exception as e:
             logger.info(f"Failed to load channels: {str(e)}")
+            channels = {}
 
     logger.info(f"Session path: {ssl.session_path}, probe name: {ssl.pname}")
     return sr_ap, sr_lf, channels
@@ -401,6 +409,201 @@ def compute_features(
     return df
 
 
+def compute_features_from_pid(
+    pid=None,
+    eid=None,
+    probe_name=None,
+    t_start=None,
+    duration=None,
+    one=None,
+    features_to_compute=None,
+    output_dir=None,
+    recompute_channels=False,
+    scratch_dir=None,
+    **kwargs,
+):
+    """
+    Compute features from a probe ID and ONE database.
+
+    Args:
+        pid (str): Probe ID (required)
+        eid (str, optional): Session ID (required for OneSdsc)
+        probe_name (str, optional): Probe name (required for OneSdsc)
+        t_start (float, optional): Start time in seconds. Defaults to 0.0 if not specified.
+        duration (float, optional): Duration in seconds. If None, will use the entire available duration.
+        one (ONE): ONE client instance (required)
+        features_to_compute (list, optional): List of feature sets to compute
+        output_dir (Path, optional): Output directory for saving features. If None, will not save features.
+        recompute_channels (bool, optional): Whether to recompute channels even if cached
+        scratch_dir (Path, optional): Directory for temporary files (dartsort scratch)
+        **kwargs: Additional keyword arguments
+
+    Returns:
+        pd.DataFrame: DataFrame containing computed features
+    """
+    # Create a dictionary with all the function arguments for setup_output_directory
+    params = {
+        "pid": pid,
+        "t_start": t_start,
+        "duration": duration,
+        "output_dir": output_dir,
+    }
+
+    # Setup the output directory
+    probe_level_dir, snippet_level_dir = setup_output_directory(params)
+
+    # Validate input
+    if one is None:
+        raise ValueError("ONE client instance is required when using PID")
+    elif one.__class__.__name__ == "OneSdsc":
+        assert pid is not None, "PID is required when using SDSC"
+        assert eid is not None, "EID is required when using SDSC"
+        assert probe_name is not None, "Probe name is required when using SDSC"
+
+    # Load data using PID
+    sr_ap, sr_lf, channels = load_data_from_pid(
+        pid, one, probe_level_dir, recompute_channels, eid=eid, probe_name=probe_name
+    )
+
+    # Convert time parameters to float
+    t_start = float(t_start) if t_start is not None else 0.0
+
+    # If duration is None, use the entire available duration
+    if duration is None:
+        max_time_ap = sr_ap.ns / sr_ap.fs
+        max_time_lf = sr_lf.ns / sr_lf.fs
+        duration = min(max_time_ap, max_time_lf) - t_start
+    else:
+        duration = float(duration)
+
+    # Compute features
+    channels, df = online_feature_computation(
+        sr_ap=sr_ap,
+        sr_lf=sr_lf,
+        t0=t_start,
+        duration=duration,
+        channels=channels,
+        features_to_compute=features_to_compute,
+        output_dir=snippet_level_dir,
+        scratch_dir=scratch_dir,
+        **kwargs,
+    )
+
+    # Add metadata to all parquet files in subdirectories
+    snippet_attrs = {"pid": pid, "t_start": t_start, "duration": duration}
+
+    add_metadata_to_parquet_files(directory=probe_level_dir, **snippet_attrs)
+
+    # Add xyz target information using Alyx database
+    channels = add_target_coordinates(pid=pid, one=one, channels=channels)
+
+    # Export the channels file
+    file_channels = probe_level_dir / "channels.parquet"
+
+    # TODO have another condition that checks if the existing channels file has all channels or if it matches the channels dict.
+    if not file_channels.exists() or (recompute_channels):
+        try:
+            df_channels = pd.DataFrame(channels).rename(columns={"rawInd": "channel"})
+            df_channels.to_parquet(file_channels)
+        except Exception as e:
+            logger.info(f"Failed to export channels file: {str(e)}")
+
+    return df
+
+
+def compute_features_from_file(
+    ap_file,
+    lf_file,
+    t_start=None,
+    duration=None,
+    traj_dict=None,
+    features_to_compute=None,
+    output_dir=Path("."),
+    scratch_dir=None,
+    **kwargs,
+):
+    """
+    Compute features from .cbin files.
+
+    Args:
+        ap_file (str): Path to AP .cbin file
+        lf_file (str): Path to LF .cbin file
+        t_start (float, optional): Start time in seconds. Defaults to 0.0 if not specified.
+        duration (float, optional): Duration in seconds. If None, will use the entire available duration.
+        traj_dict (dict, optional): Dictionary containing trajectory information with keys:
+            - x, y, z: coordinates
+            - depth, theta, phi: insertion parameters
+            Required if want to add xyz target information.
+        features_to_compute (list, optional): List of feature sets to compute
+        output_dir (Path, optional): Output directory for saving features
+        scratch_dir (Path, optional): Directory for temporary files (dartsort scratch)
+        **kwargs: Additional keyword arguments
+
+    Returns:
+        pd.DataFrame: DataFrame containing computed features
+    """
+    # Create a dictionary with all the function arguments
+    params = {
+        "ap_file": ap_file,
+        "t_start": t_start,
+        "duration": duration,
+        "output_dir": output_dir,
+    }
+
+    # Setup the output directory
+    probe_level_dir, snippet_level_dir = setup_output_directory(params)
+
+    # Validate input
+    if ap_file is None or lf_file is None:
+        raise ValueError("Both AP and LF .cbin files must be provided")
+
+    # Load data from files
+    sr_ap, sr_lf, channels = load_data_from_files(ap_file, lf_file, probe_level_dir)
+
+    # Convert time parameters to float
+    t_start = float(t_start) if t_start is not None else 0.0
+
+    # If duration is None, use the entire available duration
+    if duration is None:
+        max_time_ap = sr_ap.ns / sr_ap.fs
+        max_time_lf = sr_lf.ns / sr_lf.fs
+        duration = min(max_time_ap, max_time_lf) - t_start
+    else:
+        duration = float(duration)
+
+    # Compute features
+    channels, df = online_feature_computation(
+        sr_ap=sr_ap,
+        sr_lf=sr_lf,
+        t0=t_start,
+        duration=duration,
+        channels=channels,
+        features_to_compute=features_to_compute,
+        output_dir=snippet_level_dir,
+        scratch_dir=scratch_dir,
+        **kwargs,
+    )
+
+    # Add xyz target information if trajectory dictionary is provided
+    if traj_dict is not None:
+        channels = add_target_coordinates(traj_dict=traj_dict, channels=channels)
+    else:
+        logger.warning(
+            "No trajectory information available, skipping xyz target addition"
+        )
+
+    # Export the channels file
+    file_channels = probe_level_dir / "channels.parquet"
+    if not file_channels.exists():
+        try:
+            df_channels = pd.DataFrame(channels).rename(columns={"rawInd": "channel"})
+            df_channels.to_parquet(file_channels)
+        except Exception as e:
+            logger.info(f"Failed to export channels file: {str(e)}")
+
+    return df
+
+
 def compute_features_from_raw(
     raw_ap,
     raw_lf,
@@ -410,6 +613,7 @@ def compute_features_from_raw(
     channel_labels=None,
     features_to_compute=None,
     output_dir=Path("."),
+    scratch_dir=None,
     **kwargs,
 ):
     """
@@ -440,6 +644,9 @@ def compute_features_from_raw(
     )
     assert fs_ap > 0 and fs_lf > 0, "Sampling frequencies must be positive"
 
+    if channel_labels is None:
+        channel_labels = np.zeros(raw_ap.shape[0])
+
     # Define available feature sets
     available_features = ["lf", "csd", "ap", "waveforms"]
 
@@ -457,9 +664,6 @@ def compute_features_from_raw(
             )
 
     # Todo do I need to check the dtype of the raw_ap and raw_lf?
-    if channel_labels is None:
-        channel_labels, _ = ibldsp.voltage.detect_bad_channels(raw_ap, fs=fs_ap)
-
     # Destripe AP and LF data
     des_ap = ibldsp.voltage.destripe(
         raw_ap,
@@ -513,107 +717,94 @@ def compute_features_from_raw(
     #         raise ValueError("Channels features not found in save directory")
 
     logger.info(f"Starting {features_to_compute} computation")
-    # TODO - Write a loop here or a function to compute different features.
 
-    if "lf" in features_to_compute:
-        logger.info("Starting LF computation")
-        df["lf"] = features.lf(des_lf, fs=fs_lf)
-        # Add package version metadata to the DataFrame
-        df["lf"].attrs["ibleatools_version"] = ibleatools_version
-        df["lf"].attrs["features_version"] = features_version
-        save_features("lf", df["lf"])
-    else:
-        logger.info("Loading LF features from save directory")
-        lf_data = load_features("lf")
-        if lf_data is not None:
-            df["lf"] = lf_data
+    # Define feature computation configurations
+    feature_configs = {
+        "lf": {
+            "func": features.lf,
+            "args": {"data": des_lf, "fs": fs_lf},
+            "kwargs": {},
+        },
+        "csd": {
+            "func": features.csd,
+            "args": {"data": des_lf, "fs": fs_lf, "geometry": geometry},
+            "kwargs": {"decimate": 10},
+        },
+        "ap": {
+            "func": features.ap,
+            "args": {
+                "data": des_ap,
+                "geometry": geometry,
+                "channel_labels": channel_labels,
+            },
+            "kwargs": {},
+        },
+        "waveforms": {
+            "func": features.spikes,
+            "args": {"data": des_ap, "fs": fs_ap, "geometry": geometry},
+            "kwargs": {"scratch_dir": scratch_dir},
+        },
+    }
+
+    def compute_and_save_feature(feature_name, config):
+        """Helper function to compute and save a feature"""
+        # Check if we should skip computation for existing files
+        skip_saved = kwargs.get("skip_saved_computation", False)
+        if skip_saved:
+            existing_features = load_features(feature_name)
+            if existing_features is not None:
+                logger.info(
+                    f"Skipping {feature_name.upper()} computation - file already exists"
+                )
+                df[feature_name] = existing_features
+                return
+
+        logger.info(f"Starting {feature_name.upper()} computation")
+
+        # Compute the feature
+        if feature_name == "waveforms":
+            # Special handling for waveforms which returns tuple
+            df[feature_name], waveforms = config["func"](
+                **config["args"], **config["kwargs"]
+            )
+            df[feature_name]["spike_count"] = df[feature_name]["spike_count"].astype(
+                "Int64"
+            )
+
+            # Save waveform files if requested from the functoin call of compute_features_from_raw
+            if (output_dir is not None) and kwargs.get("save_waveforms", False):
+                waveforms_dir = output_dir / "waveforms"
+                waveforms_dir.mkdir(parents=True, exist_ok=True)
+                np.save(waveforms_dir / "raw.npy", waveforms["raw"].astype(np.float16))
+                np.save(
+                    waveforms_dir / "denoised.npy",
+                    waveforms["denoised"].astype(np.float16),
+                )
+                np.save(
+                    waveforms_dir / "waveform_channels.npy", waveforms["channel_index"]
+                )
+                waveforms["df_spikes"].to_parquet(waveforms_dir / "spikes.pqt")
         else:
-            logger.warning(
-                "LF features not found in save directory. LF features will not be computed."
-            )
-            # raise ValueError("LF features not found in save directory")
+            df[feature_name] = config["func"](**config["args"], **config["kwargs"])
 
-    if "csd" in features_to_compute:
-        logger.info("Starting CSD computation")
-        df["csd"] = features.csd(des_lf, fs=fs_lf, geometry=geometry, decimate=10)
-        # Add package version metadata to the DataFrame
-        df["csd"].attrs["ibleatools_version"] = ibleatools_version
-        df["csd"].attrs["features_version"] = features_version
-        save_features("csd", df["csd"])
-    else:
-        logger.info("Loading CSD features from save directory")
-        csd_data = load_features("csd")
-        if csd_data is not None:
-            df["csd"] = csd_data
+        # Add package version metadata
+        df[feature_name].attrs["ibleatools_version"] = ibleatools_version
+        df[feature_name].attrs[f"{feature_name}_version"] = features_version
+
+        # Save the feature
+        save_features(feature_name, df[feature_name])
+
+    # Compute each requested feature
+    for feature_name in features_to_compute:
+        if feature_name in feature_configs:
+            compute_and_save_feature(feature_name, feature_configs[feature_name])
         else:
-            logger.warning(
-                "CSD features not found in save directory. CSD features will not be computed."
-            )
-            # raise ValueError("CSD features not found in save directory")
+            logger.warning(f"Unknown feature type: {feature_name}")
 
-    if "ap" in features_to_compute:
-        logger.info("Starting AP computation")
-        df["ap"] = features.ap(des_ap, geometry=geometry)
-        # Add package version metadata to the DataFrame
-        df["ap"].attrs["ibleatools_version"] = ibleatools_version
-        df["ap"].attrs["features_version"] = features_version
-        save_features("ap", df["ap"])
-    else:
-        logger.info("Loading AP features from save directory")
-        ap_data = load_features("ap")
-        if ap_data is not None:
-            df["ap"] = ap_data
-        else:
-            logger.warning(
-                "AP features not found in save directory. AP features will not be computed."
-            )
-            # raise ValueError("AP features not found in save directory")
-
-    # this takes a long time !
-    if "waveforms" in features_to_compute:
-        logger.info("Starting waveforms computation")
-        df["waveforms"], waveforms = features.spikes(
-            des_ap, fs=fs_ap, geometry=geometry
-        )
-        df["waveforms"]["spike_count"] = df["waveforms"]["spike_count"].astype("Int64")
-        # Add package version metadata to the DataFrame
-        df["waveforms"].attrs["ibleatools_version"] = ibleatools_version
-        df["waveforms"].attrs["features_version"] = features_version
-        save_features("waveforms", df["waveforms"])
-
-        if kwargs.get("save_waveforms", True):
-            # Save other waveform features in waveform directory
-            waveforms_dir = output_dir / "waveforms"
-            waveforms_dir.mkdir(parents=True, exist_ok=True)
-            # Save the waveforms to files
-            np.save(waveforms_dir / "raw.npy", waveforms["raw"].astype(np.float16))
-            np.save(
-                waveforms_dir / "denoised.npy", waveforms["denoised"].astype(np.float16)
-            )
-            np.save(waveforms_dir / "waveform_channels.npy", waveforms["channel_index"])
-            waveforms["df_spikes"].to_parquet(waveforms_dir / "spikes.pqt")
-    else:
-        waveforms_data = load_features("waveforms")
-        if waveforms_data is not None:
-            df["waveforms"] = waveforms_data
-        else:
-            logger.warning(
-                "Waveforms features not found in save directory. Waveform features will not be computed."
-            )
-            # raise ValueError("Waveforms features not found in save directory")
-
-    # TODO - Should I output the features dataset here??
     df_voltage = reduce(
         lambda left, right: pd.merge(left, right, on="channel", how="outer"),
         [df[k] for k in df.keys()],
     )
-    # TODO - Check whether the dropna is needed or not. (Ask OW)
-    original_index = df_voltage.index.copy()
-    # TODO Do the dropping when loading the data.
-    # df_voltage.dropna(inplace=True)
-    dropped_indices = original_index.difference(df_voltage.index)
-    if len(dropped_indices) > 0:
-        logger.info(f"Dropped row indices: {dropped_indices.tolist()}")
 
     return df_voltage
 
