@@ -7,7 +7,7 @@ import ephysatlas.anatomy
 import ephysatlas.plots
 
 VINTAGE = '2024_W50'
-# VINTAGE = '2025_W28'
+VINTAGE = '2025_W28'
 # this will download the Allen brain templates
 brain_atlas = ephysatlas.anatomy.ClassifierAtlas()
 

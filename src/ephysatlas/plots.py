@@ -443,7 +443,7 @@ def plot_features_distributions(df_features, x_list=None, title=""):
     if x_list is None:
         x_list = ephysatlas.features.voltage_features_set()
     fig, axs = plt.subplots(
-        4, 12, figsize=(8, 4), gridspec_kw={"width_ratios": [4, 0.2] * 6}
+        4, 12, figsize=(16, 9), gridspec_kw={"width_ratios": [4, 0.2] * 6}
     )
     axs = axs.flatten()
     i = 0
