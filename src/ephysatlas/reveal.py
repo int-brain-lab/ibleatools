@@ -43,7 +43,7 @@ STREAM = False
 one = ONE(base_url="https://alyx.internationalbrainlab.org")
 
 ba = ephysatlas.anatomy.ClassifierAtlas()
-path_features = Path("/mnt/s0/ephys-atlas-decoding/features/2024_W50")  # parede
+path_features = Path("/mnt/s0/ephys-atlas-decoding/features/2025_W27")  # parede
 path_model = Path(
     "/mnt/s0/ephys-atlas-decoding/models/2025_W27_Cosmos_magical-emerald-starling"
 )
@@ -54,13 +54,12 @@ raw_ap = ssl.raw_electrophysiology(band="ap", stream=STREAM)
 raw_lf = ssl.raw_electrophysiology(band="lf", stream=STREAM)
 
 df_features = ephysatlas.data.read_features_from_disk(path_features, strict=False)
+x_list = ephysatlas.features.voltage_features_set()
 df_pid = df_features.loc[pid]
 df_predictions = pd.read_parquet(path_model.joinpath("predictions.pqt"))
-# TODO tilt
 
 # %% Figure 01
 # Plot overall displays
-x_list = ephysatlas.features.voltage_features_set()
 xy = df_pid[["lateral_um", "axial_um"]].to_numpy()
 
 fig, axs = ephysatlas.plots.figure_features_channel_space(
@@ -167,3 +166,6 @@ fig.suptitle(
     y=0.08,
     fontweight="bold",
 )
+
+
+# %% Also plot all of the features

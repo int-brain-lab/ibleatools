@@ -209,14 +209,17 @@ def read_features_from_disk(
         right_index=True,
         left_index=True,
     )
-    if "labels" not in df_features.columns:
+    if ("channel_labels" not in df_features.columns) and (
+        "labels" not in df_features.columns
+    ):
         df_features = df_features.merge(
             pd.read_parquet(path_features / "channels_labels.pqt").fillna(0),
             how="inner",
             right_index=True,
             left_index=True,
         )
-    df_features["outside"] = df_features["labels"] == 3
+        df_features.rename(columns={"labels": "channel_labels"}, inplace=True)
+    df_features["outside"] = df_features["channel_labels"] == 3
 
     aids = brain_atlas.get_labels(
         df_features.loc[:, ["x", "y", "z"]].values, mode="clip"

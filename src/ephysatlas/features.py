@@ -22,8 +22,9 @@ import ibldsp.voltage
 # Set up logger
 logger = logging.getLogger(__name__)
 
-# Features version
-__features_version__ = "2025.07.01"
+__features_version__ = (
+    "2025.07.01"  # this is the version of this feature extractor code
+)
 
 
 def _setup_scratch_directory(scratch_dir=None):
@@ -138,13 +139,11 @@ class ModelSpikeFeatures(BaseChannelFeatures):
     depolarisation_slope: Series[float] = pa.Field(coerce=True)
     peak_time_secs: Series[float] = pa.Field(coerce=True)
     peak_val: Series[float] = pa.Field(coerce=True)
-    polarity: Series[float] = pa.Field(
-        coerce=True, metadata={"transform": lambda x: np.log10(x + 1 + 1e-6)}
-    )
+    polarity: Series[float] = pa.Field(coerce=True)
     recovery_slope: Series[float] = pa.Field(coerce=True)
     recovery_time_secs: Series[float] = pa.Field(coerce=True)
     repolarisation_slope: Series[float] = pa.Field(coerce=True)
-    spike_count: int = pa.Field(
+    spike_count: float = pa.Field(
         coerce=True, metadata={"transform": lambda x: np.log2(x.astype(float))}
     )
     tip_time_secs: Series[float] = pa.Field(coerce=True)
@@ -156,7 +155,6 @@ class ModelSpikeFeatures(BaseChannelFeatures):
 class ModelChannelLayout(BaseChannelFeatures):
     axial_um: Series[float] = pa.Field(coerce=True)
     lateral_um: Series[float] = pa.Field(coerce=True)
-    labels: Series[int] = pa.Field(coerce=True, nullable=True)
 
 
 class ModelHistologyPlanned(BaseChannelFeatures):
@@ -529,7 +527,7 @@ def denoise_shank(
     return denoised_feature
 
 
-def denoise_dataframe(df_pid, feature_names=None, fac=1):
+def denoise_dataframe(df_pid, feature_names=None, fac=1, channel_labels=None):
     """
     Applies total variation filter denoising to the features of a single probe insertion dataframe.
 
@@ -557,21 +555,25 @@ def denoise_dataframe(df_pid, feature_names=None, fac=1):
         A new dataframe with the same structure as the input, but with denoised feature values.
         Non-feature columns are copied without modification.
     """
+    if channel_labels is None:
+        channel_labels = np.zeros(df_pid.shape[0], dtype=int)
     if feature_names is None:
         feature_names = list(
             set(voltage_features_set(["raw_ap", "raw_lf", "raw_lf_csd", "waveforms"]))
             & set(df_pid.columns)
         )
-    df_pid_denoise = df_pid.loc[
-        :, list(set(df_pid.columns) - set(feature_names))
-    ].copy()
+    df_pid_denoise = df_pid.copy()
     raw_features_schema = ModelRawFeatures.to_schema()
     for feature_name in feature_names:
+        if (
+            feature_name == "channel_labels"
+        ):  # we do not want to apply any denoising to this feature
+            continue
         if (metadata := raw_features_schema.columns[feature_name].metadata) is not None:
             fval = metadata["transform"](np.copy(df_pid[feature_name].to_numpy()))
         else:
             fval = np.copy(df_pid[feature_name].to_numpy())
-        fval[df_pid["labels"] != 0] = np.nan
+        fval[channel_labels != 0] = np.nan
         df_pid_denoise.loc[:, feature_name] = denoise_shank(
             feature=fval,
             xy=df_pid[["lateral_um", "axial_um"]].values,

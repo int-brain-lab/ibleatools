@@ -1,14 +1,17 @@
+# %%
 from pathlib import Path
 from one.api import ONE
 
 import ephysatlas.data
 import ephysatlas.anatomy
+import ephysatlas.plots
 
-VINTAGE = '2025_W27'
+VINTAGE = '2024_W50'
+# VINTAGE = '2025_W28'
 # this will download the Allen brain templates
 brain_atlas = ephysatlas.anatomy.ClassifierAtlas()
 
-path_features = Path(f'/home/olivier/scratch/{VINTAGE}')  # put ht
+path_features = Path(f"/mnt/s0/ephys-atlas-decoding/features/{VINTAGE}")  # parede
 if not path_features.exists():
     # an ONE account is required to access the private IBL datasets
     one = ONE(base_url='https://alyx.internationalbrainlab.org', mode='remote')
@@ -16,4 +19,5 @@ if not path_features.exists():
     print(download_path)  # PosixPath('/home/olivier/scratch/2025_W27')
 
 # once features and anatomy are downloaded, this will load the features Dataframe
-df_features = ephysatlas.data.read_features_from_disk(path_features, brain_atlas=brain_atlas)
+df_features = ephysatlas.data.read_features_from_disk(path_features, brain_atlas=brain_atlas, strict=False)
+ephysatlas.plots.plot_features_distributions(df_features, title=f"Features distributions for {VINTAGE}")
