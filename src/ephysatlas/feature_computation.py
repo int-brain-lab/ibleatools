@@ -177,15 +177,16 @@ def online_feature_computation(
         # Else we can detect bad channels fromm the snippet of data.
         else:
             channel_labels, _ = ibldsp.voltage.detect_bad_channels(raw_ap, fs=sr_ap.fs)
-        channels["labels"] = channel_labels
+        # There is no need to update the channel labels, since we do it later on during aggregation.
+        # channels["labels"] = channel_labels
 
-    return channels, compute_features_from_raw(
+    return compute_features_from_raw(
         raw_ap=raw_ap,
         raw_lf=raw_lf,
         fs_ap=sr_ap.fs,
         fs_lf=sr_lf.fs,
         geometry=sr_ap.geometry,
-        channel_labels=channels.get("labels"),
+        channel_labels=channel_labels,
         features_to_compute=features_to_compute,
         output_dir=output_dir,
         scratch_dir=scratch_dir,
@@ -253,7 +254,8 @@ def load_data_from_pid(
             logger.info(f"Channels key was not found: {str(e)}")
             channels = {}
         except Exception as e:
-            logger.info(f"Failed to load channels: {str(e)}")
+            logger.error(f"Failed to load channels: {str(e)}")
+            logger.debug("Exception details:", exc_info=True)
             channels = {}
 
     logger.info(f"Session path: {ssl.session_path}, probe name: {ssl.pname}")
@@ -369,7 +371,7 @@ def compute_features(
 
     # Compute features
 
-    channels, df = online_feature_computation(
+    df = online_feature_computation(
         sr_ap=sr_ap,
         sr_lf=sr_lf,
         t0=t_start,
@@ -476,8 +478,26 @@ def compute_features_from_pid(
     else:
         duration = float(duration)
 
+    # Update the channel file with target information.
+    # Add xyz target information using Alyx database
+    channels = add_target_coordinates(pid=pid, one=one, channels=channels)
+
+    # Export the channels file
+    file_channels = probe_level_dir / "channels.parquet"
+
+    # TODO have another condition that checks if the existing channels file has all channels or if it matches the channels dict.
+    # TODO Make a module channel computation function that takes probe_level_dir AND pid(because it should work for non pid case as well) as an input.
+    if not file_channels.exists() or (recompute_channels):
+        try:
+            df_channels = pd.DataFrame(channels).rename(columns={"rawInd": "channel"})
+            df_channels["pid"] = pid
+            df_channels.to_parquet(file_channels)
+        except Exception as e:
+            logger.error(f"Failed to export channels file: {str(e)}")
+            logger.debug("Exception details:", exc_info=True)
+
     # Compute features
-    channels, df = online_feature_computation(
+    df = online_feature_computation(
         sr_ap=sr_ap,
         sr_lf=sr_lf,
         t0=t_start,
@@ -490,23 +510,14 @@ def compute_features_from_pid(
     )
 
     # Add metadata to all parquet files in subdirectories
-    snippet_attrs = {"pid": pid, "t_start": t_start, "duration": duration}
+    snippet_attrs = {
+        "pid": pid,
+        "t_start": t_start,
+        "duration": duration,
+        "snippet_level_dir": snippet_level_dir,
+    }
 
-    add_metadata_to_parquet_files(directory=probe_level_dir, **snippet_attrs)
-
-    # Add xyz target information using Alyx database
-    channels = add_target_coordinates(pid=pid, one=one, channels=channels)
-
-    # Export the channels file
-    file_channels = probe_level_dir / "channels.parquet"
-
-    # TODO have another condition that checks if the existing channels file has all channels or if it matches the channels dict.
-    if not file_channels.exists() or (recompute_channels):
-        try:
-            df_channels = pd.DataFrame(channels).rename(columns={"rawInd": "channel"})
-            df_channels.to_parquet(file_channels)
-        except Exception as e:
-            logger.info(f"Failed to export channels file: {str(e)}")
+    add_metadata_to_parquet_files(snippet_level_dir=snippet_level_dir, **snippet_attrs)
 
     return df
 
@@ -572,7 +583,7 @@ def compute_features_from_file(
         duration = float(duration)
 
     # Compute features
-    channels, df = online_feature_computation(
+    df = online_feature_computation(
         sr_ap=sr_ap,
         sr_lf=sr_lf,
         t0=t_start,
@@ -599,7 +610,8 @@ def compute_features_from_file(
             df_channels = pd.DataFrame(channels).rename(columns={"rawInd": "channel"})
             df_channels.to_parquet(file_channels)
         except Exception as e:
-            logger.info(f"Failed to export channels file: {str(e)}")
+            logger.error(f"Failed to export channels file: {str(e)}")
+            logger.debug("Exception details:", exc_info=True)
 
     return df
 

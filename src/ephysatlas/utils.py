@@ -86,7 +86,9 @@ def get_aggregated_snippets_df(probe_level_dir: Path):
     return df
 
 
-def add_metadata_to_parquet_files(directory: Path, **snippet_attrs: Dict[str, Any]):
+def add_metadata_to_parquet_files(
+    snippet_level_dir: Path, **snippet_attrs: Dict[str, Any]
+):
     """
     Add metadata attributes to all .parquet and .pqt files in subdirectories of the given directory.
 
@@ -97,17 +99,16 @@ def add_metadata_to_parquet_files(directory: Path, **snippet_attrs: Dict[str, An
     Returns:
         None
     """
-    if not directory.exists() or not directory.is_dir():
-        logger.warning(f"Directory {directory} does not exist or is not a directory")
+    if not snippet_level_dir.exists() or not snippet_level_dir.is_dir():
+        logger.warning(
+            f"Directory {snippet_level_dir} does not exist or is not a directory"
+        )
 
-    # Iterate through all subdirectories (not the directory itself)
-    for subdir in directory.iterdir():
-        if not subdir.is_dir():
-            continue
-
-        # Look for both .parquet and .pqt files in the subdirectory
-        for file_path in list(subdir.glob("*.parquet")) + list(subdir.glob("*.pqt")):
-            _update_parquet_metadata(file_path, **snippet_attrs)
+    # Look for both .parquet and .pqt files in the subdirectory
+    for file_path in list(snippet_level_dir.glob("*.parquet")) + list(
+        snippet_level_dir.glob("*.pqt")
+    ):
+        _update_parquet_metadata(file_path, **snippet_attrs)
 
 
 def _update_parquet_metadata(file_path: Path, **snippet_attrs: Dict[str, Any]):

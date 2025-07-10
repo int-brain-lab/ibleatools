@@ -84,6 +84,18 @@ class DartParameters(pydantic.BaseModel):
     )
 
 
+class ChannelDataFrameSchema(pa.DataFrameModel):
+    pid: Series[str] = pa.Field()
+    channel: Series[int] = pa.Field()
+    x: Series[float] = pa.Field()
+    y: Series[float] = pa.Field()
+    z: Series[float] = pa.Field()
+    axial_um: Series[float] = pa.Field(coerce=True)
+    lateral_um: Series[float] = pa.Field(coerce=True)
+    acronym: Series[str] = pa.Field()
+    atlas_id: Series[int] = pa.Field()
+
+
 class BaseChannelFeatures(pa.DataFrameModel):
     pass  # channel: Index[int] = pa.Field(check_name=True)
 
