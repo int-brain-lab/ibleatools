@@ -7,7 +7,7 @@ import neuropixel
 import ephysatlas.features
 
 FIXTURE_PATH = (
-    Path(ephysatlas.features.__file__).parents[3].joinpath("tests", "fixtures")
+    Path(ephysatlas.features.__file__).parents[2].joinpath("tests", "fixtures")
 )
 
 

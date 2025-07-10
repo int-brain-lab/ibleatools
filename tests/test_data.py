@@ -7,9 +7,7 @@ import ephysatlas.data
 import ephysatlas.anatomy
 import ephysatlas.plots
 
-FIXTURE_PATH = (
-    Path(ephysatlas.fixtures.__file__).parents[3].joinpath("tests", "fixtures")
-)
+FIXTURE_PATH = Path(ephysatlas.data.__file__).parents[2].joinpath("tests", "fixtures")
 
 
 def _fixture_creation_code_for_reference():
