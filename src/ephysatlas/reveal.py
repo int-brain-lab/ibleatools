@@ -28,7 +28,9 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
 import sklearn.metrics
+import scipy.signal
 
+import ibldsp.voltage
 from brainbox.io.one import SpikeSortingLoader
 import brainbox.ephys_plots
 from one.api import ONE
@@ -43,15 +45,15 @@ STREAM = False
 one = ONE(base_url="https://alyx.internationalbrainlab.org")
 
 ba = ephysatlas.anatomy.ClassifierAtlas()
-path_features = Path("/mnt/s0/ephys-atlas-decoding/features/2025_W27")  # parede
+path_features = Path("/mnt/s0/ephys-atlas-decoding/features/2025_W28")  # parede
 path_model = Path(
-    "/mnt/s0/ephys-atlas-decoding/models/2025_W27_Cosmos_magical-emerald-starling"
+    "/mnt/s0/ephys-atlas-decoding/models/2025_W28_Cosmos_living-olivedrab-cassowary"
 )
 pid = "749cb2b7-e57e-4453-a794-f6230e4d0226"  # mrsicflogellab/Subjects/SWC_038/2020-07-30/001/alf/probe01
 
 ssl = SpikeSortingLoader(pid=pid, one=one)
-raw_ap = ssl.raw_electrophysiology(band="ap", stream=STREAM)
-raw_lf = ssl.raw_electrophysiology(band="lf", stream=STREAM)
+sr_ap = ssl.raw_electrophysiology(band="ap", stream=STREAM)
+sr_lf = ssl.raw_electrophysiology(band="lf", stream=STREAM)
 
 df_features = ephysatlas.data.read_features_from_disk(path_features, strict=False)
 x_list = ephysatlas.features.voltage_features_set()
@@ -168,4 +170,59 @@ fig.suptitle(
 )
 
 
-# %% Also plot all of the features
+# %% Figure 05 LFP:
+LFP_RANGE_UV = 250
+t0, duration = 600, 4
+channel_labels = True
+xy = df_pid[["lateral_um", "axial_um"]].to_numpy()
+
+
+def plot_raw_ephys(voltage, caxis, title):
+    fig, axs = plt.subplots(
+        1, 3, figsize=(16, 8), gridspec_kw={"width_ratios": [1, 14, 0.4]}
+    )
+    brainbox.ephys_plots.plot_brain_regions(
+        df_pid["atlas_id"].values,
+        channel_depths=xy[:, 1],
+        brain_regions=ba.regions,
+        ax=axs[0],
+    )
+    im = axs[1].matshow(
+        voltage * 1e6,
+        aspect="auto",
+        cmap="Greys_r",
+        origin="lower",
+        vmin=-caxis,
+        vmax=caxis,
+        extent=(0, duration, 0, np.max(xy[:, 1])),
+    )
+    axs[1].set(title=title, xlabel="Time (s)", ylabel="Depth (μm)")
+    axs[1].xaxis.set_ticks_position("bottom")
+    axs[1].xaxis.set_label_position("bottom")
+    # Add colorbar to the matshow plot
+    cbar = plt.colorbar(im, cax=axs[2])
+    cbar.set_label("Voltage (μV)")
+    fig.tight_layout()
+    return fig, axs
+
+
+raw = sr_lf[
+    slice(int(sr_lf.fs * t0), int((t0 + duration) * sr_lf.fs)), : -sr_lf.nsync
+].T
+butter_kwargs = {"N": 3, "Wn": 2 / sr_lf.fs * 2, "btype": "highpass"}
+sos = scipy.signal.butter(**butter_kwargs, output="sos")
+butt = scipy.signal.sosfiltfilt(sos, raw)
+# k_filter=None means no CAR nor spatial filter
+preproc = ibldsp.voltage.destripe_lfp(
+    butt, fs=sr_lf.fs, channel_labels=channel_labels, k_filter=False
+)
+# preproc = scipy.signal.decimate(preproc, q=5, zero_phase=True)
+# preproc = ibldsp.cadzow.cadzow_np1(preproc, fs=sr_lf.fs / 5, fmax=200, rank=5, h=sr_lf.geometry)
+# preproc = ibldsp.voltage.current_source_density(preproc, h=sr_lf.geometry)
+
+# from viewephys.gui import viewephys
+# eqc = viewephys(preproc, sr_lf.fs, channels=sr_lf.geometry, title='LFP preprocessed')
+fig, axs = plot_raw_ephys(butt, LFP_RANGE_UV, f"LFP {pid}")
+fig, axs = plot_raw_ephys(preproc, LFP_RANGE_UV, f"LFP preprocessed {pid}")
+
+# %%

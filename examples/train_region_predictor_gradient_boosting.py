@@ -15,7 +15,7 @@ import ephysatlas.fixtures
 import ephysatlas.regionclassifier
 
 VINTAGE = '2024_W50'
-VINTAGE = '2025_W27'
+VINTAGE = '2025_W28'
 path_features = Path(f'/Users/olivier/Documents/datadisk/ephys-atlas-decoding/features/{VINTAGE}')  # mac
 path_features = Path(f'/mnt/s0/ephys-atlas-decoding/features/{VINTAGE}')  # parede
 if not path_features.exists():
@@ -75,10 +75,8 @@ def train(test_idx, fold_label=''):
         classifier.predict(df_test.loc[:, x_list].values)
     ]
     accuracy = sklearn.metrics.accuracy_score(y_test, y_pred)
-
-    confusion_matrix = sklearn.metrics.confusion_matrix(
-        y_test, y_pred, normalize="true"
-    )  # row: true, col: predicted
+    # row: true, col: predicted
+    confusion_matrix = sklearn.metrics.confusion_matrix(y_test, y_pred)
     print(f"{fold_label} Accuracy: {accuracy}")
 
     np.testing.assert_array_equal(classes, rids)
@@ -99,7 +97,7 @@ for i in range(n_folds):
     test_pids = all_pids[ifold == i]
     train_pids = all_pids[ifold!= i]
     test_idx = np.isin(df_features.index.get_level_values(0), test_pids)
-    probas, classifier, accuracy, confusion_matrix = train(
+    probas, classifier, accuracy, _ = train(
         test_idx=test_idx, fold_label=f"fold {i}"
     )
     df_predictions.loc[test_idx, rids] = probas
@@ -122,7 +120,9 @@ for i in range(n_folds):
     # here we will use the confusion matrix as an emission matrix P(observation|state) = P(prediction|class)
     path_model_fold = ephysatlas.regionclassifier.save_model(path_models, classifier, meta, subfolder=f"FOLD{i:02}", identifier='tmp')
 
+
 accuracy = sklearn.metrics.accuracy_score(df_features[TRAIN_LABEL].values, df_predictions['prediction'].values.astype(int))
+sklearn.metrics.ConfusionMatrixDisplay.from_predictions(df_features[TRAIN_LABEL].values, df_predictions['prediction'].values.astype(int), normalize='true', cmap='Blues')
 _, classifier, _, _ = train(test_idx=np.zeros(df_features.shape[0], dtype=bool))
 meta = dict(
     RANDOM_SEED=rs,
