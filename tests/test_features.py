@@ -6,8 +6,9 @@ import numpy as np
 import neuropixel
 import ephysatlas.features
 
-
-TEST_DATA_PATH = Path(__name__).parent.joinpath("fixtures")
+FIXTURE_PATH = (
+    Path(ephysatlas.features.__file__).parents[2].joinpath("tests", "fixtures")
+)
 
 
 class TestFeatureSets(unittest.TestCase):
@@ -19,7 +20,7 @@ class TestFeatureSets(unittest.TestCase):
 
 class TestLFPFeatures(unittest.TestCase):
     def setUp(self):
-        self.data_lf = np.load(TEST_DATA_PATH / "lf_destriped.npy").astype(np.float32)
+        self.data_lf = np.load(FIXTURE_PATH / "lf_destriped.npy").astype(np.float32)
 
     def test_csd(self):
         df = ephysatlas.features.csd(
@@ -34,7 +35,7 @@ class TestLFPFeatures(unittest.TestCase):
 
 class TestAPFeatures(unittest.TestCase):
     def setUp(self):
-        self.data_ap = np.load(TEST_DATA_PATH / "ap_destriped.npy").astype(np.float32)
+        self.data_ap = np.load(FIXTURE_PATH / "ap_destriped.npy").astype(np.float32)
 
     def test_ap(self):
         df = ephysatlas.features.ap(
@@ -47,7 +48,7 @@ class TestAPFeatures(unittest.TestCase):
 
 class TestWaveformFeatures(unittest.TestCase):
     def setUp(self):
-        self.data_ap = np.load(TEST_DATA_PATH / "ap_destriped.npy").astype(np.float32)
+        self.data_ap = np.load(FIXTURE_PATH / "ap_destriped.npy").astype(np.float32)
 
     def test_ap(self):
         df, waveforms = ephysatlas.features.spikes(

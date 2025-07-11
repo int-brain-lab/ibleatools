@@ -1,5 +1,8 @@
+import logging
+
 import numpy as np
 import scipy.stats
+
 import matplotlib.pyplot as plt
 import matplotlib
 import matplotlib.patches
@@ -16,8 +19,10 @@ from matplotlib import (
 
 import ephysatlas.features
 
-figure_style()
 
+_logger = logging.getLogger(__name__)
+
+figure_style()
 
 QUANTILES = [0.01, 0.1, 0.9, 0.99]
 BINS = 50
@@ -75,13 +80,32 @@ def plot_histogram(
 
 def plot_cumulative_probas(probas, depths, aids, regions=None, ax=None, legend=False):
     """
-    :param probas: (ndepths x nregions) array of probabilities for each region that sum to 1 for each depth
-    :param depths: (ndepths) vector of depths
-    :param aids: (nregions) vector of atlas_ids
-    :param regions: optional: iblatlas.BrainRegion object
-    :param ax:
-    :param legend:
-    :return:
+    Plot cumulative probabilities of brain regions along probe depths.
+
+    Creates a stacked area plot showing the probability distribution of different brain regions
+    at each depth along a probe trajectory. Each region is colored according to its standard
+    atlas color.
+
+    Parameters
+    ----------
+    probas : numpy.ndarray
+        Array of shape (ndepths, nregions) containing probabilities for each region at each depth.
+        Values should sum to 1 across regions for each depth.
+    depths : numpy.ndarray
+        Vector of length ndepths containing the depth values along the probe trajectory.
+    aids : numpy.ndarray
+        Vector of length nregions containing the atlas IDs for each region.
+    regions : iblatlas.BrainRegions, optional
+        BrainRegions object containing region information. If None, a new instance is created.
+    ax : matplotlib.axes.Axes, optional
+        Axes on which to plot. If None, the current axes will be used.
+    legend : bool, default False
+        Whether to display a legend with region names.
+
+    Returns
+    -------
+    matplotlib.axes.Axes
+        The axes object containing the plot.
     """
     regions = regions or BrainRegions()
     _, rids = ismember(aids, regions.id)
@@ -386,5 +410,76 @@ def figure_features_channel_space(
         right=1 - adjust / width,
         wspace=0,
     )
+    return fig, axs
 
+
+def plot_features_distributions(df_features, x_list=None, title=""):
+    """
+    Create a grid of histograms displaying the distribution of electrophysiological features.
+
+    This function generates a multi-panel figure with histograms for each feature in x_list.
+    Each histogram is color-coded according to feature values and accompanied by a colorbar.
+    The function uses quantile-based limits to handle outliers in the data visualization.
+
+    Parameters
+    ----------
+    None : The function uses global variables:
+        x_list : list
+            List of feature names to plot
+        df_features : pandas.DataFrame
+            DataFrame containing the feature values with feature names as columns
+        title : str
+            Title for the figure
+
+    Returns
+    -------
+    tuple
+        A tuple containing:
+        - fig : matplotlib.figure.Figure
+            The figure object containing all histograms
+        - axs : numpy.ndarray
+            Array of matplotlib.axes.Axes objects for each subplot
+    """
+    if x_list is None:
+        x_list = ephysatlas.features.voltage_features_set()
+    fig, axs = plt.subplots(
+        4, 12, figsize=(16, 9), gridspec_kw={"width_ratios": [4, 0.2] * 6}
+    )
+    axs = axs.flatten()
+    i = 0
+    for feature_name in x_list:
+        ax = axs[i]
+        if feature_name not in df_features.columns:
+            _logger.warning(
+                f"'{feature_name}' not found in the DataFrame. Skipping this feature."
+            )
+            continue
+        feature = df_features.loc[:, feature_name].values
+
+        clim = np.array([np.nanquantile(feature, 0.1), np.nanquantile(feature, 0.9)])
+        hlim = np.array(
+            [np.nanquantile(feature, 0.005), np.nanquantile(feature, 0.995)]
+        )
+
+        # Main histogram plot with box and grid
+        c, x = np.histogram(feature, bins=np.linspace(hlim[0], hlim[1], 64))
+        bars = ax.bar(x[:-1], c / np.sum(c), width=np.diff(x)[0])
+        cmap = plt.get_cmap("PuOr")
+        norm = plt.Normalize(vmin=clim[0], vmax=clim[1])
+        for bar, bin_center in zip(bars, x[:-1]):
+            bar.set_color(cmap(norm(bin_center)))
+
+        # Set box style and grid
+        ax.spines["top"].set_visible(True)
+        ax.spines["right"].set_visible(True)
+        ax.grid(True, linestyle="--", alpha=0.7)
+        ax.set_title(f"Feature: {feature_name}")
+
+        # Add colorbar in second axis
+        cb = plt.colorbar(plt.cm.ScalarMappable(norm=norm, cmap=cmap), cax=axs[i + 1])
+        cb.set_label("Feature value")
+        i += 2
+    for ax in axs[i:]:
+        ax.axis("off")
+    fig.suptitle(title)
     return fig, axs
