@@ -1,3 +1,5 @@
+# TODO -  Remove the requirement for .pqt and .parquet separately. Or handle it by defining a repo wide VARIABLE.
+
 import hashlib
 from pathlib import Path
 from typing import Any, Dict
@@ -86,19 +88,17 @@ def get_aggregated_snippets_df(probe_level_dir: Path):
     return df
 
 
-def add_metadata_to_parquet_files(
-    snippet_level_dir: Path, **snippet_attrs: Dict[str, Any]
-):
+def add_metadata_to_parquet_files(**snippet_attrs: Dict[str, Any]):
     """
     Add metadata attributes to all .parquet and .pqt files in subdirectories of the given directory.
 
     Args:
-        directory (Path): Base directory to search for subdirectories
         **snippet_attrs: Additional key-value pairs to add as metadata attributes
 
     Returns:
         None
     """
+    snippet_level_dir = Path(snippet_attrs["snippet_level_dir"])
     if not snippet_level_dir.exists() or not snippet_level_dir.is_dir():
         logger.warning(
             f"Directory {snippet_level_dir} does not exist or is not a directory"
@@ -109,6 +109,8 @@ def add_metadata_to_parquet_files(
         snippet_level_dir.glob("*.pqt")
     ):
         _update_parquet_metadata(file_path, **snippet_attrs)
+
+    logger.info(f"Updated metadata for {snippet_level_dir}")
 
 
 def _update_parquet_metadata(file_path: Path, **snippet_attrs: Dict[str, Any]):

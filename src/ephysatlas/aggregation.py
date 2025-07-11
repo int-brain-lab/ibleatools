@@ -99,6 +99,8 @@ def aggregate_channels_data(
     df_channels = pd.concat(df_channels)
     df_channels = df_channels.groupby(["pid", "channel"]).first()
     if output_dir is not None:
+        # Create the output directory if it doesn't exist
+        output_dir.mkdir(parents=True, exist_ok=True)
         df_channels.to_parquet(output_dir / "channels.parquet")
     return df_channels
 
@@ -132,6 +134,8 @@ def aggregate_raw_features(input_df: pd.DataFrame, output_dir: Path | None = Non
         df_final = pd.concat([df_final, df_voltage])
 
     if output_dir is not None:
+        # Create the output directory if it doesn't exist
+        output_dir.mkdir(parents=True, exist_ok=True)
         df_final.to_parquet(output_dir / "raw_ephys_features.parquet")
 
     return df_final

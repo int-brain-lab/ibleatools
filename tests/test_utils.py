@@ -6,8 +6,14 @@ import unittest
 import tempfile
 import hashlib
 from pathlib import Path
+import pandas as pd
 
-from ephysatlas.utils import setup_output_directory
+from ephysatlas.utils import (
+    setup_output_directory,
+    get_aggregated_snippets_df,
+    add_metadata_to_parquet_files,
+    _update_parquet_metadata,
+)
 
 
 class TestSetupOutputDirectory(unittest.TestCase):
@@ -186,6 +192,214 @@ class TestSetupOutputDirectory(unittest.TestCase):
 
         # Should have different hash
         self.assertNotEqual(probe_level_dir1.name, probe_level_dir3.name)
+
+
+class TestGetAggregatedSnippetsDf(unittest.TestCase):
+    """Test the get_aggregated_snippets_df function."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.base_path = Path(self.temp_dir)
+
+    def tearDown(self):
+        import shutil
+
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_get_aggregated_snippets_df_empty_directory(self):
+        """Test with empty probe level directory."""
+        df = get_aggregated_snippets_df(self.base_path)
+        self.assertTrue(df.empty)
+        self.assertEqual(len(df), 0)
+
+    def test_get_aggregated_snippets_df_with_parquet_files(self):
+        """Test with snippet directories containing parquet files."""
+        # Create snippet directories
+        snippet_dir1 = self.base_path / "snippet1"
+        snippet_dir2 = self.base_path / "snippet2"
+        snippet_dir1.mkdir()
+        snippet_dir2.mkdir()
+
+        # Create test dataframes with metadata
+        df1 = pd.DataFrame({"data": [1, 2, 3]})
+        df1.attrs["pid"] = "test_pid_1"
+        df1.attrs["t_start"] = 100.0
+
+        df2 = pd.DataFrame({"data": [4, 5, 6]})
+        df2.attrs["pid"] = "test_pid_2"
+        df2.attrs["t_start"] = 200.0
+
+        # Save parquet files
+        df1.to_parquet(snippet_dir1 / "data.parquet")
+        df2.to_parquet(snippet_dir2 / "data.pqt")
+
+        # Test function
+        result_df = get_aggregated_snippets_df(self.base_path)
+
+        # Check results
+        self.assertEqual(len(result_df), 2)
+        self.assertIn("pid", result_df.columns)
+        self.assertIn("t_start", result_df.columns)
+        self.assertIn("test_pid_1", result_df["pid"].values)
+        self.assertIn("test_pid_2", result_df["pid"].values)
+
+    def test_get_aggregated_snippets_df_mixed_content(self):
+        """Test with directories containing both parquet files and other content."""
+        # Create snippet directory
+        snippet_dir = self.base_path / "snippet1"
+        snippet_dir.mkdir()
+
+        # Create a text file (should be ignored)
+        (snippet_dir / "data.txt").write_text("test")
+
+        # Create parquet file with metadata
+        df = pd.DataFrame({"data": [1, 2, 3]})
+        df.attrs["pid"] = "test_pid"
+        df.to_parquet(snippet_dir / "data.parquet")
+
+        # Test function
+        result_df = get_aggregated_snippets_df(self.base_path)
+
+        # Should only process parquet files
+        self.assertEqual(len(result_df), 1)
+        self.assertEqual(result_df.iloc[0]["pid"], "test_pid")
+
+
+class TestAddMetadataToParquetFiles(unittest.TestCase):
+    """Test the add_metadata_to_parquet_files function."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.base_path = Path(self.temp_dir)
+
+    def tearDown(self):
+        import shutil
+
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_add_metadata_to_parquet_files(self):
+        """Test adding metadata to parquet files."""
+        # Create test dataframe
+        df = pd.DataFrame({"data": [1, 2, 3, 4, 5]})
+        df.to_parquet(self.base_path / "test.parquet")
+
+        # Test adding metadata
+        snippet_attrs = {
+            "snippet_level_dir": str(self.base_path),
+            "pid": "test_pid",
+            "t_start": 100.0,
+            "duration": 5.0,
+        }
+
+        add_metadata_to_parquet_files(**snippet_attrs)
+
+        # Verify metadata was added
+        result_df = pd.read_parquet(self.base_path / "test.parquet")
+        self.assertEqual(result_df.attrs["pid"], "test_pid")
+        self.assertEqual(result_df.attrs["t_start"], 100.0)
+        self.assertEqual(result_df.attrs["duration"], 5.0)
+
+    def test_add_metadata_to_parquet_files_multiple_formats(self):
+        """Test adding metadata to both .parquet and .pqt files."""
+        # Create test dataframes
+        df1 = pd.DataFrame({"data": [1, 2, 3]})
+        df2 = pd.DataFrame({"data": [4, 5, 6]})
+
+        df1.to_parquet(self.base_path / "test1.parquet")
+        df2.to_parquet(self.base_path / "test2.pqt")
+
+        # Test adding metadata
+        snippet_attrs = {
+            "snippet_level_dir": str(self.base_path),
+            "pid": "test_pid",
+            "custom_attr": "test_value",
+        }
+
+        add_metadata_to_parquet_files(**snippet_attrs)
+
+        # Verify metadata was added to both files
+        result_df1 = pd.read_parquet(self.base_path / "test1.parquet")
+        result_df2 = pd.read_parquet(self.base_path / "test2.pqt")
+
+        self.assertEqual(result_df1.attrs["pid"], "test_pid")
+        self.assertEqual(result_df1.attrs["custom_attr"], "test_value")
+        self.assertEqual(result_df2.attrs["pid"], "test_pid")
+        self.assertEqual(result_df2.attrs["custom_attr"], "test_value")
+
+    def test_add_metadata_to_parquet_files_nonexistent_directory(self):
+        """Test behavior with nonexistent directory."""
+        snippet_attrs = {
+            "snippet_level_dir": str(self.base_path / "nonexistent"),
+            "pid": "test_pid",
+        }
+
+        # Should not raise error, just log warning
+        add_metadata_to_parquet_files(**snippet_attrs)
+
+
+class TestUpdateParquetMetadata(unittest.TestCase):
+    """Test the _update_parquet_metadata function."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.base_path = Path(self.temp_dir)
+
+    def tearDown(self):
+        import shutil
+
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_update_parquet_metadata_success(self):
+        """Test successful metadata update."""
+        # Create test dataframe
+        df = pd.DataFrame({"data": [1, 2, 3]})
+        file_path = self.base_path / "test.parquet"
+        df.to_parquet(file_path)
+
+        # Test updating metadata
+        snippet_attrs = {
+            "pid": "test_pid",
+            "t_start": 100.0,
+            "duration": 5.0,
+        }
+
+        _update_parquet_metadata(file_path, **snippet_attrs)
+
+        # Verify metadata was updated
+        result_df = pd.read_parquet(file_path)
+        self.assertEqual(result_df.attrs["pid"], "test_pid")
+        self.assertEqual(result_df.attrs["t_start"], 100.0)
+        self.assertEqual(result_df.attrs["duration"], 5.0)
+
+    def test_update_parquet_metadata_preserves_existing_attrs(self):
+        """Test that existing metadata attributes are preserved."""
+        # Create test dataframe with existing metadata
+        df = pd.DataFrame({"data": [1, 2, 3]})
+        df.attrs["existing_attr"] = "existing_value"
+        file_path = self.base_path / "test.parquet"
+        df.to_parquet(file_path)
+
+        # Test updating metadata
+        snippet_attrs = {
+            "pid": "test_pid",
+            "new_attr": "new_value",
+        }
+
+        _update_parquet_metadata(file_path, **snippet_attrs)
+
+        # Verify both old and new metadata are present
+        result_df = pd.read_parquet(file_path)
+        self.assertEqual(result_df.attrs["existing_attr"], "existing_value")
+        self.assertEqual(result_df.attrs["pid"], "test_pid")
+        self.assertEqual(result_df.attrs["new_attr"], "new_value")
+
+    def test_update_parquet_metadata_nonexistent_file(self):
+        """Test behavior with nonexistent file."""
+        file_path = self.base_path / "nonexistent.parquet"
+        snippet_attrs = {"pid": "test_pid"}
+
+        # Should not raise error, just log warning
+        _update_parquet_metadata(file_path, **snippet_attrs)
 
 
 if __name__ == "__main__":

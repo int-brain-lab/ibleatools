@@ -247,7 +247,7 @@ def load_data_from_pid(
         channels = pd.read_parquet(file_channels)
         channels = {col: channels[col].to_numpy() for col in channels.columns}
     else:
-        logger.info("Recomputing channels")
+        logger.info("Getting channels from SpikeGLX reader")
         try:
             channels = ssl.load_channels()
         except KeyError as e:
@@ -514,10 +514,10 @@ def compute_features_from_pid(
         "pid": pid,
         "t_start": t_start,
         "duration": duration,
-        "snippet_level_dir": snippet_level_dir,
+        "snippet_level_dir": snippet_level_dir.as_posix(),
     }
 
-    add_metadata_to_parquet_files(snippet_level_dir=snippet_level_dir, **snippet_attrs)
+    add_metadata_to_parquet_files(**snippet_attrs)
 
     return df
 
