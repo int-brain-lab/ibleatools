@@ -26,7 +26,7 @@ __features_version__ = (
     "2025.07.01"  # this is the version of this feature extractor code
 )
 
-
+#TODO - Scratch_dir path is not working as expected. Even if I pass the scratch_dir argument in the main compute_features function, here I am gettig log from Path("/scratch/dartsort/")
 def _setup_scratch_directory(scratch_dir=None):
     """
     Set up scratch directory with fallback logic.
@@ -555,6 +555,7 @@ def denoise_dataframe(df_pid, feature_names=None, fac=1, channel_labels=None):
         A new dataframe with the same structure as the input, but with denoised feature values.
         Non-feature columns are copied without modification.
     """
+    # TODO : Should I try to read channel labels from the df_pid itself??
     if channel_labels is None:
         channel_labels = np.zeros(df_pid.shape[0], dtype=int)
     if feature_names is None:

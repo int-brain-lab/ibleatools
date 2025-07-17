@@ -199,8 +199,8 @@ def read_features_from_disk(
         f"Unknown mapping: {mappings}"
     )
     # merge the channel information with the features
-    df_features = pd.read_parquet(path_features / "raw_ephys_features_denoised.pqt")
-    df_channels = pd.read_parquet(path_features / "channels.pqt")
+    df_features = pd.read_parquet(path_features / "raw_ephys_features_denoised.parquet")
+    df_channels = pd.read_parquet(path_features / "channels.parquet")
     duplicate_cols = set(df_features.columns).intersection(set(df_channels.columns))
     df_channels = df_channels.drop(columns=duplicate_cols)
     df_features = df_features.merge(
@@ -213,7 +213,7 @@ def read_features_from_disk(
         "labels" not in df_features.columns
     ):
         df_features = df_features.merge(
-            pd.read_parquet(path_features / "channels_labels.pqt").fillna(0),
+            pd.read_parquet(path_features / "channels_labels.parquet").fillna(0),
             how="inner",
             right_index=True,
             left_index=True,

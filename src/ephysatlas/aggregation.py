@@ -4,86 +4,53 @@ import logging
 import pandas as pd
 from functools import reduce
 from ephysatlas.utils import get_aggregated_snippets_df
-from ephysatlas.features import ChannelDataFrameSchema
+from ephysatlas.features import ChannelDataFrameSchema, ModelRawFeatures
 from ephysatlas.features import denoise_dataframe
 import tqdm
+import numpy as np
 
 # Set up logger
 logger = logging.getLogger(__name__)
 
+#TODO - Test at the end - ephysatlas.data.read_features_from_disk(path_features, brain_atlas=brain_atlas, strict=True)
+
+
 
 def aggregate_all_probes(path_list: List[Path]):
     """
-    Aggregate all probes in the path list.
+    Aggregates data from multiple probe directories into a single DataFrame.
+
+    For each path in the provided list, this function calls `get_aggregated_snippets_df(path)`
+    to retrieve a DataFrame of aggregated snippet data, and concatenates the results into
+    a single DataFrame.
+
+    Parameters
+    ----------
+    path_list : List[pathlib.Path]
+        A list of Path objects, each pointing to a probe directory containing data
+        to be aggregated.
+
+    Returns
+    -------
+    pandas.DataFrame
+        A DataFrame containing the concatenated results from all probes in the path list.
+
+    Notes
+    -----
+    - Each path in `path_list` should be compatible with `get_aggregated_snippets_df`.
+    - The function ignores index continuity and resets the index in the returned DataFrame.
     """
     df = pd.DataFrame()
     for path in path_list:
-        df = pd.concat([df, get_aggregated_snippets_df(path)])
+        df = pd.concat([df, get_aggregated_snippets_df(path)], ignore_index=True)
     return df
 
 
-# Function to aggregate channels from ap_features.parquet file and add it to the channels.pqt file.
-
-
-def aggregate_channel_labels(probe_level_dir: Path) -> pd.Series | None:
-    """
-    Read all ap_features.parquet files, extract channel_labels column,
-    and get the mode across the column axis.
-    """
-    ap_files = list(probe_level_dir.glob("ap_features.parquet"))
-
-    if not ap_files:
-        print(f"No ap_features.parquet files found in {probe_level_dir}")
-        return None
-
-    # Read all ap_files and extract channel_labels column
-    channel_labels_dfs = []
-    for ap_file in ap_files:
-        df = pd.read_parquet(ap_file)
-        if "channel_labels" in df.columns:
-            channel_labels_dfs.append(df["channel_labels"])
-        else:
-            print(f"Warning: 'channel_labels' column not found in {ap_file}")
-
-    if not channel_labels_dfs:
-        print("No channel_labels columns found in any ap_files")
-        return None
-
-    # Combine all channel_labels columns into a single dataframe
-    combined_channel_labels = pd.concat(channel_labels_dfs, axis=1)
-
-    # Get the mode across the column axis (axis=1)
-    mode_result = combined_channel_labels.mode(axis=1)
-
-    # In case of multiple modes, take the first one
-    if mode_result.shape[1] > 1:
-        mode_result = mode_result.iloc[:, 0]
-
-    return mode_result
-
-
-def update_channel_pqt_with_channel_labels(probe_level_dir: Path):
-    """
-    Update the channels.pqt file with the channel labels.
-    """
-    channel_labels = aggregate_channel_labels(probe_level_dir)
-    if channel_labels is not None:
-        # Read the channels.pqt file
-        channels_df = pd.read_parquet(probe_level_dir / "channels.pqt")
-        # Update the channel_labels column
-        channels_df["channel_labels"] = channel_labels
-        # Write the updated channels.pqt file
-        channels_df.to_parquet(probe_level_dir / "channels.pqt")
-    else:
-        logger.warning(
-            f"No channel labels found in {probe_level_dir}. "
-            "Channel labels will not be updated."
-        )
 
 
 # Function to aggregate channels dataframe
 # Make sure that the channels.pqt file is updated with the channel labels.
-def aggregate_channels_data(
+def concatenate_channels_data(
     parquet_files_channels: List[Path], output_dir: Path | None = None
 ):
     """
@@ -98,6 +65,14 @@ def aggregate_channels_data(
         df_channels.append(dfd)
     df_channels = pd.concat(df_channels)
     df_channels = df_channels.groupby(["pid", "channel"]).first()
+
+    if "channel_labels" in df_channels.columns:
+        logger.warning(
+            "channel_labels column found in channels.parquet file. "
+            "This column will be dropped."
+        )
+        df_channels = df_channels.drop(columns=["channel_labels"])
+
     if output_dir is not None:
         # Create the output directory if it doesn't exist
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -109,6 +84,7 @@ def get_features_from_snippets(snippet_level_dir: Path):
     """
     Get features from the snippets.
     """
+    snippet_level_dir = Path(snippet_level_dir)
     feature_files = list(snippet_level_dir.glob("*.parquet"))
     df = {}
     for file in feature_files:
@@ -119,53 +95,140 @@ def get_features_from_snippets(snippet_level_dir: Path):
         [df[k] for k in df.keys()],
     )
 
+
     return df_voltage
 
-
-def aggregate_raw_features(input_df: pd.DataFrame, output_dir: Path | None = None):
+def concat_raw_features(input_df: pd.DataFrame):
     """
     Aggregate raw features from the input dataframe.
     """
-    # Get the concatenate version here and then reduce them using some aggregation method.
-    # Use dask if it is needed.
     df_final = pd.DataFrame()
-    for snippet_dir in input_df["snippet_level_dir"]:
+    for _, row  in input_df.iterrows():
+        snippet_dir = row["snippet_level_dir"]
         df_voltage = get_features_from_snippets(snippet_dir)
-        df_final = pd.concat([df_final, df_voltage])
-
-    if output_dir is not None:
-        # Create the output directory if it doesn't exist
-        output_dir.mkdir(parents=True, exist_ok=True)
-        df_final.to_parquet(output_dir / "raw_ephys_features.parquet")
+        df_final = pd.concat([df_final, df_voltage], ignore_index=True)
 
     return df_final
 
 
-def denoise_raw_features_data(aggregation_path: Path):
-    # Reimplement this
-    aggregation_path = Path(aggregation_path)
-    df_features = pd.read_parquet(aggregation_path / "raw_ephys_features.parquet")
+def aggregate_raw_features(concatenated_df: pd.DataFrame):
+    """
+    Aggregate raw features from the concatenated dataframe.
+    This function is being used to aggregate features for one pid for efficienct purpose
+    But this should work even if there are multiple pids in the dataframe.
+    """
+    # Group by pid and channel
+    raw_features_columns = ModelRawFeatures.to_schema().columns.keys()
 
+    #Columns in the dataframe
+    columns_in_df = concatenated_df.columns.tolist()
+
+    # Take intersection of the columns in the dataframe and the raw features columns
+    agg_columns = set(columns_in_df) & set(raw_features_columns)
+
+    # Aggregate the raw features
+    dagg = {
+        k: pd.NamedAgg(column=k, aggfunc="nanmedian") if k != "channel_labels"
+          else pd.NamedAgg(column=k, aggfunc=lambda x: x.mode().iloc[0] if not x.mode().empty else np.nan)
+        for k in agg_columns
+    }
+    aggregated_df = concatenated_df.groupby(["pid","channel"]).agg(**dagg)
+
+
+    return aggregated_df
+
+
+def get_aggregated_features_per_pid(snippet_df_per_pid: pd.DataFrame):
+    """"
+    Should return a dataframe with one pid, and number of rows equal to the number of channels.
+    The output is not multi-indexed at this stage
+    """
+    assert snippet_df_per_pid["pid"].nunique() == 1, "There should be only one pid in the dataframe"
+
+    # Get the concatenated version of all the raw features for each snippet
+    df_concat = concat_raw_features(snippet_df_per_pid)
+
+    # Add the pid to the dataframe
+    df_concat["pid"] = snippet_df_per_pid["pid"].iloc[0]
+
+    # Aggregate the raw features based
+    agg_df_per_pid = aggregate_raw_features(df_concat)
+
+    agg_df_per_pid = agg_df_per_pid.reset_index()
+
+    #Add axial_um and lateral_um information to the dataframe
+    #Assert that the parent of the snippet level dir has a channels.parquet file
+    snippet_level_dir = Path(snippet_df_per_pid["snippet_level_dir"].iloc[0])
+    if not (snippet_level_dir.parent / "channels.parquet").exists():
+        raise FileNotFoundError(
+            f"channels.parquet file not found in {snippet_level_dir.parent}"
+        )
+    df_channels = pd.read_parquet(snippet_level_dir.parent / "channels.parquet")
+    #Merge the 'axial_um', 'lateral_um' from df_channels with df_voltage on the channel column
+    agg_df_per_pid = agg_df_per_pid.merge(df_channels[["channel","axial_um", "lateral_um"]], on="channel", how="left")
+
+    return agg_df_per_pid
+
+
+def get_aggregated_raw_features(snippet_df: pd.DataFrame, output_dir: Path | None = None):
+    
+    agg_df = pd.DataFrame()
+    for idx, pid_df in snippet_df.groupby("pid"):
+        agg_df_per_pid = get_aggregated_features_per_pid(pid_df)
+        agg_df = pd.concat([agg_df, agg_df_per_pid], ignore_index=True)
+    # Set the multi-index to pid and channel
+    agg_df = agg_df.set_index(["pid", "channel"])
+
+    if output_dir is not None:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        agg_df.to_parquet(output_dir / "raw_ephys_features.parquet")
+
+    return agg_df
+
+
+
+def denoise_raw_features_data(agg_raw_ephys_features: pd.DataFrame, output_dir: Path | None = None):
+    # At this both channels and raw_ephys_features should be calculated.
     # # %% Denoise the features
     #
-    original_columns = df_features.columns.tolist()
-    df_features_merged = df_features.merge(
-        pd.read_parquet(aggregation_path / "channels.parquet"),
-        how="inner",
-        right_index=True,
-        left_index=True,
-    )
-    # df_features_merged = df_features_merged.merge(pd.read_parquet(path_features / 'channels_labels.pqt').fillna(0), how='inner', right_index=True, left_index=True)
-
+    original_columns = agg_raw_ephys_features.columns.tolist()
     df_pids = []
-    for pid, df_pid in tqdm.tqdm(df_features_merged.groupby("pid")):
-        df_denoised = denoise_dataframe(df_pid, fac=1)
+    for pid, df_pid in tqdm.tqdm(agg_raw_ephys_features.groupby("pid")):
+        df_denoised = denoise_dataframe(df_pid, fac=1, channel_labels=df_pid["channel_labels"].to_numpy())
         df_pids.append(df_denoised.loc[:, original_columns])
     df_features_denoise = pd.concat(df_pids)
 
-    df_features_denoise.to_parquet(aggregation_path / "raw_ephys_features_denoised.pqt")
+    if output_dir is not None:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        df_features_denoise.to_parquet(output_dir / "raw_ephys_features_denoised.parquet")
 
     return df_features_denoise
+
+#  TODO: Information in input_dir, can be compiled in the snippet_df
+# I should add a probe_level_dir in snippets_df as well. to get the channel labels.
+def produce_output_dataframes(snippets_df: pd.DataFrame, input_dir: Path, output_dir: Path | None = None):
+    output_dir = Path(output_dir)
+    if output_dir is not None:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        snippets_df.to_parquet(output_dir / "snippets_df.parquet")
+
+    channels_pqt_files = list(Path(input_dir).glob("*/channels.parquet"))
+    df_channels = concatenate_channels_data(channels_pqt_files, output_dir=output_dir)
+
+    # Get the raw ephys features
+    df_raw_ephys = get_aggregated_raw_features(snippets_df, output_dir=output_dir)
+
+    # Denoise the raw ephys features
+    df_features_denoise = denoise_raw_features_data(df_raw_ephys, output_dir=output_dir)
+
+    return df_channels, df_raw_ephys, df_features_denoise
+    
+    
+
+
+
+# Write a function that does all the three things together and outputs channel , raw ephys and raw_ephys denoised.
+
 
     # # %% Eventually upload to S3
     # print(f'aws --profile ibl s3 sync "{path_features}" s3://ibl-brain-wide-map-private/aggregates/atlas')

@@ -178,7 +178,8 @@ def online_feature_computation(
         else:
             channel_labels, _ = ibldsp.voltage.detect_bad_channels(raw_ap, fs=sr_ap.fs)
         # There is no need to update the channel labels, since we do it later on during aggregation.
-        # channels["labels"] = channel_labels
+    else:
+        channel_labels = channels["labels"]
 
     return compute_features_from_raw(
         raw_ap=raw_ap,
@@ -483,14 +484,18 @@ def compute_features_from_pid(
     channels = add_target_coordinates(pid=pid, one=one, channels=channels)
 
     # Export the channels file
-    file_channels = probe_level_dir / "channels.parquet"
+    if probe_level_dir is not None:
+        file_channels = probe_level_dir / "channels.parquet"
 
     # TODO have another condition that checks if the existing channels file has all channels or if it matches the channels dict.
     # TODO Make a module channel computation function that takes probe_level_dir AND pid(because it should work for non pid case as well) as an input.
-    if not file_channels.exists() or (recompute_channels):
+    if probe_level_dir is not None and (not file_channels.exists() or (recompute_channels)):
         try:
             df_channels = pd.DataFrame(channels).rename(columns={"rawInd": "channel"})
             df_channels["pid"] = pid
+            # Remove the labels columns from df_channels if it exists
+            if "labels" in df_channels.columns:
+                df_channels = df_channels.drop(columns=["labels"])
             df_channels.to_parquet(file_channels)
         except Exception as e:
             logger.error(f"Failed to export channels file: {str(e)}")
