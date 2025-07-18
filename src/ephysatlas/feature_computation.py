@@ -217,9 +217,9 @@ def load_data_from_pid(
 
     if one.__class__.__name__ == "OneSdsc":
         logger.info(f"Loading data using OneSdsc: {pid}")
-        assert pid is not None and eid is not None and probe_name is not None, (
-            "pid, eid, and probe_name are required for OneSdsc"
-        )
+        assert (
+            pid is not None and eid is not None and probe_name is not None
+        ), "pid, eid, and probe_name are required for OneSdsc"
 
         ssl = SpikeSortingLoader(pid=pid, eid=eid, pname=probe_name, one=one)
         stream = False
@@ -648,12 +648,12 @@ def compute_features_from_raw(
     """
     # Assert input shapes and parameters
     assert raw_ap.ndim == 2 and raw_lf.ndim == 2, "Input arrays must be 2D"
-    assert raw_ap.shape[0] == raw_lf.shape[0], (
-        "Number of channels must match between AP and LF data"
-    )
-    assert raw_ap.shape[0] == len(geometry["x"]) == len(geometry["y"]), (
-        "Number of channels must match geometry"
-    )
+    assert (
+        raw_ap.shape[0] == raw_lf.shape[0]
+    ), "Number of channels must match between AP and LF data"
+    assert (
+        raw_ap.shape[0] == len(geometry["x"]) == len(geometry["y"])
+    ), "Number of channels must match geometry"
     assert fs_ap > 0 and fs_lf > 0, "Sampling frequencies must be positive"
 
     if channel_labels is None:

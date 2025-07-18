@@ -11,7 +11,7 @@ VINTAGE = '2025_W28'
 # this will download the Allen brain templates
 brain_atlas = ephysatlas.anatomy.ClassifierAtlas()
 
-path_features = Path(f"/mnt/s0/ephys-atlas-decoding/features/{VINTAGE}")  # parede
+path_features = Path(f'/datadisk/Data/paper-ephys-atlas/ephys-atlas-decoding/features/{VINTAGE}')  # mac
 if not path_features.exists():
     # an ONE account is required to access the private IBL datasets
     one = ONE(base_url='https://alyx.internationalbrainlab.org', mode='remote')

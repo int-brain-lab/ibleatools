@@ -1,6 +1,7 @@
 import logging
 
 import numpy as np
+import pandas as pd
 import scipy.stats
 
 import matplotlib.pyplot as plt
@@ -280,16 +281,19 @@ def plot_probe_rect2(xy, color, ax, width=16, height=40, colorbar=False):
 
 
 def figure_features_channel_space(
-    pid_df,
-    features,
-    xy,
-    pid,
-    fig=None,
-    axs=None,
-    br=None,
-    mapping="Cosmos",
-    plot_rect=plot_probe_rect2,
-    cmap="viridis",
+    pid_df: pd.DataFrame,
+    features: list[str],
+    xy: np.ndarray,
+    pid: str,
+    fig: plt.Figure = None,
+    axs: np.ndarray = None,
+    br: BrainRegions = None,
+    mapping: str = "Cosmos",
+    plot_rect: callable = plot_probe_rect2,
+    cmap: str = "viridis",
+    scaler: object = None,
+    vmin: float = None,
+    vmax: float = None,
 ):
     """
     Create a figure displaying electrophysiological features and brain regions along a probe.
@@ -310,7 +314,7 @@ def figure_features_channel_space(
         pid = '0228bcfd-632e-49bd-acd4-c334cf9213e9'
         pid_df = df_voltage[df_voltage.index.get_level_values(0).isin([pid])].copy()
 
-    features : list
+    features : list of str
         List of feature names to display, e.g. ['rms_lf', 'psd_delta', 'rms_ap'].
         These must be column keys in pid_df.
 
@@ -334,11 +338,21 @@ def figure_features_channel_space(
         Brain region mapping to use. The function will look for columns named
         "{mapping}_id" in pid_df.
 
-    plot_rect : function, default plot_probe_rect2
+    plot_rect : callable, default plot_probe_rect2
         Function to use for plotting rectangles. Should accept xy, color, and ax parameters.
 
     cmap : str, default "viridis"
         Colormap name to use for feature visualization.
+
+    scaler : object, optional
+        Scaling to be applied to feature values before displaying. Should have a transform method
+        (like sklearn.preprocessing.StandardScaler).
+
+    vmin : float, optional
+        Minimum value for color normalization. If None, the minimum value in the data is used.
+
+    vmax : float, optional
+        Maximum value for color normalization. If None, the maximum value in the data is used.
 
     Returns
     -------
@@ -351,7 +365,9 @@ def figure_features_channel_space(
     if br is None:
         br = BrainRegions()
     if fig is None or axs is None:
-        fig, axs = plt.subplots(1, len(features) + 4, sharey=False)
+        fig, axs = plt.subplots(1, len(features) + 4, sharey=False, figsize=(9, 5))
+    if scaler is not None:
+        pid_df.loc[:, features] = scaler.transform(pid_df.loc[:, features])
 
     brainbox.ephys_plots.plot_brain_regions(
         pid_df["Allen_id"].values,
@@ -367,7 +383,7 @@ def figure_features_channel_space(
         feat_arr = pid_df[[feature]].to_numpy()
         # Plot feature
         # todo OW use the min/max values from the pandera schemes instead
-        color = get_color_feat(feat_arr, cmap_name=cmap)
+        color = get_color_feat(feat_arr, cmap_name=cmap, min_val=vmin, max_val=vmax)
         plot_rect(xy, color, ax=ax)
         ax.set_title(feature, rotation=90)
         ax.set_xticklabels([])
