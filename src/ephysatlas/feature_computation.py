@@ -237,7 +237,7 @@ def load_data_from_pid(
 
     # Load the channels file
     if probe_level_dir is not None:
-        file_channels = Path(probe_level_dir) / "channels.parquet"
+        file_channels = Path(probe_level_dir) / "channels.pqt"
 
     if (
         probe_level_dir is not None
@@ -401,7 +401,7 @@ def compute_features(
         )
 
     # Export the channels file
-    file_channels = probe_level_dir / "channels.parquet"
+    file_channels = probe_level_dir / "channels.pqt"
     if not file_channels.exists():
         try:
             df_channels = pd.DataFrame(channels).rename(columns={"rawInd": "channel"})
@@ -485,7 +485,7 @@ def compute_features_from_pid(
 
     # Export the channels file
     if probe_level_dir is not None:
-        file_channels = probe_level_dir / "channels.parquet"
+        file_channels = probe_level_dir / "channels.pqt"
 
     # TODO have another condition that checks if the existing channels file has all channels or if it matches the channels dict.
     # TODO Make a module channel computation function that takes probe_level_dir AND pid(because it should work for non pid case as well) as an input.
@@ -515,14 +515,16 @@ def compute_features_from_pid(
     )
 
     # Add metadata to all parquet files in subdirectories
-    snippet_attrs = {
-        "pid": pid,
-        "t_start": t_start,
-        "duration": duration,
-        "snippet_level_dir": snippet_level_dir.as_posix(),
-    }
+    if output_dir is not None:
+        snippet_attrs = {
+            "pid": pid,
+            "t_start": t_start,
+            "duration": duration,
+            "base_level_dir": output_dir.as_posix(),
+            "snippet_level_dir": snippet_level_dir.relative_to(output_dir).as_posix(),
+        }
 
-    add_metadata_to_parquet_files(**snippet_attrs)
+        add_metadata_to_parquet_files(**snippet_attrs)
 
     return df
 
@@ -609,7 +611,7 @@ def compute_features_from_file(
         )
 
     # Export the channels file
-    file_channels = probe_level_dir / "channels.parquet"
+    file_channels = probe_level_dir / "channels.pqt"
     if not file_channels.exists():
         try:
             df_channels = pd.DataFrame(channels).rename(columns={"rawInd": "channel"})
@@ -703,14 +705,14 @@ def compute_features_from_raw(
     def save_features(feature_name, feature_df):
         if output_dir is not None:
             output_dir.mkdir(parents=True, exist_ok=True)
-            file_path = output_dir / f"{feature_name}_features.parquet"
+            file_path = output_dir / f"{feature_name}_features.pqt"
             feature_df.to_parquet(file_path)
             logger.info(f"Saved {feature_name} features to {file_path}")
 
     # Function to load features from file
     def load_features(feature_name):
         if output_dir is not None:
-            file_path = output_dir / f"{feature_name}_features.parquet"
+            file_path = output_dir / f"{feature_name}_features.pqt"
             if file_path.exists():
                 logger.info(f"Loading {feature_name} features from {file_path}")
                 return pd.read_parquet(file_path)

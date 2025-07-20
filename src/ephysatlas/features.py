@@ -557,7 +557,10 @@ def denoise_dataframe(df_pid, feature_names=None, fac=1, channel_labels=None):
     """
     # TODO : Should I try to read channel labels from the df_pid itself??
     if channel_labels is None:
-        channel_labels = np.zeros(df_pid.shape[0], dtype=int)
+        if "channel_labels" in df_pid.columns:
+            channel_labels = df_pid["channel_labels"].to_numpy()
+        else:
+            channel_labels = np.zeros(df_pid.shape[0], dtype=int)
     if feature_names is None:
         feature_names = list(
             set(voltage_features_set(["raw_ap", "raw_lf", "raw_lf_csd", "waveforms"]))
@@ -575,9 +578,19 @@ def denoise_dataframe(df_pid, feature_names=None, fac=1, channel_labels=None):
         else:
             fval = np.copy(df_pid[feature_name].to_numpy())
         fval[channel_labels != 0] = np.nan
-        df_pid_denoise.loc[:, feature_name] = denoise_shank(
+        logger.warning(f"Calculation for feature_name = {feature_name}")
+        denoised_values = denoise_shank(
             feature=fval,
             xy=df_pid[["lateral_um", "axial_um"]].values,
             fac=fac,
         )
+        # Check that the denoised values have the expected length
+        if len(denoised_values) != len(df_pid_denoise):
+            raise ValueError(
+                f"Length mismatch for feature '{feature_name}': "
+                f"denoised values length ({len(denoised_values)}) != "
+                f"DataFrame length ({len(df_pid_denoise)})"
+            )
+        # Let pandas determine the appropriate dtype for the new values
+        df_pid_denoise[feature_name] = denoised_values
     return df_pid_denoise

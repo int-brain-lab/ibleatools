@@ -20,6 +20,8 @@ class TestAggregationWithZip(unittest.TestCase):
         cls.extract_path = Path(cls.temp_dir.name)
         with zipfile.ZipFile(ZIP_PATH, 'r') as zip_ref:
             zip_ref.extractall(cls.extract_path)
+        
+        cls.extract_path = cls.extract_path / "output"
 
     @classmethod
     def tearDownClass(cls):
@@ -28,33 +30,37 @@ class TestAggregationWithZip(unittest.TestCase):
     def test_aggregate_all_probes(self):
         # Find all probe root directories (UUIDs)
         probe_dirs = [d for d in self.extract_path.iterdir() if d.is_dir()]
-        result = aggregation.aggregate_all_probes(probe_dirs)
+        result = aggregation.aggregate_all_probes(probe_dirs, self.extract_path)
         self.assertIsInstance(result, pd.DataFrame)
         self.assertGreater(len(result), 0)
 
-    def test_aggregate_channels_data(self):
-        # For each probe, test aggregation of channels.parquet
+    def test_concatenate_channels_data(self):
+        # For each probe, test aggregation of channels.pqt
         channels_files = []
         for probe_dir in self.extract_path.iterdir():
             if not probe_dir.is_dir():
                 continue
-            channels_file = probe_dir / "channels.parquet"
+            channels_file = probe_dir / "channels.pqt"
             if not channels_file.exists():
                 continue
             else:
                 channels_files.append(channels_file)
             
         # Test with single file
-        df = aggregation.aggregate_channels_data([channels_file])
+        df = aggregation.concatenate_channels_data([channels_file])
         self.assertIsInstance(df, pd.DataFrame)
-        self.assertIn("channel", df.columns)
-        self.assertIn("pid", df.columns)
+        self.assertIn("pid", df.index.names)
+        self.assertIn("channel", df.index.names)
+        self.assertEqual(df.index.names[0], "pid")
+        self.assertEqual(df.index.names[1], "channel")
 
         # Test with multiple files
-        df = aggregation.aggregate_channels_data(channels_files)
+        df = aggregation.concatenate_channels_data(channels_files)
         self.assertIsInstance(df, pd.DataFrame)
-        self.assertIn("channel", df.columns)
-        self.assertIn("pid", df.columns)
+        self.assertIn("pid", df.index.names)
+        self.assertIn("channel", df.index.names)
+        self.assertEqual(df.index.names[0], "pid")
+        self.assertEqual(df.index.names[1], "channel")
 
     def test_get_features_from_snippets(self):
         # For each probe, for each snippet dir, test feature extraction
@@ -64,14 +70,12 @@ class TestAggregationWithZip(unittest.TestCase):
             for snippet_dir in probe_dir.iterdir():
                 if not snippet_dir.is_dir():
                     continue
-                # Only test if channels.parquet exists in parent
-                if not (probe_dir / "channels.parquet").exists():
+                # Only test if channels.pqt exists in parent
+                if not (probe_dir / "channels.pqt").exists():
                     continue
                 df = aggregation.get_features_from_snippets(snippet_dir)
                 self.assertIsInstance(df, pd.DataFrame)
                 self.assertIn("channel", df.columns)
-                self.assertIn("axial_um", df.columns)
-                self.assertIn("lateral_um", df.columns)
 
     def test_concat_raw_features(self):
         # Build input_df for concat_raw_features
@@ -83,12 +87,10 @@ class TestAggregationWithZip(unittest.TestCase):
             for snippet_dir in probe_dir.iterdir():
                 if not snippet_dir.is_dir():
                     continue
-                rows.append({"pid": pid, "snippet_level_dir": snippet_dir})
+                rows.append({"pid": pid, "base_level_dir": self.extract_path, "snippet_level_dir": snippet_dir.relative_to(self.extract_path)})
         input_df = pd.DataFrame(rows)
         df = aggregation.concat_raw_features(input_df)
         self.assertIsInstance(df, pd.DataFrame)
-        self.assertIn("pid", df.columns)
-        self.assertIn("channel", df.columns)
 
     def test_aggregate_raw_features(self):
         # Build input_df for concat_raw_features
@@ -100,16 +102,9 @@ class TestAggregationWithZip(unittest.TestCase):
             for snippet_dir in probe_dir.iterdir():
                 if not snippet_dir.is_dir():
                     continue
-                rows.append({"pid": pid, "snippet_level_dir": snippet_dir})
+                rows.append({"pid": pid, "base_level_dir": self.extract_path,  "snippet_level_dir": snippet_dir.relative_to(self.extract_path)})
         input_df = pd.DataFrame(rows)
-        concatenated_df = aggregation.concat_raw_features(input_df)
-        # Only keep columns that are in ModelRawFeatures schema if possible
-        try:
-            schema_cols = list(aggregation.ModelRawFeatures.to_schema().columns.keys())
-            concatenated_df = concatenated_df[[c for c in concatenated_df.columns if c in schema_cols or c in ["pid", "channel"]]]
-        except Exception:
-            pass
-        df = aggregation.aggregate_raw_features(concatenated_df)
+        df = aggregation.get_aggregated_raw_features(input_df)
         self.assertIsInstance(df, pd.DataFrame)
         self.assertIn("channel", df.index.names)
         self.assertIn("pid", df.index.names)

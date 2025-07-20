@@ -4,6 +4,7 @@ import zipfile
 from pathlib import Path
 import pandas as pd
 from unittest.mock import MagicMock
+import shutil
 
 from src.ephysatlas.aggregation import aggregate_all_probes, produce_output_dataframes
 from src.ephysatlas import data
@@ -28,14 +29,13 @@ class TestAggregationOutputs(unittest.TestCase):
         # Get all probe-level directories (immediate subdirs of 'output')
         cls.probe_dirs = [p for p in cls.extract_dir.glob("*") if p.is_dir()]
         # Aggregate all probes into a single DataFrame
-        cls.snippets_df = aggregate_all_probes(cls.probe_dirs)
+        cls.snippets_df = aggregate_all_probes(cls.probe_dirs, cls.extract_dir)
         # Get all unique pids
         cls.pids = cls.snippets_df['pid'].unique()
         # DataFrame for only one pid
         cls.snippets_df_one_pid = cls.snippets_df[cls.snippets_df['pid'] == cls.pids[0]].reset_index(drop=True)
         # DataFrame for two pids, but only one snippet (t0) per pid
-        t0_rows = cls.snippets_df.groupby('pid').apply(lambda g: g[g['t_start'] == g['t_start'].min()]).reset_index(drop=True)
-        cls.snippets_df_two_pids_one_snippet = t0_rows
+        cls.snippets_df_two_pids_one_snippet = cls.snippets_df.iloc[[0,2]]
 
     @classmethod
     def tearDownClass(cls):
@@ -44,9 +44,10 @@ class TestAggregationOutputs(unittest.TestCase):
     def _run_and_check_outputs(self, snippets_df, input_dir, output_dir, expected_pids):
         # Run the function
         df_channels, df_raw_ephys, df_features_denoise = produce_output_dataframes(snippets_df, input_dir, output_dir)
+
         # Check that the output files exist
         output_dir = Path(output_dir)
-        self.assertTrue((output_dir / "snippets_df.parquet").exists())
+        self.assertTrue((output_dir / "snippets_df.pqt").exists())
         # Check that the DataFrames are not empty
         self.assertFalse(df_channels.empty)
         self.assertFalse(df_raw_ephys.empty)

@@ -15,8 +15,8 @@ logger = logging.getLogger(__name__)
 #TODO - Test at the end - ephysatlas.data.read_features_from_disk(path_features, brain_atlas=brain_atlas, strict=True)
 
 
-
-def aggregate_all_probes(path_list: List[Path]):
+# TODO - There can be a better way to specify both of these arguments - maybe only one is needed.
+def aggregate_all_probes(path_list: List[Path], base_level_dir: Path | None | str = None):
     """
     Aggregates data from multiple probe directories into a single DataFrame.
 
@@ -43,6 +43,10 @@ def aggregate_all_probes(path_list: List[Path]):
     df = pd.DataFrame()
     for path in path_list:
         df = pd.concat([df, get_aggregated_snippets_df(path)], ignore_index=True)
+
+    if base_level_dir is not None:
+        df["base_level_dir"] = Path(base_level_dir).as_posix()
+
     return df
 
 
@@ -63,12 +67,14 @@ def concatenate_channels_data(
             dfd["channel"] = dfd.index
         ChannelDataFrameSchema.validate(dfd)
         df_channels.append(dfd)
+    logger.debug(f"Length of df_channels = {len(df_channels)}")
+    logger.debug(f"Shape of df_channels items = {[d.shape for d in df_channels]}")
     df_channels = pd.concat(df_channels)
     df_channels = df_channels.groupby(["pid", "channel"]).first()
 
     if "channel_labels" in df_channels.columns:
         logger.warning(
-            "channel_labels column found in channels.parquet file. "
+            "channel_labels column found in channels.pqt file. "
             "This column will be dropped."
         )
         df_channels = df_channels.drop(columns=["channel_labels"])
@@ -76,7 +82,7 @@ def concatenate_channels_data(
     if output_dir is not None:
         # Create the output directory if it doesn't exist
         output_dir.mkdir(parents=True, exist_ok=True)
-        df_channels.to_parquet(output_dir / "channels.parquet")
+        df_channels.to_parquet(output_dir / "channels.pqt")
     return df_channels
 
 
@@ -85,7 +91,8 @@ def get_features_from_snippets(snippet_level_dir: Path):
     Get features from the snippets.
     """
     snippet_level_dir = Path(snippet_level_dir)
-    feature_files = list(snippet_level_dir.glob("*.parquet"))
+    print(f"snippet_level_dir = {snippet_level_dir}")
+    feature_files = list(snippet_level_dir.glob("*.pqt"))
     df = {}
     for file in feature_files:
         df[file.stem] = pd.read_parquet(file)
@@ -104,7 +111,7 @@ def concat_raw_features(input_df: pd.DataFrame):
     """
     df_final = pd.DataFrame()
     for _, row  in input_df.iterrows():
-        snippet_dir = row["snippet_level_dir"]
+        snippet_dir = Path(row["base_level_dir"]) / row["snippet_level_dir"]
         df_voltage = get_features_from_snippets(snippet_dir)
         df_final = pd.concat([df_final, df_voltage], ignore_index=True)
 
@@ -126,12 +133,17 @@ def aggregate_raw_features(concatenated_df: pd.DataFrame):
     # Take intersection of the columns in the dataframe and the raw features columns
     agg_columns = set(columns_in_df) & set(raw_features_columns)
 
-    # Aggregate the raw features
-    dagg = {
-        k: pd.NamedAgg(column=k, aggfunc="nanmedian") if k != "channel_labels"
-          else pd.NamedAgg(column=k, aggfunc=lambda x: x.mode().iloc[0] if not x.mode().empty else np.nan)
-        for k in agg_columns
+    # Define aggregation functions for different column types
+    agg_func_dict = {
+        "spike_count": lambda x: np.mean(x.fillna(0)),
+        "channel_labels": lambda x: x.mode().iloc[0] if not x.mode().empty else np.nan,
     }
+    
+    # Get aggregation function for a column, defaulting to np.nanmedian
+    get_agg_func = lambda k: agg_func_dict.get(k, lambda x: np.nanmedian(x))
+    
+    # Create the aggregation dictionary
+    dagg = {k: pd.NamedAgg(column=k, aggfunc=get_agg_func(k)) for k in agg_columns}
     aggregated_df = concatenated_df.groupby(["pid","channel"]).agg(**dagg)
 
 
@@ -157,13 +169,13 @@ def get_aggregated_features_per_pid(snippet_df_per_pid: pd.DataFrame):
     agg_df_per_pid = agg_df_per_pid.reset_index()
 
     #Add axial_um and lateral_um information to the dataframe
-    #Assert that the parent of the snippet level dir has a channels.parquet file
-    snippet_level_dir = Path(snippet_df_per_pid["snippet_level_dir"].iloc[0])
-    if not (snippet_level_dir.parent / "channels.parquet").exists():
+    #Assert that the parent of the snippet level dir has a channels.pqt file
+    snippet_level_dir = Path(snippet_df_per_pid["base_level_dir"].iloc[0]) / Path(snippet_df_per_pid["snippet_level_dir"].iloc[0])
+    if not (snippet_level_dir.parent / "channels.pqt").exists():
         raise FileNotFoundError(
-            f"channels.parquet file not found in {snippet_level_dir.parent}"
+            f"channels.pqt file not found in {snippet_level_dir.parent}"
         )
-    df_channels = pd.read_parquet(snippet_level_dir.parent / "channels.parquet")
+    df_channels = pd.read_parquet(snippet_level_dir.parent / "channels.pqt")
     #Merge the 'axial_um', 'lateral_um' from df_channels with df_voltage on the channel column
     agg_df_per_pid = agg_df_per_pid.merge(df_channels[["channel","axial_um", "lateral_um"]], on="channel", how="left")
 
@@ -181,7 +193,7 @@ def get_aggregated_raw_features(snippet_df: pd.DataFrame, output_dir: Path | Non
 
     if output_dir is not None:
         output_dir.mkdir(parents=True, exist_ok=True)
-        agg_df.to_parquet(output_dir / "raw_ephys_features.parquet")
+        agg_df.to_parquet(output_dir / "raw_ephys_features.pqt")
 
     return agg_df
 
@@ -200,7 +212,7 @@ def denoise_raw_features_data(agg_raw_ephys_features: pd.DataFrame, output_dir: 
 
     if output_dir is not None:
         output_dir.mkdir(parents=True, exist_ok=True)
-        df_features_denoise.to_parquet(output_dir / "raw_ephys_features_denoised.parquet")
+        df_features_denoise.to_parquet(output_dir / "raw_ephys_features_denoised.pqt")
 
     return df_features_denoise
 
@@ -210,9 +222,10 @@ def produce_output_dataframes(snippets_df: pd.DataFrame, input_dir: Path, output
     output_dir = Path(output_dir)
     if output_dir is not None:
         output_dir.mkdir(parents=True, exist_ok=True)
-        snippets_df.to_parquet(output_dir / "snippets_df.parquet")
+        snippets_df.to_parquet(output_dir / "snippets_df.pqt")
 
-    channels_pqt_files = list(Path(input_dir).glob("*/channels.parquet"))
+    channels_pqt_files = list(Path(input_dir).glob("*/channels.pqt"))
+    logger.info(f"channels_pqt_files = {channels_pqt_files}")
     df_channels = concatenate_channels_data(channels_pqt_files, output_dir=output_dir)
 
     # Get the raw ephys features
