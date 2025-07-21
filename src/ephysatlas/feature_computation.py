@@ -16,6 +16,8 @@ from ephysatlas import __version__ as ibleatools_version
 from ephysatlas.features import __features_version__ as features_version
 from pathlib import Path
 from ephysatlas.utils import setup_output_directory, add_metadata_to_parquet_files
+from filelock import FileLock
+import os
 
 # Set up logger
 logger = logging.getLogger(__name__)
@@ -245,12 +247,22 @@ def load_data_from_pid(
         and (not recompute_channels)
     ):
         logger.info(f"Loading channels from {file_channels}")
-        channels = pd.read_parquet(file_channels)
+        lock_file = str(file_channels) + ".lock"
+        lock = FileLock(lock_file, timeout=60)
+        logger.info(f"{os.getpid()} : Acquiring lock for reading the channels dataset.")
+        with lock:
+            logger.info(f"{os.getpid()} : Acquired lock for reading the channels dataset.")
+            channels = pd.read_parquet(file_channels)
+            logger.info(f"{os.getpid()} : Finished reading the channels dataset.")
         channels = {col: channels[col].to_numpy() for col in channels.columns}
     else:
         logger.info("Getting channels from SpikeGLX reader")
         try:
             channels = ssl.load_channels()
+            if ("axial_um" not in channels) and ("y" in sr_ap.geometry):
+                channels["axial_um"] = sr_ap.geometry["y"]
+            if ("lateral_um" not in channels) and ("x" in sr_ap.geometry):
+                channels["lateral_um"] = sr_ap.geometry["x"]
         except KeyError as e:
             logger.info(f"Channels key was not found: {str(e)}")
             channels = {}
@@ -452,6 +464,8 @@ def compute_features_from_pid(
         "output_dir": output_dir,
     }
 
+    logger.info(f"ProcessID for the process: {os.getpid()}")
+
     # Setup the output directory
     probe_level_dir, snippet_level_dir = setup_output_directory(params)
 
@@ -481,7 +495,13 @@ def compute_features_from_pid(
 
     # Update the channel file with target information.
     # Add xyz target information using Alyx database
-    channels = add_target_coordinates(pid=pid, one=one, channels=channels)
+    # Check if the target information is already present in the channels dataset, if yes then skip it.
+    if "x_target" not in channels.keys() or "y_target" not in channels.keys() or "z_target" not in channels.keys():
+        channels = add_target_coordinates(pid=pid, one=one, channels=channels)
+
+    if ("rawInd" not in channels) and ("channel" not in channels):
+        assert channels["axial_um"].size == 384
+        channels["rawInd"] = np.arange(384)
 
     # Export the channels file
     if probe_level_dir is not None:
@@ -491,12 +511,19 @@ def compute_features_from_pid(
     # TODO Make a module channel computation function that takes probe_level_dir AND pid(because it should work for non pid case as well) as an input.
     if probe_level_dir is not None and (not file_channels.exists() or (recompute_channels)):
         try:
-            df_channels = pd.DataFrame(channels).rename(columns={"rawInd": "channel"})
-            df_channels["pid"] = pid
-            # Remove the labels columns from df_channels if it exists
-            if "labels" in df_channels.columns:
-                df_channels = df_channels.drop(columns=["labels"])
-            df_channels.to_parquet(file_channels)
+            lock_file = str(file_channels) + ".lock"
+            lock = FileLock(lock_file, timeout=60)
+            with lock:
+                logger.info(f"{os.getpid()} Acquired lock for writing the channels dataset.")
+                tmp_file = str(file_channels) + ".tmp"
+                df_channels = pd.DataFrame(channels).rename(columns={"rawInd": "channel"})
+                df_channels["pid"] = pid
+                # Remove the labels columns from df_channels if it exists
+                if "labels" in df_channels.columns:
+                    df_channels = df_channels.drop(columns=["labels"])
+                df_channels.to_parquet(tmp_file)
+                os.replace(tmp_file, file_channels)
+                logger.info(f"{os.getpid()} Finished writing the channels dataset.")
         except Exception as e:
             logger.error(f"Failed to export channels file: {str(e)}")
             logger.debug("Exception details:", exc_info=True)
