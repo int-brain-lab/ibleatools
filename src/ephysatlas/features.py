@@ -144,7 +144,7 @@ class ModelSpikeFeatures(BaseChannelFeatures):
     recovery_time_secs: Series[float] = pa.Field(coerce=True)
     repolarisation_slope: Series[float] = pa.Field(coerce=True)
     spike_count: float = pa.Field(
-        coerce=True, metadata={"transform": lambda x: np.log2(x.astype(float))}
+        coerce=True, metadata={"transform": lambda x: np.where(x == 0, np.nan, np.log2(x.astype(float)))}
     )
     tip_time_secs: Series[float] = pa.Field(coerce=True)
     tip_val: Series[float] = pa.Field(coerce=True)
@@ -578,7 +578,7 @@ def denoise_dataframe(df_pid, feature_names=None, fac=1, channel_labels=None):
         else:
             fval = np.copy(df_pid[feature_name].to_numpy())
         fval[channel_labels != 0] = np.nan
-        logger.warning(f"Calculation for feature_name = {feature_name}")
+        logger.info(f"Calculation for feature_name = {feature_name}")
         denoised_values = denoise_shank(
             feature=fval,
             xy=df_pid[["lateral_um", "axial_um"]].values,

@@ -91,7 +91,6 @@ def get_features_from_snippets(snippet_level_dir: Path):
     Get features from the snippets.
     """
     snippet_level_dir = Path(snippet_level_dir)
-    print(f"snippet_level_dir = {snippet_level_dir}")
     feature_files = list(snippet_level_dir.glob("*.pqt"))
     df = {}
     for file in feature_files:
