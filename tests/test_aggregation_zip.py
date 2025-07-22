@@ -1,16 +1,14 @@
 import unittest
 import tempfile
-import shutil
 import zipfile
 from pathlib import Path
 import pandas as pd
-import numpy as np
-import os
 
 import ephysatlas.aggregation as aggregation
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 ZIP_PATH = FIXTURES_DIR / "output.zip"
+
 
 class TestAggregationWithZip(unittest.TestCase):
     @classmethod
@@ -18,9 +16,9 @@ class TestAggregationWithZip(unittest.TestCase):
         # Extract the zip file to a temp directory for all tests
         cls.temp_dir = tempfile.TemporaryDirectory()
         cls.extract_path = Path(cls.temp_dir.name)
-        with zipfile.ZipFile(ZIP_PATH, 'r') as zip_ref:
+        with zipfile.ZipFile(ZIP_PATH, "r") as zip_ref:
             zip_ref.extractall(cls.extract_path)
-        
+
         cls.extract_path = cls.extract_path / "output"
 
     @classmethod
@@ -45,7 +43,7 @@ class TestAggregationWithZip(unittest.TestCase):
                 continue
             else:
                 channels_files.append(channels_file)
-            
+
         # Test with single file
         df = aggregation.concatenate_channels_data([channels_file])
         self.assertIsInstance(df, pd.DataFrame)
@@ -87,7 +85,13 @@ class TestAggregationWithZip(unittest.TestCase):
             for snippet_dir in probe_dir.iterdir():
                 if not snippet_dir.is_dir():
                     continue
-                rows.append({"pid": pid, "base_level_dir": self.extract_path, "snippet_level_dir": snippet_dir.relative_to(self.extract_path)})
+                rows.append(
+                    {
+                        "pid": pid,
+                        "base_level_dir": self.extract_path,
+                        "snippet_level_dir": snippet_dir.relative_to(self.extract_path),
+                    }
+                )
         input_df = pd.DataFrame(rows)
         df = aggregation.concat_raw_features(input_df)
         self.assertIsInstance(df, pd.DataFrame)
@@ -102,12 +106,19 @@ class TestAggregationWithZip(unittest.TestCase):
             for snippet_dir in probe_dir.iterdir():
                 if not snippet_dir.is_dir():
                     continue
-                rows.append({"pid": pid, "base_level_dir": self.extract_path,  "snippet_level_dir": snippet_dir.relative_to(self.extract_path)})
+                rows.append(
+                    {
+                        "pid": pid,
+                        "base_level_dir": self.extract_path,
+                        "snippet_level_dir": snippet_dir.relative_to(self.extract_path),
+                    }
+                )
         input_df = pd.DataFrame(rows)
         df = aggregation.get_aggregated_raw_features(input_df)
         self.assertIsInstance(df, pd.DataFrame)
         self.assertIn("channel", df.index.names)
         self.assertIn("pid", df.index.names)
 
+
 if __name__ == "__main__":
-    unittest.main() 
+    unittest.main()

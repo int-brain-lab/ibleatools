@@ -285,7 +285,7 @@ class TestAddMetadataToParquetFiles(unittest.TestCase):
 
         # Test adding metadata
         snippet_attrs = {
-            "base_level_dir" : str(self.base_path),
+            "base_level_dir": str(self.base_path),
             "snippet_level_dir": ".",
             "pid": "test_pid",
             "t_start": 100.0,

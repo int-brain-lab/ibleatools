@@ -251,7 +251,9 @@ def load_data_from_pid(
         lock = FileLock(lock_file, timeout=60)
         logger.info(f"{os.getpid()} : Acquiring lock for reading the channels dataset.")
         with lock:
-            logger.info(f"{os.getpid()} : Acquired lock for reading the channels dataset.")
+            logger.info(
+                f"{os.getpid()} : Acquired lock for reading the channels dataset."
+            )
             channels = pd.read_parquet(file_channels)
             logger.info(f"{os.getpid()} : Finished reading the channels dataset.")
         channels = {col: channels[col].to_numpy() for col in channels.columns}
@@ -496,7 +498,11 @@ def compute_features_from_pid(
     # Update the channel file with target information.
     # Add xyz target information using Alyx database
     # Check if the target information is already present in the channels dataset, if yes then skip it.
-    if "x_target" not in channels.keys() or "y_target" not in channels.keys() or "z_target" not in channels.keys():
+    if (
+        "x_target" not in channels.keys()
+        or "y_target" not in channels.keys()
+        or "z_target" not in channels.keys()
+    ):
         channels = add_target_coordinates(pid=pid, one=one, channels=channels)
 
     if ("rawInd" not in channels) and ("channel" not in channels):
@@ -509,14 +515,20 @@ def compute_features_from_pid(
 
     # TODO have another condition that checks if the existing channels file has all channels or if it matches the channels dict.
     # TODO Make a module channel computation function that takes probe_level_dir AND pid(because it should work for non pid case as well) as an input.
-    if probe_level_dir is not None and (not file_channels.exists() or (recompute_channels)):
+    if probe_level_dir is not None and (
+        not file_channels.exists() or (recompute_channels)
+    ):
         try:
             lock_file = str(file_channels) + ".lock"
             lock = FileLock(lock_file, timeout=60)
             with lock:
-                logger.info(f"{os.getpid()} Acquired lock for writing the channels dataset.")
+                logger.info(
+                    f"{os.getpid()} Acquired lock for writing the channels dataset."
+                )
                 tmp_file = str(file_channels) + ".tmp"
-                df_channels = pd.DataFrame(channels).rename(columns={"rawInd": "channel"})
+                df_channels = pd.DataFrame(channels).rename(
+                    columns={"rawInd": "channel"}
+                )
                 df_channels["pid"] = pid
                 # Remove the labels columns from df_channels if it exists
                 if "labels" in df_channels.columns:

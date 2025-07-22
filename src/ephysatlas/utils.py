@@ -98,7 +98,9 @@ def add_metadata_to_parquet_files(**snippet_attrs: Dict[str, Any]):
     Returns:
         None
     """
-    snippet_level_dir = Path(snippet_attrs["base_level_dir"]) / Path(snippet_attrs["snippet_level_dir"])
+    snippet_level_dir = Path(snippet_attrs["base_level_dir"]) / Path(
+        snippet_attrs["snippet_level_dir"]
+    )
     if not snippet_level_dir.exists() or not snippet_level_dir.is_dir():
         logger.warning(
             f"Directory {snippet_level_dir} does not exist or is not a directory"

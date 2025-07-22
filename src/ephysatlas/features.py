@@ -26,7 +26,8 @@ __features_version__ = (
     "2025.07.01"  # this is the version of this feature extractor code
 )
 
-#TODO - Scratch_dir path is not working as expected. Even if I pass the scratch_dir argument in the main compute_features function, here I am gettig log from Path("/scratch/dartsort/")
+
+# TODO - Scratch_dir path is not working as expected. Even if I pass the scratch_dir argument in the main compute_features function, here I am gettig log from Path("/scratch/dartsort/")
 def _setup_scratch_directory(scratch_dir=None):
     """
     Set up scratch directory with fallback logic.
@@ -144,7 +145,10 @@ class ModelSpikeFeatures(BaseChannelFeatures):
     recovery_time_secs: Series[float] = pa.Field(coerce=True)
     repolarisation_slope: Series[float] = pa.Field(coerce=True)
     spike_count: float = pa.Field(
-        coerce=True, metadata={"transform": lambda x: np.where(x == 0, np.nan, np.log2(x.astype(float)))}
+        coerce=True,
+        metadata={
+            "transform": lambda x: np.where(x == 0, np.nan, np.log2(x.astype(float)))
+        },
     )
     tip_time_secs: Series[float] = pa.Field(coerce=True)
     tip_val: Series[float] = pa.Field(coerce=True)

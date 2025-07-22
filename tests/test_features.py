@@ -11,6 +11,8 @@ FIXTURE_PATH = (
     Path(ephysatlas.features.__file__).parents[2].joinpath("tests", "fixtures")
 )
 
+print(f"Torch number of threads = {torch.get_num_threads()}")
+
 
 class TestFeatureSets(unittest.TestCase):
     def test_sets(self):

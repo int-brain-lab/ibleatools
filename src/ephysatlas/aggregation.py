@@ -12,11 +12,13 @@ import numpy as np
 # Set up logger
 logger = logging.getLogger(__name__)
 
-#TODO - Test at the end - ephysatlas.data.read_features_from_disk(path_features, brain_atlas=brain_atlas, strict=True)
+# TODO - Test at the end - ephysatlas.data.read_features_from_disk(path_features, brain_atlas=brain_atlas, strict=True)
 
 
 # TODO - There can be a better way to specify both of these arguments - maybe only one is needed.
-def aggregate_all_probes(path_list: List[Path], base_level_dir: Path | None | str = None):
+def aggregate_all_probes(
+    path_list: List[Path], base_level_dir: Path | None | str = None
+):
     """
     Aggregates data from multiple probe directories into a single DataFrame.
 
@@ -48,8 +50,6 @@ def aggregate_all_probes(path_list: List[Path], base_level_dir: Path | None | st
         df["base_level_dir"] = Path(base_level_dir).as_posix()
 
     return df
-
-
 
 
 # Function to aggregate channels dataframe
@@ -101,15 +101,15 @@ def get_features_from_snippets(snippet_level_dir: Path):
         [df[k] for k in df.keys()],
     )
 
-
     return df_voltage
+
 
 def concat_raw_features(input_df: pd.DataFrame):
     """
     Aggregate raw features from the input dataframe.
     """
     df_final = pd.DataFrame()
-    for _, row  in input_df.iterrows():
+    for _, row in input_df.iterrows():
         snippet_dir = Path(row["base_level_dir"]) / row["snippet_level_dir"]
         df_voltage = get_features_from_snippets(snippet_dir)
         df_final = pd.concat([df_final, df_voltage], ignore_index=True)
@@ -126,7 +126,7 @@ def aggregate_raw_features(concatenated_df: pd.DataFrame):
     # Group by pid and channel
     raw_features_columns = ModelRawFeatures.to_schema().columns.keys()
 
-    #Columns in the dataframe
+    # Columns in the dataframe
     columns_in_df = concatenated_df.columns.tolist()
 
     # Take intersection of the columns in the dataframe and the raw features columns
@@ -137,24 +137,26 @@ def aggregate_raw_features(concatenated_df: pd.DataFrame):
         "spike_count": lambda x: np.mean(x.fillna(0)),
         "channel_labels": lambda x: x.mode().iloc[0] if not x.mode().empty else np.nan,
     }
-    
+
     # Get aggregation function for a column, defaulting to np.nanmedian
-    get_agg_func = lambda k: agg_func_dict.get(k, lambda x: np.nanmedian(x))
-    
+    def get_agg_func(k):
+        return agg_func_dict.get(k, lambda x: np.nanmedian(x))
+
     # Create the aggregation dictionary
     dagg = {k: pd.NamedAgg(column=k, aggfunc=get_agg_func(k)) for k in agg_columns}
-    aggregated_df = concatenated_df.groupby(["pid","channel"]).agg(**dagg)
-
+    aggregated_df = concatenated_df.groupby(["pid", "channel"]).agg(**dagg)
 
     return aggregated_df
 
 
 def get_aggregated_features_per_pid(snippet_df_per_pid: pd.DataFrame):
-    """"
+    """ "
     Should return a dataframe with one pid, and number of rows equal to the number of channels.
     The output is not multi-indexed at this stage
     """
-    assert snippet_df_per_pid["pid"].nunique() == 1, "There should be only one pid in the dataframe"
+    assert snippet_df_per_pid["pid"].nunique() == 1, (
+        "There should be only one pid in the dataframe"
+    )
 
     # Get the concatenated version of all the raw features for each snippet
     df_concat = concat_raw_features(snippet_df_per_pid)
@@ -167,22 +169,27 @@ def get_aggregated_features_per_pid(snippet_df_per_pid: pd.DataFrame):
 
     agg_df_per_pid = agg_df_per_pid.reset_index()
 
-    #Add axial_um and lateral_um information to the dataframe
-    #Assert that the parent of the snippet level dir has a channels.pqt file
-    snippet_level_dir = Path(snippet_df_per_pid["base_level_dir"].iloc[0]) / Path(snippet_df_per_pid["snippet_level_dir"].iloc[0])
+    # Add axial_um and lateral_um information to the dataframe
+    # Assert that the parent of the snippet level dir has a channels.pqt file
+    snippet_level_dir = Path(snippet_df_per_pid["base_level_dir"].iloc[0]) / Path(
+        snippet_df_per_pid["snippet_level_dir"].iloc[0]
+    )
     if not (snippet_level_dir.parent / "channels.pqt").exists():
         raise FileNotFoundError(
             f"channels.pqt file not found in {snippet_level_dir.parent}"
         )
     df_channels = pd.read_parquet(snippet_level_dir.parent / "channels.pqt")
-    #Merge the 'axial_um', 'lateral_um' from df_channels with df_voltage on the channel column
-    agg_df_per_pid = agg_df_per_pid.merge(df_channels[["channel","axial_um", "lateral_um"]], on="channel", how="left")
+    # Merge the 'axial_um', 'lateral_um' from df_channels with df_voltage on the channel column
+    agg_df_per_pid = agg_df_per_pid.merge(
+        df_channels[["channel", "axial_um", "lateral_um"]], on="channel", how="left"
+    )
 
     return agg_df_per_pid
 
 
-def get_aggregated_raw_features(snippet_df: pd.DataFrame, output_dir: Path | None = None):
-    
+def get_aggregated_raw_features(
+    snippet_df: pd.DataFrame, output_dir: Path | None = None
+):
     agg_df = pd.DataFrame()
     for idx, pid_df in snippet_df.groupby("pid"):
         agg_df_per_pid = get_aggregated_features_per_pid(pid_df)
@@ -197,15 +204,18 @@ def get_aggregated_raw_features(snippet_df: pd.DataFrame, output_dir: Path | Non
     return agg_df
 
 
-
-def denoise_raw_features_data(agg_raw_ephys_features: pd.DataFrame, output_dir: Path | None = None):
+def denoise_raw_features_data(
+    agg_raw_ephys_features: pd.DataFrame, output_dir: Path | None = None
+):
     # At this both channels and raw_ephys_features should be calculated.
     # # %% Denoise the features
     #
     original_columns = agg_raw_ephys_features.columns.tolist()
     df_pids = []
     for pid, df_pid in tqdm.tqdm(agg_raw_ephys_features.groupby("pid")):
-        df_denoised = denoise_dataframe(df_pid, fac=1, channel_labels=df_pid["channel_labels"].to_numpy())
+        df_denoised = denoise_dataframe(
+            df_pid, fac=1, channel_labels=df_pid["channel_labels"].to_numpy()
+        )
         df_pids.append(df_denoised.loc[:, original_columns])
     df_features_denoise = pd.concat(df_pids)
 
@@ -215,9 +225,12 @@ def denoise_raw_features_data(agg_raw_ephys_features: pd.DataFrame, output_dir: 
 
     return df_features_denoise
 
+
 #  TODO: Information in input_dir, can be compiled in the snippet_df
 # I should add a probe_level_dir in snippets_df as well. to get the channel labels.
-def produce_output_dataframes(snippets_df: pd.DataFrame, input_dir: Path, output_dir: Path | None = None):
+def produce_output_dataframes(
+    snippets_df: pd.DataFrame, input_dir: Path, output_dir: Path | None = None
+):
     output_dir = Path(output_dir)
     if output_dir is not None:
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -234,18 +247,15 @@ def produce_output_dataframes(snippets_df: pd.DataFrame, input_dir: Path, output
     df_features_denoise = denoise_raw_features_data(df_raw_ephys, output_dir=output_dir)
 
     return df_channels, df_raw_ephys, df_features_denoise
-    
-    
-
 
 
 # Write a function that does all the three things together and outputs channel , raw ephys and raw_ephys denoised.
 
 
-    # # %% Eventually upload to S3
-    # print(f'aws --profile ibl s3 sync "{path_features}" s3://ibl-brain-wide-map-private/aggregates/atlas')
+# # %% Eventually upload to S3
+# print(f'aws --profile ibl s3 sync "{path_features}" s3://ibl-brain-wide-map-private/aggregates/atlas')
 
-    # import ephys_atlas.data
-    # from one.api import ONE
-    # one = ONE(base_url='https://alyx.internationalbrainlab.org', mode='remote')
-    # df_voltage, _, df_channels, df_probes = ephys_atlas.data.download_tables(local_path='/home/olivier/scratch', label='2024_W50', one=one)
+# import ephys_atlas.data
+# from one.api import ONE
+# one = ONE(base_url='https://alyx.internationalbrainlab.org', mode='remote')
+# df_voltage, _, df_channels, df_probes = ephys_atlas.data.download_tables(local_path='/home/olivier/scratch', label='2024_W50', one=one)
