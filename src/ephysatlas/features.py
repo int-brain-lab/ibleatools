@@ -1,10 +1,11 @@
-from typing_extensions import Annotated
-from pathlib import Path
+from abc import ABC
 import logging
+from pathlib import Path
 import random
 import shutil
 import string
 import tempfile
+from typing_extensions import Annotated, List
 
 import numpy as np
 import pandas as pd
@@ -13,6 +14,7 @@ import pydantic
 import scipy.signal
 import skimage.restoration
 from pandera.typing import Series
+import sklearn.base
 
 import ibldsp.waveforms
 import ibldsp.cadzow
@@ -205,26 +207,39 @@ def voltage_features_set(features_list=FEATURES_LIST):
     for feature_group in features_list:
         match feature_group:
             case "raw_ap":
-                x_list += list(
-                    set(ModelApFeatures.to_schema().columns.keys()) - set(["channel"])
+                x_list += sorted(
+                    list(
+                        set(ModelApFeatures.to_schema().columns.keys())
+                        - set(["channel"])
+                    )
                 )
             case "raw_lf":
-                x_list += list(
-                    set(ModelLfFeatures.to_schema().columns.keys()) - set(["channel"])
+                x_list += sorted(
+                    list(
+                        set(ModelLfFeatures.to_schema().columns.keys())
+                        - set(["channel"])
+                    )
                 )
             case "raw_lf_csd":
-                x_list += list(
-                    set(ModelCsdFeatures.to_schema().columns.keys()) - set(["channel"])
+                x_list += sorted(
+                    list(
+                        set(ModelCsdFeatures.to_schema().columns.keys())
+                        - set(["channel"])
+                    )
                 )
             case "waveforms":
-                x_list += list(
-                    set(ModelSpikeFeatures.to_schema().columns.keys())
-                    - set(["channel"])
+                x_list += sorted(
+                    list(
+                        set(ModelSpikeFeatures.to_schema().columns.keys())
+                        - set(["channel"])
+                    )
                 )
             case "micro-manipulator":
-                x_list += list(
-                    set(ModelHistologyPlanned.to_schema().columns.keys())
-                    - set(["channel"])
+                x_list += sorted(
+                    list(
+                        set(ModelHistologyPlanned.to_schema().columns.keys())
+                        - set(["channel"])
+                    )
                 )
     return x_list
 
@@ -531,7 +546,103 @@ def denoise_shank(
     return denoised_feature
 
 
-def denoise_dataframe(df_pid, feature_names=None, fac=1, channel_labels=None):
+class _EphysTransformerInterface(
+    ABC,
+    sklearn.base.OneToOneFeatureMixin,
+    sklearn.base.TransformerMixin,
+    sklearn.base.BaseEstimator,
+):
+    def __init__(self):
+        super().__init__()
+        self.set_output(transform="pandas")
+
+    def _get_feature_names(self, X: pd.DataFrame = None) -> List[str]:
+        # the features to work with are the intersection of the dataframe columns and the defined schemas
+        return list(
+            set(voltage_features_set(["raw_ap", "raw_lf", "raw_lf_csd", "waveforms"]))
+            & set(X.columns)
+        )
+
+    def validate_X(self, X: pd.DataFrame) -> None:
+        assert isinstance(X, pd.DataFrame), "X must be a pandas DataFrame"
+
+    def fit_transform(self, X: pd.DataFrame = None, y=None):
+        self.fit(X)
+        return self.transform(X)
+
+
+class EphysTransformer(_EphysTransformerInterface):
+    def __init__(self):
+        super().__init__()
+        self.set_output(transform="pandas")
+
+    def fit(self, X: pd.DataFrame = None, y=None):
+        self.validate_X(X)
+        raw_features_schema = ModelRawFeatures.to_schema()
+        self.fcn_transform_ = {}
+        for feature_name in self._get_feature_names(X):
+            if (
+                metadata := raw_features_schema.columns[feature_name].metadata
+            ) is not None:
+                self.fcn_transform_[feature_name] = metadata["transform"]
+
+    def transform(self, X: pd.DataFrame, y=None):
+        self.validate_X(X)
+        for column_name in X.columns:
+            if column_name in self.fcn_transform_:
+                X.loc[:, column_name] = self.fcn_transform_[column_name](
+                    X[column_name].to_numpy()
+                )
+        return X
+
+
+class EphysDenoiser(_EphysTransformerInterface):
+    def __init__(self, fac=1, channel_labels=None):
+        super().__init__()
+        self.fac = fac
+        self.channel_labels = channel_labels
+
+    def _get_channel_labels(self, X: pd.DataFrame = None) -> np.ndarray:
+        if self.channel_labels is None:
+            if "channel_labels" in X.columns:
+                self.channel_labels = X["channel_labels"].to_numpy()
+            else:
+                self.channel_labels = np.zeros(X.shape[0], dtype=int)
+        return self.channel_labels
+
+    def transform(self, X: pd.DataFrame, y=None):
+        self.validate_X(X)
+        channel_labels = self._get_channel_labels(X)
+        ns = X.shape[0]
+        for feature_name in self._get_feature_names(X):
+            if (
+                feature_name == "channel_labels"
+            ):  # we do not want to apply any denoising to this feature
+                continue
+            fval = np.copy(X[feature_name].to_numpy())
+            fval[channel_labels != 0] = np.nan
+            logger.info(f"Calculation for feature_name = {feature_name}")
+            denoised_values = denoise_shank(
+                feature=fval,
+                xy=X[["lateral_um", "axial_um"]].values,
+                fac=self.fac,
+            )
+            # Check that the denoised values have the expected length
+            if len(denoised_values) != ns:
+                raise ValueError(
+                    f"Length mismatch for feature '{feature_name}': "
+                    f"denoised values length ({len(denoised_values)}) != "
+                    f"DataFrame length ({ns})"
+                )
+            # Let pandas determine the appropriate dtype for the new values
+            X.loc[:, feature_name] = denoised_values
+        return X
+
+    def fit(self, X: pd.DataFrame = None, y=None):
+        return
+
+
+def denoise_dataframe(df_pid, fac=1, channel_labels=None):
     """
     Applies total variation filter denoising to the features of a single probe insertion dataframe.
 
@@ -545,10 +656,6 @@ def denoise_dataframe(df_pid, feature_names=None, fac=1, channel_labels=None):
     df_pid : pandas.DataFrame
         DataFrame containing probe insertion data with features to denoise.
         Must contain 'lateral_um', 'axial_um', and 'labels' columns.
-    feature_names : list, optional
-        List of feature column names to denoise. If None (default), will use all available
-        voltage features from raw_ap, raw_lf, raw_lf_csd, and waveforms categories that
-        exist in the dataframe.
     fac : float, default=1
         Factor for the TV denoising in median deviation units. Higher values
         result in stronger denoising.
@@ -559,42 +666,8 @@ def denoise_dataframe(df_pid, feature_names=None, fac=1, channel_labels=None):
         A new dataframe with the same structure as the input, but with denoised feature values.
         Non-feature columns are copied without modification.
     """
-    # TODO : Should I try to read channel labels from the df_pid itself??
-    if channel_labels is None:
-        if "channel_labels" in df_pid.columns:
-            channel_labels = df_pid["channel_labels"].to_numpy()
-        else:
-            channel_labels = np.zeros(df_pid.shape[0], dtype=int)
-    if feature_names is None:
-        feature_names = list(
-            set(voltage_features_set(["raw_ap", "raw_lf", "raw_lf_csd", "waveforms"]))
-            & set(df_pid.columns)
-        )
-    df_pid_denoise = df_pid.copy()
-    raw_features_schema = ModelRawFeatures.to_schema()
-    for feature_name in feature_names:
-        if (
-            feature_name == "channel_labels"
-        ):  # we do not want to apply any denoising to this feature
-            continue
-        if (metadata := raw_features_schema.columns[feature_name].metadata) is not None:
-            fval = metadata["transform"](np.copy(df_pid[feature_name].to_numpy()))
-        else:
-            fval = np.copy(df_pid[feature_name].to_numpy())
-        fval[channel_labels != 0] = np.nan
-        logger.info(f"Calculation for feature_name = {feature_name}")
-        denoised_values = denoise_shank(
-            feature=fval,
-            xy=df_pid[["lateral_um", "axial_um"]].values,
-            fac=fac,
-        )
-        # Check that the denoised values have the expected length
-        if len(denoised_values) != len(df_pid_denoise):
-            raise ValueError(
-                f"Length mismatch for feature '{feature_name}': "
-                f"denoised values length ({len(denoised_values)}) != "
-                f"DataFrame length ({len(df_pid_denoise)})"
-            )
-        # Let pandas determine the appropriate dtype for the new values
-        df_pid_denoise[feature_name] = denoised_values
-    return df_pid_denoise
+    df_transformed = EphysTransformer().fit_transform(df_pid)
+    df_denoised = EphysDenoiser(fac=fac, channel_labels=channel_labels).fit_transform(
+        df_transformed
+    )
+    return df_denoised

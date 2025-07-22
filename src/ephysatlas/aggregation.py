@@ -154,9 +154,9 @@ def get_aggregated_features_per_pid(snippet_df_per_pid: pd.DataFrame):
     Should return a dataframe with one pid, and number of rows equal to the number of channels.
     The output is not multi-indexed at this stage
     """
-    assert snippet_df_per_pid["pid"].nunique() == 1, (
-        "There should be only one pid in the dataframe"
-    )
+    assert (
+        snippet_df_per_pid["pid"].nunique() == 1
+    ), "There should be only one pid in the dataframe"
 
     # Get the concatenated version of all the raw features for each snippet
     df_concat = concat_raw_features(snippet_df_per_pid)
