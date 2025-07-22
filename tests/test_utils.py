@@ -255,7 +255,7 @@ class TestGetAggregatedSnippetsDf(unittest.TestCase):
         # Create parquet file with metadata
         df = pd.DataFrame({"data": [1, 2, 3]})
         df.attrs["pid"] = "test_pid"
-        df.to_parquet(snippet_dir / "data.parquet")
+        df.to_parquet(snippet_dir / "data.pqt")
 
         # Test function
         result_df = get_aggregated_snippets_df(self.base_path)
@@ -281,11 +281,12 @@ class TestAddMetadataToParquetFiles(unittest.TestCase):
         """Test adding metadata to parquet files."""
         # Create test dataframe
         df = pd.DataFrame({"data": [1, 2, 3, 4, 5]})
-        df.to_parquet(self.base_path / "test.parquet")
+        df.to_parquet(self.base_path / "test.pqt")
 
         # Test adding metadata
         snippet_attrs = {
-            "snippet_level_dir": str(self.base_path),
+            "base_level_dir": str(self.base_path),
+            "snippet_level_dir": ".",
             "pid": "test_pid",
             "t_start": 100.0,
             "duration": 5.0,
@@ -294,7 +295,7 @@ class TestAddMetadataToParquetFiles(unittest.TestCase):
         add_metadata_to_parquet_files(**snippet_attrs)
 
         # Verify metadata was added
-        result_df = pd.read_parquet(self.base_path / "test.parquet")
+        result_df = pd.read_parquet(self.base_path / "test.pqt")
         self.assertEqual(result_df.attrs["pid"], "test_pid")
         self.assertEqual(result_df.attrs["t_start"], 100.0)
         self.assertEqual(result_df.attrs["duration"], 5.0)
@@ -310,7 +311,8 @@ class TestAddMetadataToParquetFiles(unittest.TestCase):
 
         # Test adding metadata
         snippet_attrs = {
-            "snippet_level_dir": str(self.base_path),
+            "base_level_dir": str(self.base_path),
+            "snippet_level_dir": ".",
             "pid": "test_pid",
             "custom_attr": "test_value",
         }
@@ -329,7 +331,8 @@ class TestAddMetadataToParquetFiles(unittest.TestCase):
     def test_add_metadata_to_parquet_files_nonexistent_directory(self):
         """Test behavior with nonexistent directory."""
         snippet_attrs = {
-            "snippet_level_dir": str(self.base_path / "nonexistent"),
+            "base_level_dir": str(self.base_path),
+            "snippet_level_dir": "nonexistent",
             "pid": "test_pid",
         }
 
