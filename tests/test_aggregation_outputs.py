@@ -4,8 +4,10 @@ import zipfile
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from src.ephysatlas.aggregation import aggregate_all_probes, produce_output_dataframes
-from src.ephysatlas import data
+from ephysatlas.aggregation import aggregate_all_probes, produce_output_dataframes
+import ephysatlas.data
+
+FIXTURE_PATH = Path(ephysatlas.data.__file__).parents[2].joinpath("tests", "fixtures")
 
 
 class TestAggregationOutputs(unittest.TestCase):
@@ -19,7 +21,7 @@ class TestAggregationOutputs(unittest.TestCase):
         # Extract the zip file to a temp directory
         cls.temp_dir = tempfile.TemporaryDirectory()
         cls.extract_dir = Path(cls.temp_dir.name)
-        zip_path = Path("tests/fixtures/output.zip")
+        zip_path = FIXTURE_PATH.joinpath("output.zip")
         with zipfile.ZipFile(zip_path, "r") as zip_ref:
             zip_ref.extractall(cls.temp_dir.name)
 
@@ -73,7 +75,7 @@ class TestAggregationOutputs(unittest.TestCase):
         )
         # self.assertTrue(set(df_channels.index.get_level_values('pid').unique()).issubset(set(expected_pids)))
 
-        _ = data.read_features_from_disk(
+        _ = ephysatlas.data.read_features_from_disk(
             output_dir, brain_atlas=self.mock_brain_atlas, strict=True, mappings=[]
         )
 
