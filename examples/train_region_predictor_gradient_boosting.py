@@ -18,6 +18,8 @@ VINTAGE = '2024_W50'
 VINTAGE = '2025_W28'
 path_features = Path(f'/Users/olivier/Documents/datadisk/ephys-atlas-decoding/features/{VINTAGE}')  # mac
 path_features = Path(f'/mnt/s0/ephys-atlas-decoding/features/{VINTAGE}')  # parede
+path_features = Path(f'/datadisk/Data/paper-ephys-atlas/ephys-atlas-decoding/features/{VINTAGE}')  # ferret
+
 if not path_features.exists():
     from one.api import ONE
     one = ONE()
@@ -37,7 +39,7 @@ FEATURE_SET = [
     "raw_ap",
     "localisation",
     "waveforms",
-    "micro-manipulator",
+    # "micro-manipulator",
 ]
 x_list = ephysatlas.features.voltage_features_set(FEATURE_SET)
 x_list.append("outside")

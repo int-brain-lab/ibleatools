@@ -48,13 +48,14 @@ def save_figure(func):
     """
 
     @functools.wraps(func)
-    def wrapper(self, *args, save_dir=None, overwrite=False, **kwargs):
+    def wrapper(self, *args, save_dir=None, overwrite=False, filename=None, **kwargs):
         # Save figures if save_dir is provided
+        method_name = func.__name__
+        filename = f"{self.pid}_{method_name}*.png" if filename is None else filename
         if save_dir is not None:
             save_dir = Path(save_dir)
             save_dir.mkdir(exist_ok=True, parents=True)
-            method_name = func.__name__
-            file = next(save_dir.glob(f"{self.pid}_{method_name}*.png"), None)
+            file = next(save_dir.glob(filename), None)
             if file is not None and file.exists() and overwrite is False:
                 return None
 
@@ -64,11 +65,9 @@ def save_figure(func):
             if isinstance(figures, list):
                 # Multiple figures
                 for i, fig in enumerate(figures):
-                    filename = f"{self.pid}_{method_name}_{i}.png"
+                    filename = f"{Path(filename).stem}_{i}{Path(filename).suffix}"
                     fig.savefig(save_dir / filename, dpi=128, bbox_inches="tight")
             else:
-                # Single figure
-                filename = f"{self.pid}_{method_name}_0.png"
                 figures.savefig(save_dir / filename, dpi=128, bbox_inches="tight")
 
         return result
@@ -115,13 +114,15 @@ class AtlasReveal:
         return df_depths
 
     @save_figure
-    def figure_01_features_with_histology_columns(self, scaler=None):
+    def figure_01_features_with_histology_columns(self, scaler=None, df_pid=None):
+        # option to override the default df_pid: this is useful for displaying the raw features if needed
+        df_pid = df_pid if df_pid is not None else self.df_pid
         if scaler is not None:
             kwargs = {"scaler": scaler, "vmin": -1, "vmax": 1}
         else:
             kwargs = {}
         fig, axs = ephysatlas.plots.figure_features_channel_space(
-            self.df_pid,
+            df_pid,
             self.x_list,
             self.xy,
             pid=self.pid,
