@@ -6,12 +6,7 @@ The features are released when necessary with the following tag: yyyy_Www
 This file documents the changes to the features for supported feature versions.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [2025_W30]
-### Modified
- - When aggregating `spike_count` features across multiple time snippets for a probe insertion, NaN values are replaced with zeros before calculating the mean value.
- - For `channel_labels` , mode is used to do the aggregation across snippets.
- - For rest of the features, we do the aggregation using nanmedian. 
- 
+
 ## [2025_W28]
 
 ### Modified
@@ -21,7 +16,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 - features list:
   - contain the `channel_labels` field with the ibl-neuropixel bad channel flag. 
-
 
 ## [2024_W50]
 

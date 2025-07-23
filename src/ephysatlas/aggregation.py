@@ -350,9 +350,9 @@ def get_aggregated_features_per_pid(snippet_df_per_pid: pd.DataFrame):
     - The result includes both aggregated features and channel position information.
     """
     # Ensure only one PID is present in the DataFrame
-    assert snippet_df_per_pid["pid"].nunique() == 1, (
-        "There should be only one pid in the dataframe"
-    )
+    assert (
+        snippet_df_per_pid["pid"].nunique() == 1
+    ), "There should be only one pid in the dataframe"
 
     # Concatenate raw features from all snippets for this PID
     df_concat = concat_raw_features(snippet_df_per_pid)
