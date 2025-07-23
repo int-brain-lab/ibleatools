@@ -22,11 +22,51 @@ pip install -e .
 
 ## Main Functions
 
-The package provides two main functions for electrophysiology analysis:
+The package provides functions for electrophysiology analysis:
 
-### 1. Feature Computation (`compute_features`)
+### 1. Feature Computation from Probe ID (`compute_features_from_pid`)
 
-This function computes various electrophysiological features from raw neural recordings. It can work with either:
+This function computes various electrophysiological features from raw neural recordings using data from the IBL database with a probe ID (pid).
+
+Basic usage:
+```python
+from one.api import ONE
+from ephysatlas.feature_computation import compute_features_from_pid
+
+# Using IBL database
+one = ONE()  # Initialize ONE client
+df_features = compute_features_from_pid(
+    pid="your_probe_id",
+    t_start=300.0,  # Start time in seconds
+    duration=3.0,   # Duration in seconds
+    one=one
+)
+```
+
+The function returns a pandas DataFrame containing various electrophysiological features, which are also saved in Parquet format for efficient storage and retrieval.
+
+### 2. Feature Computation from Files (`compute_features_from_file`)
+
+This function computes various electrophysiological features from local .cbin files (AP and LF band data).
+
+Basic usage:
+```python
+from ephysatlas.feature_computation import compute_features_from_file
+
+# Using local files
+df_features = compute_features_from_file(
+    ap_file="path/to/ap.cbin",
+    lf_file="path/to/lf.cbin",
+    t_start=300.0,
+    duration=3.0
+)
+```
+
+### 3. Legacy Function (`compute_features`) - DEPRECATED
+
+> **Note**: The `compute_features` function is deprecated and will be removed in a future version. Please use `compute_features_from_pid` or `compute_features_from_file` instead.
+
+This function was the original interface for computing electrophysiological features. It can work with either:
 - Data from the IBL database using a probe ID (pid)
 - Local .cbin files (AP and LF band data)
 
@@ -67,7 +107,7 @@ The function returns a pandas DataFrame containing various electrophysiological 
 
 > **Important**: This package (`ephysatlas`) is different from the `ephys_atlas` package (with underscore) from the [paper-ephys-atlas](https://github.com/int-brain-lab/paper-ephys-atlas) repository.
 
-### 2. Region Inference (`infer_regions`)
+### 4. Region Inference (`infer_regions`)
 
 This function uses pre-trained models to infer brain regions from the computed features. It performs inference across multiple model folds and returns both the predicted regions and their probabilities.
 
@@ -95,7 +135,9 @@ The CLI interface is through `main.py`, which can be run using a configuration f
 python main.py --config config.yaml
 ```
 
-Using CLI one can do both feature computations and region inference by specifying it in the configuration
+Using CLI one can do both feature computations and region inference by specifying it in the configuration.
+
+> **Note**: The CLI currently uses the deprecated `compute_features` function internally. This will be updated in a future version to use the new `compute_features_from_pid` and `compute_features_from_file` functions.
 
 ### Configuration File
 

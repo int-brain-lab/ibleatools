@@ -199,9 +199,9 @@ def read_features_from_disk(
         brain_atlas if brain_atlas is not None else ephysatlas.anatomy.ClassifierAtlas()
     )
     assert brain_atlas is not None, "Brain atlas is required to map labels to regions"
-    assert all(
-        mapping in brain_atlas.regions.mappings for mapping in mappings
-    ), f"Unknown mapping: {mappings}"
+    assert all(mapping in brain_atlas.regions.mappings for mapping in mappings), (
+        f"Unknown mapping: {mappings}"
+    )
     # merge the channel information with the features
     if load_denoised:  # load the denoised features
         df_features = pd.read_parquet(path_features / "raw_ephys_features_denoised.pqt")

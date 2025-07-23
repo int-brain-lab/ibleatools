@@ -25,30 +25,70 @@ logger = logging.getLogger(__name__)
 
 def add_target_coordinates(pid=None, one=None, channels=None, traj_dict=None):
     """
-    Get the micro-manipulator target coordinates either from Alyx database or directly from trajectory dictionary.
+    Add micro-manipulator target coordinates to channel information using trajectory data.
 
-    Args:
-        pid (str, optional): Probe insertion ID. Required if using Alyx database mode.
-        one (ONE, optional): ONE client instance. Required if using Alyx database mode.
-        channels (dict): Channel information containing at least 'axial_um' and 'rawInd' fields
-        traj_dict (dict, optional): Dictionary containing trajectory information with keys:
-            - x, y, z: coordinates
-            - depth, theta, phi: insertion parameters
-            Required if not using Alyx database mode.
+    This function calculates the 3D target coordinates (x_target, y_target, z_target) for each channel
+    based on the probe insertion trajectory. It supports two modes: retrieving trajectory data from
+    the Alyx database using a probe ID, or using a direct trajectory dictionary. The function applies
+    pitch correction and coordinate system transformations to convert from in-vivo coordinates to
+    the Allen coordinate system.
 
-    Returns:
-        dict: Updated channels dictionary with target coordinates
+    Parameters
+    ----------
+    pid : str, optional
+        Probe insertion ID. Required if using Alyx database mode (when one is provided).
+    one : ONE, optional
+        ONE client instance. Required if using Alyx database mode (when pid is provided).
+    channels : dict
+        Channel information dictionary containing at least 'axial_um' field. Should also contain
+        'rawInd' or 'channel' for channel indexing.
+    traj_dict : dict, optional
+        Dictionary containing trajectory information with keys:
+        - x, y, z: coordinates
+        - depth, theta, phi: insertion parameters
+        Required if not using Alyx database mode.
+
+    Returns
+    -------
+    dict
+        Updated channels dictionary with added 'x_target', 'y_target', and 'z_target' fields
+        containing the 3D coordinates for each channel.
+
+    Raises
+    ------
+    ValueError
+        If neither (pid, one) nor traj_dict is provided.
+
+    Example
+    -------
+    >>> from one.api import ONE
+    >>> one = ONE()
+    >>> channels = {'axial_um': np.arange(384) * 20}
+    >>> updated_channels = add_target_coordinates(
+    ...     pid='probe00', one=one, channels=channels
+    ... )
+
+    Notes
+    -----
+    - The function applies a -5 degree pitch correction to account for probe tilt.
+    - Coordinates are transformed from in-vivo to Allen coordinate system.
+    - If channels don't have 'rawInd' or 'channel' fields, it assumes 384 channels.
+    - The function interpolates coordinates along the probe track for each channel.
+    - For Alyx database mode, it prioritizes micro-manipulator provenance trajectories.
     """
+    # Initialize atlas objects for coordinate transformations
     needles = NeedlesAtlas()
     allen = AllenAtlas()
+    # Compute the brain surface for the needles atlas
     needles.compute_surface()
 
-    # Validate input combinations
+    # Validate input combinations and retrieve trajectory data
     if pid is not None and one is not None:
-        # Mode 1: Using Alyx database
+        # Mode 1: Using Alyx database to retrieve trajectory information
         # Check if one is in local mode or remote mode,
         # TODO - Doing this for SDSC computation but need to do it cleaner.
         if one.mode == "local":
+            # For local mode, create a remote ONE client to access Alyx database
             from one.api import ONE
 
             one_remote = ONE(mode="remote")
@@ -56,9 +96,11 @@ def add_target_coordinates(pid=None, one=None, channels=None, traj_dict=None):
                 "trajectories", "list", probe_insertion=pid, django="provenance__lte,30"
             )
         else:
+            # For remote mode, use the existing ONE client
             trajs = one.alyx.rest(
                 "trajectories", "list", probe_insertion=pid, django="provenance__lte,30"
             )
+        # Prioritize micro-manipulator trajectories, fallback to first available
         traj = next(
             (t for t in trajs if t["provenance"] == "Micro-manipulator"), trajs[0]
         )
@@ -69,17 +111,22 @@ def add_target_coordinates(pid=None, one=None, channels=None, traj_dict=None):
         raise ValueError("Either provide (pid, one) or traj_dict")
 
     # Apply the pitch correction by using iblatlas.atlas.tilt_spherical()
+    # This corrects for the -5 degree tilt of the probe during insertion
     new_theta, new_phi = iblatlas.atlas.tilt_spherical(
         traj["theta"], traj["phi"], tilt_angle=-5
     )
     traj["theta"] = new_theta
     traj["phi"] = new_phi
 
+    # Create an Insertion object from the trajectory data
     ins = Insertion.from_dict(traj, brain_atlas=needles)
 
+    # Get the trajectory coordinates and flip them (deepest point first)
     txyz = np.flipud(ins.xyz)
     # Convert the coordinates from in-vivo to the Allen coordinate system
+    # This involves transforming through the needles atlas to Allen atlas
     txyz = allen.bc.i2xyz(needles.bc.xyz2i(txyz / 1e6, round=False, mode="clip")) * 1e6
+    # Interpolate coordinates along the probe track for each channel position
     xyz_mm = interpolate_along_track(txyz, channels["axial_um"] / 1e6)
 
     # Check if the rawInd data exists in the channels dictionary, otherwise use the default 384 channels (Ask OW)
@@ -107,56 +154,103 @@ def online_feature_computation(
     **kwargs,
 ):
     """
-    Compute features from SpikeGLX reader objects.
+    Compute electrophysiological features from SpikeGLX reader objects.
 
-    Args:
-        sr_lf: SpikeGLX reader for LF data
-        sr_ap: SpikeGLX reader for AP data
-        t0 (float): Start time in seconds
-        duration (float): Duration in seconds
-        channels (dict, optional): Dict containing channel information
-        features_to_compute (list, optional): List of feature sets to compute
-        output_dir (Path, optional): Output directory for saving features
-        **kwargs: Additional keyword arguments
+    This function serves as an intermediate step in the feature computation pipeline. It takes
+    SpikeGLX reader objects for AP (action potential) and LF (local field potential) data,
+    validates the requested time range, loads the raw data, detects bad channels, and then
+    delegates the actual feature computation to `compute_features_from_raw`.
 
-    Returns:
-        tuple: (channels, df) Updated channels dict and computed features DataFrame
+    Parameters
+    ----------
+    sr_lf : SpikeGLXReader
+        SpikeGLX reader object for LF (local field potential) data.
+    sr_ap : SpikeGLXReader
+        SpikeGLX reader object for AP (action potential) data.
+    t0 : float
+        Start time in seconds for feature computation.
+    duration : float
+        Duration in seconds for feature computation.
+    channels : dict, optional
+        Dictionary containing channel information. If None, channel labels will be detected
+        automatically from the data.
+    features_to_compute : list, optional
+        List of feature sets to compute. If None, uses default feature sets.
+    output_dir : Path, optional
+        Output directory for saving computed features. Defaults to current directory.
+    scratch_dir : Path, optional
+        Directory for temporary files (e.g., dartsort scratch files).
+    **kwargs : dict
+        Additional keyword arguments passed to `compute_features_from_raw`.
+
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame containing the computed features for the specified time window.
+
+    Raises
+    ------
+    ValueError
+        If start time is negative or requested time range exceeds data duration.
+    IndexError
+        If data access fails due to invalid time range or channel count.
+
+    Example
+    -------
+    >>> from spikeglx import Reader
+    >>> sr_ap = Reader('path/to/ap.bin')
+    >>> sr_lf = Reader('path/to/lf.bin')
+    >>> df = online_feature_computation(
+    ...     sr_lf=sr_lf, sr_ap=sr_ap, t0=100.0, duration=30.0
+    ... )
+
+    Notes
+    -----
+    - The function calculates optimal FFT lengths for efficient processing.
+    - It validates that the requested time range is within the available data bounds.
+    - LF data access includes a 3-sample latency offset.
+    - Bad channel detection is performed automatically if channel labels are not provided.
+    - The function handles both full recordings and data snippets for channel detection.
     """
-    # Calculate the next fast length for the AP data
+    # Calculate the next fast length for the AP data to optimize FFT operations
     ns_ap = scipy.fft.next_fast_len(int(sr_ap.fs * duration), real=True)
 
-    # Calculate the next fast length for the LF data
+    # Calculate the next fast length for the LF data to optimize FFT operations
     ns_lf = scipy.fft.next_fast_len(int(sr_lf.fs * duration), real=True)
 
-    # Check if requested time range is within bounds
+    # Check if requested time range is within bounds of available data
     max_time_ap = sr_ap.ns / sr_ap.fs
     max_time_lf = sr_lf.ns / sr_lf.fs
 
+    # Validate start time is non-negative
     if t0 < 0:
         raise ValueError(f"Start time t0 ({t0}) cannot be negative")
+    # Validate AP data duration
     if t0 + duration > max_time_ap:
         raise ValueError(
             f"Requested time range ({t0} to {t0 + duration}) exceeds AP data duration ({max_time_ap})"
         )
+    # Validate LF data duration
     if t0 + duration > max_time_lf:
         raise ValueError(
             f"Requested time range ({t0} to {t0 + duration}) exceeds LF data duration ({max_time_lf})"
         )
 
-    # Calculate start and end indices
+    # Calculate start indices for data access
     n0_ap = int(sr_ap.fs * t0)
     n0_lf = int(sr_lf.fs * t0 + 3)  # Add 3 to account for LF latency
 
-    # Verify channel indices
+    # Verify channel indices are valid
     n_channels_ap = sr_ap.nc - sr_ap.nsync
     n_channels_lf = sr_lf.nc - sr_lf.nsync
 
+    # Validate channel counts
     if n_channels_ap <= 0 or n_channels_lf <= 0:
         raise ValueError(
             f"Invalid number of channels: AP={n_channels_ap}, LF={n_channels_lf}"
         )
 
-    # Ignore the columns which include the sync pulse data
+    # Load AP data, ignoring sync pulse columns
     try:
         raw_ap = sr_ap[slice(n0_ap, n0_ap + ns_ap), :n_channels_ap].T
     except IndexError as e:
@@ -164,7 +258,7 @@ def online_feature_computation(
             f"Failed to access AP data: {str(e)}. Check if time range or channel count is valid."
         )
 
-    # Add 3 to n0 to account for the 3 samples of latency in the LF data
+    # Load LF data with latency offset
     try:
         raw_lf = sr_lf[slice(n0_lf, n0_lf + ns_lf), :n_channels_lf].T
     except IndexError as e:
@@ -172,17 +266,19 @@ def online_feature_computation(
             f"Failed to access LF data: {str(e)}. Check if time range or channel count is valid."
         )
 
+    # Determine channel labels for bad channel detection
     if channels.get("labels") is None:
         # If we have access to the whole recording, then we can detect bad channels from the cbin file.
         if sr_ap.file_bin is not None:
             channel_labels = ibldsp.voltage.detect_bad_channels_cbin(sr_ap.file_bin)
-        # Else we can detect bad channels fromm the snippet of data.
+        # Else we can detect bad channels from the snippet of data.
         else:
             channel_labels, _ = ibldsp.voltage.detect_bad_channels(raw_ap, fs=sr_ap.fs)
         # There is no need to update the channel labels, since we do it later on during aggregation.
     else:
         channel_labels = channels["labels"]
 
+    # Delegate feature computation to the raw data processing function
     return compute_features_from_raw(
         raw_ap=raw_ap,
         raw_lf=raw_lf,
@@ -197,56 +293,101 @@ def online_feature_computation(
     )
 
 
-# TODO - Need to be clear here , if I want to check based on SDSC or not, VS pid as dict or pid as string.
-# (Ask OW) Recomputing channels when launching multiple jobs.
 def load_data_from_pid(
     pid, one, probe_level_dir, recompute_channels=False, eid=None, probe_name=None
 ):
     """
-    Load data using a probe ID from the ONE database.
+    Load electrophysiological data and channel information using a probe ID from the ONE database.
 
-    Args:
-        pid (str): Probe ID
-        one (ONE): ONE client instance
-        probe_level_dir (Path): Directory for probe-level data
-        recompute_channels (bool, optional): Whether to recompute channels even if cached
-        eid (str, optional): Session ID (required for OneSdsc)
-        probe_name (str, optional): Probe name (required for OneSdsc)
+    This function loads both AP and LF  data from the ONE
+    database using a probe ID. It supports both standard ONE clients and OneSdsc clients. The function
+    also handles channel information, either loading it from a cached file or computing it from the
+    SpikeGLX reader. File locking is used to prevent concurrent access to channel files.
 
-    Returns:
-        tuple: (sr_ap, sr_lf, channels) SpikeGLX readers and channel information
+    Parameters
+    ----------
+    pid : str
+        Probe ID for the data to be loaded.
+    one : ONE
+        ONE client instance for accessing the database.
+    probe_level_dir : Path
+        Directory for probe-level data storage and caching.
+    recompute_channels : bool, optional
+        Whether to recompute channel information even if a cached file exists. Defaults to False.
+    eid : str, optional
+        Session ID. Required when using OneSdsc client.
+    probe_name : str, optional
+        Probe name. Required when using OneSdsc client.
+
+    Returns
+    -------
+    tuple
+        A tuple containing:
+        - sr_ap: SpikeGLX reader for AP data
+        - sr_lf: SpikeGLX reader for LF data
+        - channels: Dictionary containing channel information
+
+    Raises
+    ------
+    AssertionError
+        If required parameters are missing for OneSdsc (eid, probe_name) or if data loading fails.
+
+    Example
+    -------
+    >>> from one.api import ONE
+    >>> one = ONE()
+    >>> sr_ap, sr_lf, channels = load_data_from_pid(
+    ...     pid='probe00', one=one, probe_level_dir=Path('output')
+    ... )
+
+    Notes
+    -----
+    - The function supports both standard ONE and OneSdsc clients with different parameter requirements.
+    - Channel information is cached in 'channels.pqt' files to avoid recomputation.
+    - File locking prevents concurrent access to channel files during read/write operations.
+    - If channel information cannot be loaded, the function falls back to an empty dictionary.
+    - The function automatically extracts geometry information from SpikeGLX readers when needed.
     """
+    # Log the start of data loading process
     logger.info(f"Loading data using PID: {pid}")
 
+    # Handle different ONE client types (standard vs OneSdsc)
     if one.__class__.__name__ == "OneSdsc":
         logger.info(f"Loading data using OneSdsc: {pid}")
-        assert (
-            pid is not None and eid is not None and probe_name is not None
-        ), "pid, eid, and probe_name are required for OneSdsc"
+        # Validate required parameters for OneSdsc
+        assert pid is not None and eid is not None and probe_name is not None, (
+            "pid, eid, and probe_name are required for OneSdsc"
+        )
 
+        # Create SpikeSortingLoader for OneSdsc with streaming disabled
         ssl = SpikeSortingLoader(pid=pid, eid=eid, pname=probe_name, one=one)
         stream = False
 
     else:
+        # Standard ONE client handling
         assert pid is not None, "PID must be a string"
         ssl = SpikeSortingLoader(pid=pid, one=one)
         stream = True
 
+    # Load AP and LF electrophysiological data using the SpikeSortingLoader
     sr_ap = ssl.raw_electrophysiology(band="ap", stream=stream)
     sr_lf = ssl.raw_electrophysiology(band="lf", stream=stream)
 
+    # Verify that data loading was successful
     assert sr_ap is not None and sr_lf is not None, "Failed to load data"
 
-    # Load the channels file
+    # Set up the channels file path for caching
     if probe_level_dir is not None:
         file_channels = Path(probe_level_dir) / "channels.pqt"
 
+    # Load channel information from cache if available and recomputation is not requested
     if (
         probe_level_dir is not None
         and file_channels.exists()
         and (not recompute_channels)
     ):
         logger.info(f"Loading channels from {file_channels}")
+        # Use file locking to prevent concurrent access
         lock_file = str(file_channels) + ".lock"
         lock = FileLock(lock_file, timeout=60)
         logger.info(f"{os.getpid()} : Acquiring lock for reading the channels dataset.")
@@ -254,25 +395,32 @@ def load_data_from_pid(
             logger.info(
                 f"{os.getpid()} : Acquired lock for reading the channels dataset."
             )
+            # Load channel information from Parquet file
             channels = pd.read_parquet(file_channels)
             logger.info(f"{os.getpid()} : Finished reading the channels dataset.")
+        # Convert DataFrame columns to numpy arrays for consistency
         channels = {col: channels[col].to_numpy() for col in channels.columns}
     else:
+        # Load channel information directly from the SpikeGLX reader
         logger.info("Getting channels from SpikeGLX reader")
         try:
             channels = ssl.load_channels()
+            # Extract geometry information if not already present
             if ("axial_um" not in channels) and ("y" in sr_ap.geometry):
                 channels["axial_um"] = sr_ap.geometry["y"]
             if ("lateral_um" not in channels) and ("x" in sr_ap.geometry):
                 channels["lateral_um"] = sr_ap.geometry["x"]
         except KeyError as e:
+            # Handle missing channel keys gracefully
             logger.info(f"Channels key was not found: {str(e)}")
             channels = {}
         except Exception as e:
+            # Handle any other errors during channel loading
             logger.error(f"Failed to load channels: {str(e)}")
             logger.debug("Exception details:", exc_info=True)
             channels = {}
 
+    # Log session information for debugging
     logger.info(f"Session path: {ssl.session_path}, probe name: {ssl.pname}")
     return sr_ap, sr_lf, channels
 
@@ -345,6 +493,9 @@ def compute_features(
     Returns:
         pd.DataFrame: DataFrame containing computed features
     """
+    logger.warning(
+        "This function is deprecated now. Please use compute_features_from_pid instead."
+    )
     # Create a dictionary with all the function arguments
     params = {
         "pid": pid,
@@ -440,23 +591,69 @@ def compute_features_from_pid(
     **kwargs,
 ):
     """
-    Compute features from a probe ID and ONE database.
+    Compute electrophysiological features from a probe ID using the ONE database.
 
-    Args:
-        pid (str): Probe ID (required)
-        eid (str, optional): Session ID (required for OneSdsc)
-        probe_name (str, optional): Probe name (required for OneSdsc)
-        t_start (float, optional): Start time in seconds. Defaults to 0.0 if not specified.
-        duration (float, optional): Duration in seconds. If None, will use the entire available duration.
-        one (ONE): ONE client instance (required)
-        features_to_compute (list, optional): List of feature sets to compute
-        output_dir (Path, optional): Output directory for saving features. If None, will not save features.
-        recompute_channels (bool, optional): Whether to recompute channels even if cached
-        scratch_dir (Path, optional): Directory for temporary files (dartsort scratch)
-        **kwargs: Additional keyword arguments
+    This function serves as the main entry point for computing features from a specific probe.
+    It handles the complete pipeline: loading data from ONE, setting up output directories,
+    processing channel information, computing features, and optionally saving results with metadata.
 
-    Returns:
-        pd.DataFrame: DataFrame containing computed features
+    Parameters
+    ----------
+    pid : str, optional
+        Probe ID. Required for standard ONE usage, also required for OneSdsc.
+    eid : str, optional
+        Session ID. Required when using OneSdsc.
+    probe_name : str, optional
+        Probe name. Required when using OneSdsc.
+    t_start : float, optional
+        Start time in seconds for feature computation. Defaults to 0.0 if not specified.
+    duration : float, optional
+        Duration in seconds for feature computation. If None, uses the entire available duration.
+    one : ONE
+        ONE client instance. Required for data loading.
+    features_to_compute : list, optional
+        List of feature sets to compute. If None, uses default feature sets.
+    output_dir : Path, optional
+        Output directory for saving features and metadata. If None, features are not saved.
+    recompute_channels : bool, optional
+        Whether to recompute channel information even if channels.pqt file is present . Defaults to False.
+    scratch_dir : Path, optional
+        Directory for temporary files (e.g., dartsort scratch files).
+    **kwargs : dict
+        Additional keyword arguments passed to the feature computation pipeline.
+
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame containing the computed features for the specified time window.
+
+    Raises
+    ------
+    ValueError
+        If ONE client instance is not provided.
+    AssertionError
+        If required parameters are missing for OneSdsc (eid, probe_name).
+
+    Example
+    -------
+    >>> from one.api import ONE
+    >>> one = ONE()
+    >>> df = compute_features_from_pid(
+    ...     pid='probe00',
+    ...     t_start=100.0,
+    ...     duration=30.0,
+    ...     one=one,
+    ...     output_dir=Path('output')
+    ... )
+
+    Notes
+    -----
+    - The function automatically determines the maximum available duration if duration is None.
+    - Channel information is cached unless recompute_channels is True.
+    - Target coordinates are added to channel information if not already present.
+    - Features are computed using the online_feature_computation pipeline.
+    - Metadata is added to all output files for provenance tracking.
+    - The function uses file locking to prevent concurrent writes to channel files.
     """
     # Create a dictionary with all the function arguments for setup_output_directory
     params = {
@@ -466,28 +663,30 @@ def compute_features_from_pid(
         "output_dir": output_dir,
     }
 
+    # Log the process ID for debugging and monitoring
     logger.info(f"ProcessID for the process: {os.getpid()}")
 
-    # Setup the output directory
+    # Setup the output directory structure (probe_level and snippet_level)
     probe_level_dir, snippet_level_dir = setup_output_directory(params)
 
-    # Validate input
+    # Validate input parameters based on ONE client type
     if one is None:
         raise ValueError("ONE client instance is required when using PID")
     elif one.__class__.__name__ == "OneSdsc":
+        # Additional validation for SDSC ONE client
         assert pid is not None, "PID is required when using SDSC"
         assert eid is not None, "EID is required when using SDSC"
         assert probe_name is not None, "Probe name is required when using SDSC"
 
-    # Load data using PID
+    # Load electrophysiological data (AP and LF) and channel information from ONE
     sr_ap, sr_lf, channels = load_data_from_pid(
         pid, one, probe_level_dir, recompute_channels, eid=eid, probe_name=probe_name
     )
 
-    # Convert time parameters to float
+    # Convert time parameters to float and handle default values
     t_start = float(t_start) if t_start is not None else 0.0
 
-    # If duration is None, use the entire available duration
+    # If duration is None, calculate the maximum available duration from both AP and LF data
     if duration is None:
         max_time_ap = sr_ap.ns / sr_ap.fs
         max_time_lf = sr_lf.ns / sr_lf.fs
@@ -495,8 +694,7 @@ def compute_features_from_pid(
     else:
         duration = float(duration)
 
-    # Update the channel file with target information.
-    # Add xyz target information using Alyx database
+    # Add target coordinates to channel information if not already present
     # Check if the target information is already present in the channels dataset, if yes then skip it.
     if (
         "x_target" not in channels.keys()
@@ -505,27 +703,32 @@ def compute_features_from_pid(
     ):
         channels = add_target_coordinates(pid=pid, one=one, channels=channels)
 
+    # Ensure channel indexing is present (default to 384 channels if not specified)
     if ("rawInd" not in channels) and ("channel" not in channels):
         assert channels["axial_um"].size == 384
         channels["rawInd"] = np.arange(384)
 
-    # Export the channels file
+    # Set up the channels file path for saving
     if probe_level_dir is not None:
         file_channels = probe_level_dir / "channels.pqt"
 
     # TODO have another condition that checks if the existing channels file has all channels or if it matches the channels dict.
     # TODO Make a module channel computation function that takes probe_level_dir AND pid(because it should work for non pid case as well) as an input.
+    # Save channel information to file if it doesn't exist or if recomputation is requested
     if probe_level_dir is not None and (
         not file_channels.exists() or (recompute_channels)
     ):
         try:
+            # Use file locking to prevent concurrent writes
             lock_file = str(file_channels) + ".lock"
             lock = FileLock(lock_file, timeout=60)
             with lock:
                 logger.info(
                     f"{os.getpid()} Acquired lock for writing the channels dataset."
                 )
+                # Create temporary file for atomic write
                 tmp_file = str(file_channels) + ".tmp"
+                # Convert channels dict to DataFrame and add PID information
                 df_channels = pd.DataFrame(channels).rename(
                     columns={"rawInd": "channel"}
                 )
@@ -533,6 +736,7 @@ def compute_features_from_pid(
                 # Remove the labels columns from df_channels if it exists
                 if "labels" in df_channels.columns:
                     df_channels = df_channels.drop(columns=["labels"])
+                # Save to temporary file first, then atomically replace
                 df_channels.to_parquet(tmp_file)
                 os.replace(tmp_file, file_channels)
                 logger.info(f"{os.getpid()} Finished writing the channels dataset.")
@@ -540,7 +744,7 @@ def compute_features_from_pid(
             logger.error(f"Failed to export channels file: {str(e)}")
             logger.debug("Exception details:", exc_info=True)
 
-    # Compute features
+    # Compute features using the online feature computation pipeline
     df = online_feature_computation(
         sr_ap=sr_ap,
         sr_lf=sr_lf,
@@ -553,7 +757,7 @@ def compute_features_from_pid(
         **kwargs,
     )
 
-    # Add metadata to all parquet files in subdirectories
+    # Add metadata to all parquet files in the output directory for provenance tracking
     if output_dir is not None:
         snippet_attrs = {
             "pid": pid,
@@ -675,44 +879,93 @@ def compute_features_from_raw(
     **kwargs,
 ):
     """
-    Compute features from raw numpy arrays of AP and LF data.
+    Compute electrophysiological features from raw numpy arrays of AP and LF data.
 
-    Args:
-        raw_ap (np.ndarray): Raw AP data array of shape (n_channels, n_samples)
-        raw_lf (np.ndarray): Raw LF data array of shape (n_channels, n_samples)
-        fs_ap (float): Sampling frequency of AP data
-        fs_lf (float): Sampling frequency of LF data
-        geometry (dict): Dictionary containing 'x' and 'y' coordinates for each channel
-        channel_labels (np.ndarray, optional): Array of channel labels. If None, will be computed.
-        features_to_compute (list, optional): List of feature sets to compute. If None, computes all features.
-            Available options: ['lf', 'csd', 'ap', 'waveforms']
-        output_dir (Path, optional): Directory to save individual feature sets. If None, features are not saved.
-        **kwargs: Additional keyword arguments
+    This function is the core feature computation engine that processes raw electrophysiological data
+    and computes various feature sets. It handles data destriping, feature computation for different
+    modalities (LF, CSD, AP, waveforms), and optionally saves results to files. The function supports
+    both computation and loading of cached features.
 
-    Returns:
-        pd.DataFrame: DataFrame containing computed features
+    Parameters
+    ----------
+    raw_ap : np.ndarray
+        Raw AP data array of shape (n_channels, n_samples).
+    raw_lf : np.ndarray
+        Raw LF data array of shape (n_channels, n_samples).
+    fs_ap : float
+        Sampling frequency of AP data in Hz.
+    fs_lf : float
+        Sampling frequency of LF data in Hz.
+    geometry : dict
+        Dictionary containing 'x' and 'y' coordinates for each channel.
+    channel_labels : np.ndarray, optional
+        Array of channel labels for bad channel identification. If None, assumes all channels are good.
+    features_to_compute : list, optional
+        List of feature sets to compute. If None, computes all available features.
+        Available options: ['lf', 'csd', 'ap', 'waveforms'].
+    output_dir : Path, optional
+        Directory to save individual feature sets. If None, features are not saved.
+    scratch_dir : Path, optional
+        Directory for temporary files (e.g., dartsort scratch files).
+    **kwargs : dict
+        Additional keyword arguments including:
+        - skip_saved_computation: Skip computation if files already exist
+        - save_waveforms: Save waveform data files
+
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame containing all computed features merged by channel.
+
+    Raises
+    ------
+    AssertionError
+        If input arrays are not 2D, channel counts don't match, or sampling frequencies are invalid.
+    ValueError
+        If invalid feature sets are requested.
+
+    Example
+    -------
+    >>> import numpy as np
+    >>> raw_ap = np.random.randn(384, 30000)
+    >>> raw_lf = np.random.randn(384, 3000)
+    >>> geometry = {'x': np.arange(384), 'y': np.arange(384)}
+    >>> df = compute_features_from_raw(
+    ...     raw_ap=raw_ap, raw_lf=raw_lf, fs_ap=30000, fs_lf=2500,
+    ...     geometry=geometry, features_to_compute=['lf', 'ap']
+    ... )
+
+    Notes
+    -----
+    - The function applies destriping to both AP and LF data before feature computation.
+    - Features are computed independently and can be cached/loaded from files.
+    - Waveform features have special handling for spike count data types.
+    - All features are merged on the 'channel' column in the final output.
+    - Package version metadata is added to each feature DataFrame.
+    - The function supports skipping computation for existing files to save time.
     """
-    # Assert input shapes and parameters
+    # Validate input array shapes and parameters
     assert raw_ap.ndim == 2 and raw_lf.ndim == 2, "Input arrays must be 2D"
-    assert (
-        raw_ap.shape[0] == raw_lf.shape[0]
-    ), "Number of channels must match between AP and LF data"
-    assert (
-        raw_ap.shape[0] == len(geometry["x"]) == len(geometry["y"])
-    ), "Number of channels must match geometry"
+    assert raw_ap.shape[0] == raw_lf.shape[0], (
+        "Number of channels must match between AP and LF data"
+    )
+    assert raw_ap.shape[0] == len(geometry["x"]) == len(geometry["y"]), (
+        "Number of channels must match geometry"
+    )
     assert fs_ap > 0 and fs_lf > 0, "Sampling frequencies must be positive"
 
+    # Set default channel labels if not provided
     if channel_labels is None:
         channel_labels = np.zeros(raw_ap.shape[0])
 
     # Define available feature sets
     available_features = ["lf", "csd", "ap", "waveforms"]
 
-    # If no specific features are requested, compute all
+    # Validate requested features or use all available features
     if features_to_compute is None:
         features_to_compute = available_features
     else:
-        # Validate requested features
+        # Check for invalid feature requests
         invalid_features = [
             f for f in features_to_compute if f not in available_features
         ]
@@ -721,8 +974,7 @@ def compute_features_from_raw(
                 f"Invalid feature sets requested: {invalid_features}. Available options: {available_features}"
             )
 
-    # Todo do I need to check the dtype of the raw_ap and raw_lf?
-    # Destripe AP and LF data
+    # Apply destriping to  AP and LF data
     des_ap = ibldsp.voltage.destripe(
         raw_ap,
         fs=fs_ap,
@@ -737,10 +989,10 @@ def compute_features_from_raw(
     )
     logger.info("Destriped AP and LF data")
 
+    # Initialize dictionary to store computed features
     df = {}
 
-    # TODO - Have consistent use of either Pathlib or os.path.join.
-    # Function to save features to file
+    # Helper function to save features to Parquet files
     def save_features(feature_name, feature_df):
         if output_dir is not None:
             output_dir.mkdir(parents=True, exist_ok=True)
@@ -748,7 +1000,7 @@ def compute_features_from_raw(
             feature_df.to_parquet(file_path)
             logger.info(f"Saved {feature_name} features to {file_path}")
 
-    # Function to load features from file
+    # Helper function to load features from existing files
     def load_features(feature_name):
         if output_dir is not None:
             file_path = output_dir / f"{feature_name}_features.pqt"
@@ -776,7 +1028,7 @@ def compute_features_from_raw(
 
     logger.info(f"Starting {features_to_compute} computation")
 
-    # Define feature computation configurations
+    # Define configuration for each feature type with their computation functions and parameters
     feature_configs = {
         "lf": {
             "func": features.lf,
@@ -804,6 +1056,7 @@ def compute_features_from_raw(
         },
     }
 
+    # Helper function to compute and save individual features
     def compute_and_save_feature(feature_name, config):
         """Helper function to compute and save a feature"""
         # Check if we should skip computation for existing files
@@ -819,20 +1072,22 @@ def compute_features_from_raw(
 
         logger.info(f"Starting {feature_name.upper()} computation")
 
-        # Compute the feature
+        # Compute the feature with special handling for waveforms
         if feature_name == "waveforms":
-            # Special handling for waveforms which returns tuple
+            # Special handling for waveforms which returns tuple (features, waveform_data)
             df[feature_name], waveforms = config["func"](
                 **config["args"], **config["kwargs"]
             )
+            # Convert spike count to integer type for consistency
             df[feature_name]["spike_count"] = df[feature_name]["spike_count"].astype(
                 "Int64"
             )
 
-            # Save waveform files if requested from the functoin call of compute_features_from_raw
+            # Save waveform files if requested from the function call of compute_features_from_raw
             if (output_dir is not None) and kwargs.get("save_waveforms", False):
                 waveforms_dir = output_dir / "waveforms"
                 waveforms_dir.mkdir(parents=True, exist_ok=True)
+                # Save waveform arrays in compressed format
                 np.save(waveforms_dir / "raw.npy", waveforms["raw"].astype(np.float16))
                 np.save(
                     waveforms_dir / "denoised.npy",
@@ -841,38 +1096,30 @@ def compute_features_from_raw(
                 np.save(
                     waveforms_dir / "waveform_channels.npy", waveforms["channel_index"]
                 )
+                # Save spike information
                 waveforms["df_spikes"].to_parquet(waveforms_dir / "spikes.pqt")
         else:
+            # Standard feature computation
             df[feature_name] = config["func"](**config["args"], **config["kwargs"])
 
-        # Add package version metadata
+        # Add package version metadata for provenance tracking
         df[feature_name].attrs["ibleatools_version"] = ibleatools_version
         df[feature_name].attrs[f"{feature_name}_version"] = features_version
 
-        # Save the feature
+        # Save the computed feature to file
         save_features(feature_name, df[feature_name])
 
-    # Compute each requested feature
+    # Compute each requested feature using the configuration
     for feature_name in features_to_compute:
         if feature_name in feature_configs:
             compute_and_save_feature(feature_name, feature_configs[feature_name])
         else:
             logger.warning(f"Unknown feature type: {feature_name}")
 
+    # Merge all computed features on the 'channel' column using outer join
     df_voltage = reduce(
         lambda left, right: pd.merge(left, right, on="channel", how="outer"),
         [df[k] for k in df.keys()],
     )
 
     return df_voltage
-
-
-# TODO - Define a function to compute features for a single category.
-def compute_features_for_category(df, category):
-    """
-    Compute features for a specific category from a DataFrame.
-
-    Args:
-        df (pd.DataFrame): DataFrame containing computed features
-    """
-    # TODO - Define the features to compute for the category.

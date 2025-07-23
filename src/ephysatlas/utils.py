@@ -90,53 +90,114 @@ def get_aggregated_snippets_df(probe_level_dir: Path):
 
 def add_metadata_to_parquet_files(**snippet_attrs: Dict[str, Any]):
     """
-    Add metadata attributes to all .parquet and .pqt files in subdirectories of the given directory.
+    Add metadata attributes to all Parquet files in a snippet-level directory.
 
-    Args:
-        **snippet_attrs: Additional key-value pairs to add as metadata attributes
+    This function takes snippet attributes and adds them as metadata to all .parquet and .pqt files
+    found in the specified snippet directory. The metadata is useful for tracking provenance,
+    parameters, and other contextual information.
 
-    Returns:
-        None
+    Parameters
+    ----------
+    **snippet_attrs : Dict[str, Any]
+        Keyword arguments containing metadata to add to the Parquet files. Must include:
+        - 'base_level_dir': Base directory path
+        - 'snippet_level_dir': Snippet directory name
+        Additional key-value pairs will be added as metadata attributes.
+
+    Returns
+    -------
+    None
+        The function modifies files in place and does not return any values.
+
+    Example
+    -------
+    >>> add_metadata_to_parquet_files(
+    ...     base_level_dir='/data/probe1',
+    ...     snippet_level_dir='snippet_001',
+    ...     pid='probe1',
+    ...     t_start=100.5,
+    ...     duration=30.0
+    ... )
+
+    Notes
+    -----
+    - The function constructs the full snippet directory path from base_level_dir and snippet_level_dir.
+    - Both .parquet and .pqt file extensions are supported.
+    - If the directory doesn't exist, a warning is logged but no error is raised.
+    - Each file is processed individually using _update_parquet_metadata.
+    - The function logs the number of files processed for debugging.
     """
+    # Construct the full path to the snippet directory
     snippet_level_dir = Path(snippet_attrs["base_level_dir"]) / Path(
         snippet_attrs["snippet_level_dir"]
     )
+    # Check if the directory exists and is actually a directory
     if not snippet_level_dir.exists() or not snippet_level_dir.is_dir():
         logger.warning(
             f"Directory {snippet_level_dir} does not exist or is not a directory"
         )
 
-    # Look for both .parquet and .pqt files in the subdirectory
+    # Find all Parquet files (both .parquet and .pqt extensions) in the snippet directory
     for file_path in list(snippet_level_dir.glob("*.parquet")) + list(
         snippet_level_dir.glob("*.pqt")
     ):
+        # Update metadata for each individual file
         _update_parquet_metadata(file_path, **snippet_attrs)
 
+    # Log completion of metadata update for the entire directory
     logger.info(f"Updated metadata for {snippet_level_dir}")
 
 
 def _update_parquet_metadata(file_path: Path, **snippet_attrs: Dict[str, Any]):
     """
-    Helper function to update metadata for a single parquet file.
+    Update metadata attributes for a single Parquet file.
 
-    Args:
-        file_path (Path): Path to the parquet file
-        **snippet_attrs: Additional key-value pairs to add as metadata attributes
+    This helper function reads a Parquet file, adds the provided metadata attributes to the
+    DataFrame's attrs dictionary, and writes the file back to disk.
 
-    Returns:
-        None
+    Parameters
+    ----------
+    file_path : Path
+        Path to the Parquet file to be updated.
+    **snippet_attrs : Dict[str, Any]
+        Keyword arguments containing metadata attributes to add to the file.
+        These will be stored in the DataFrame's attrs dictionary.
+
+    Returns
+    -------
+    None
+        The function modifies the file in place and does not return any values.
+
+    Example
+    -------
+    >>> _update_parquet_metadata(
+    ...     Path('data.pqt'),
+    ...     pid='probe1',
+    ...     t_start=100.5,
+    ...     duration=30.0
+    ... )
+
+    Notes
+    -----
+    - The function reads the entire Parquet file into memory, modifies it, and writes it back.
+    - All provided snippet_attrs are added to the DataFrame's attrs dictionary.
+    - If an error occurs during processing, it is logged as a warning but doesn't stop execution.
+    - The function uses debug-level logging for successful updates and warning-level for errors.
+    - This function is designed to be called by add_metadata_to_parquet_files for batch processing.
     """
     try:
-        # Read the parquet file
+        # Read the Parquet file into a DataFrame
         df = pd.read_parquet(file_path)
 
-        # Add the required metadata attributes
+        # Add each metadata attribute to the DataFrame's attrs dictionary
         for key, value in snippet_attrs.items():
             df.attrs[key] = value
 
-        # Write the file back with updated metadata
+        # Write the DataFrame back to the same file with updated metadata
         df.to_parquet(file_path)
+        # Log successful metadata update at debug level
         logger.debug(f"Updated metadata for {file_path}")
 
     except Exception as e:
+        # Log any errors that occur during the update process
         logger.warning(f"Failed to update metadata for {file_path}: {str(e)}")
