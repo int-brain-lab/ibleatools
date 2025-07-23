@@ -4,6 +4,7 @@ import logging
 import random
 import shutil
 import string
+import tempfile
 
 import numpy as np
 import pandas as pd
@@ -21,8 +22,41 @@ import ibldsp.voltage
 # Set up logger
 logger = logging.getLogger(__name__)
 
-# Features version
-__features_version__ = "2025.07.01"
+__features_version__ = (
+    "2025.07.01"  # this is the version of this feature extractor code
+)
+
+
+# TODO - Scratch_dir path is not working as expected. Even if I pass the scratch_dir argument in the main compute_features function, here I am gettig log from Path("/scratch/dartsort/")
+def _setup_scratch_directory(scratch_dir=None):
+    """
+    Set up scratch directory with fallback logic.
+
+    Args:
+        scratch_dir (Path or str, optional): Preferred scratch directory path.
+            If None, will try system defaults.
+
+    Returns:
+        Path: Path to the created scratch directory
+    """
+    if scratch_dir is not None:
+        scratch_path = Path(scratch_dir)
+    else:
+        # Try SDSC scratch directory first
+        scratch_path = Path("/scratch/dartsort/")
+
+    try:
+        scratch_path.mkdir(parents=True, exist_ok=True)
+        logger.info(f"Using scratch directory: {scratch_path}")
+        return scratch_path
+    except Exception as e:
+        # Fallback to system temp directory if preferred directory fails
+        logger.warning(f"Error creating scratch directory {scratch_path}: {e}")
+        fallback_path = Path(tempfile.gettempdir()) / "dartsort"
+        fallback_path.mkdir(parents=True, exist_ok=True)
+        logger.info(f"Using fallback scratch directory: {fallback_path}")
+        return fallback_path
+
 
 floats = Annotated[pa.Float, pa.Float32]
 BANDS = {
@@ -46,6 +80,22 @@ class DartParameters(pydantic.BaseModel):
     localization_radius: pydantic.PositiveFloat = 150
     chunk_length_samples: pydantic.PositiveInt = 2**15
     trough_offset: pydantic.PositiveInt = (42,)
+    scratch_dir: Path | str | None = pydantic.Field(
+        default=None,
+        description="Scratch directory for temporary files. If None, will use system defaults.",
+    )
+
+
+class ChannelDataFrameSchema(pa.DataFrameModel):
+    pid: Series[str] = pa.Field()
+    channel: Series[int] = pa.Field()
+    x: Series[float] = pa.Field()
+    y: Series[float] = pa.Field()
+    z: Series[float] = pa.Field()
+    axial_um: Series[float] = pa.Field(coerce=True)
+    lateral_um: Series[float] = pa.Field(coerce=True)
+    acronym: Series[str] = pa.Field()
+    atlas_id: Series[int] = pa.Field()
 
 
 class BaseChannelFeatures(pa.DataFrameModel):
@@ -81,6 +131,7 @@ class ModelApFeatures(BaseChannelFeatures):
         coerce=True, metadata={"transform": lambda x: 20 * np.log10(x)}
     )
     cor_ratio: Series[float] = pa.Field(coerce=True)
+    channel_labels: Series[int] = pa.Field(coerce=True)
 
 
 class ModelSpikeFeatures(BaseChannelFeatures):
@@ -89,14 +140,15 @@ class ModelSpikeFeatures(BaseChannelFeatures):
     depolarisation_slope: Series[float] = pa.Field(coerce=True)
     peak_time_secs: Series[float] = pa.Field(coerce=True)
     peak_val: Series[float] = pa.Field(coerce=True)
-    polarity: Series[float] = pa.Field(
-        coerce=True, metadata={"transform": lambda x: np.log10(x + 1 + 1e-6)}
-    )
+    polarity: Series[float] = pa.Field(coerce=True)
     recovery_slope: Series[float] = pa.Field(coerce=True)
     recovery_time_secs: Series[float] = pa.Field(coerce=True)
     repolarisation_slope: Series[float] = pa.Field(coerce=True)
-    spike_count: int = pa.Field(
-        coerce=True, metadata={"transform": lambda x: np.log2(x.astype(float))}
+    spike_count: float = pa.Field(
+        coerce=True,
+        metadata={
+            "transform": lambda x: np.where(x == 0, np.nan, np.log2(x.astype(float)))
+        },
     )
     tip_time_secs: Series[float] = pa.Field(coerce=True)
     tip_val: Series[float] = pa.Field(coerce=True)
@@ -107,7 +159,6 @@ class ModelSpikeFeatures(BaseChannelFeatures):
 class ModelChannelLayout(BaseChannelFeatures):
     axial_um: Series[float] = pa.Field(coerce=True)
     lateral_um: Series[float] = pa.Field(coerce=True)
-    labels: Series[int] = pa.Field(coerce=True, nullable=True)
 
 
 class ModelHistologyPlanned(BaseChannelFeatures):
@@ -233,18 +284,20 @@ def csd(data, fs, geometry, bands=None, decimate=10):
     return df_csd
 
 
-def ap(data, geometry=None):
+def ap(data, geometry=None, channel_labels=None):
     """
     Computes the LF features from a numpy array
     :param data: numpy array with the AP band data (channels, samples)
     :return: pandas dataframe with the columns ['channel', 'rms_ap']
     """
     assert geometry is not None, "Geometry is required for AP band computation"
+    assert channel_labels is not None, "Channel labels are required"
     df_ap = pd.DataFrame()
     nc = data.shape[0]  # number of channels
     df_ap["channel"] = np.arange(nc)
     df_ap["rms_ap"] = ibldsp.utils.rms(data, axis=-1)
     df_ap["cor_ratio"] = xcor_acor_ratio(data, geometry=geometry)
+    df_ap["channel_labels"] = channel_labels
     ModelApFeatures.validate(df_ap)
     return df_ap
 
@@ -297,16 +350,7 @@ def dart_subtraction_numpy(data, fs, geometry, **params):
     )
 
     # Ensure scratch directory exists
-    # This is for SDSC calculations
-    scratch_dir = Path("/scratch/prai1/dartsort/")
-    try:
-        scratch_dir.mkdir(parents=True, exist_ok=True)
-    except Exception as e:
-        # We are probably on a local machine
-        logger.warning(f"Error creating scratch directory: {e}")
-        # Create scratch directory in /tmp
-        scratch_dir = Path("/tmp/dartsort/")
-        scratch_dir.mkdir(parents=True, exist_ok=True)
+    scratch_dir = _setup_scratch_directory(params.scratch_dir)
 
     detected_spikes, h5_filename = dartsort.subtract(
         rec_np,
@@ -340,7 +384,9 @@ def dart_subtraction_numpy(data, fs, geometry, **params):
     return df_spikes, d_waveforms
 
 
-def spikes(data, fs: int, geometry: dict, return_waveforms=True, **params):
+def spikes(
+    data, fs: int, geometry: dict, return_waveforms=True, scratch_dir=None, **params
+):
     """
     :param data:
     :param fs:
@@ -350,6 +396,9 @@ def spikes(data, fs: int, geometry: dict, return_waveforms=True, **params):
     """
     params = DartParameters() if params is None else DartParameters(**params)
     logger.info("Starting spike detection")
+    # Update params with scratch_dir if provided
+    if scratch_dir is not None:
+        params.scratch_dir = scratch_dir
     df_spikes_, d_waveforms = dart_subtraction_numpy(data, fs, geometry, params=params)
     logger.info("Spike detection completed")
     df_waveforms = ibldsp.waveforms.compute_spike_features(d_waveforms["denoised"])
@@ -482,7 +531,7 @@ def denoise_shank(
     return denoised_feature
 
 
-def denoise_dataframe(df_pid, feature_names=None, fac=1):
+def denoise_dataframe(df_pid, feature_names=None, fac=1, channel_labels=None):
     """
     Applies total variation filter denoising to the features of a single probe insertion dataframe.
 
@@ -510,24 +559,42 @@ def denoise_dataframe(df_pid, feature_names=None, fac=1):
         A new dataframe with the same structure as the input, but with denoised feature values.
         Non-feature columns are copied without modification.
     """
+    # TODO : Should I try to read channel labels from the df_pid itself??
+    if channel_labels is None:
+        if "channel_labels" in df_pid.columns:
+            channel_labels = df_pid["channel_labels"].to_numpy()
+        else:
+            channel_labels = np.zeros(df_pid.shape[0], dtype=int)
     if feature_names is None:
         feature_names = list(
             set(voltage_features_set(["raw_ap", "raw_lf", "raw_lf_csd", "waveforms"]))
             & set(df_pid.columns)
         )
-    df_pid_denoise = df_pid.loc[
-        :, list(set(df_pid.columns) - set(feature_names))
-    ].copy()
+    df_pid_denoise = df_pid.copy()
     raw_features_schema = ModelRawFeatures.to_schema()
     for feature_name in feature_names:
+        if (
+            feature_name == "channel_labels"
+        ):  # we do not want to apply any denoising to this feature
+            continue
         if (metadata := raw_features_schema.columns[feature_name].metadata) is not None:
             fval = metadata["transform"](np.copy(df_pid[feature_name].to_numpy()))
         else:
             fval = np.copy(df_pid[feature_name].to_numpy())
-        fval[df_pid["labels"] != 0] = np.nan
-        df_pid_denoise.loc[:, feature_name] = denoise_shank(
+        fval[channel_labels != 0] = np.nan
+        logger.info(f"Calculation for feature_name = {feature_name}")
+        denoised_values = denoise_shank(
             feature=fval,
             xy=df_pid[["lateral_um", "axial_um"]].values,
             fac=fac,
         )
+        # Check that the denoised values have the expected length
+        if len(denoised_values) != len(df_pid_denoise):
+            raise ValueError(
+                f"Length mismatch for feature '{feature_name}': "
+                f"denoised values length ({len(denoised_values)}) != "
+                f"DataFrame length ({len(df_pid_denoise)})"
+            )
+        # Let pandas determine the appropriate dtype for the new values
+        df_pid_denoise[feature_name] = denoised_values
     return df_pid_denoise

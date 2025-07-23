@@ -1,0 +1,22 @@
+import numpy as np
+from ephysatlas import features
+
+ap_data = np.load("fixtures/ap_destriped.npy")
+
+fs_ap = 30000.0
+n_channels = ap_data.shape[0]
+
+geometry = {
+    "x": np.zeros(n_channels),  # All channels in same column
+    "y": np.arange(n_channels) * 20,  # 20 um spacing between channels
+}
+
+features.spikes(ap_data,fs_ap, geometry)
+
+
+
+
+
+
+
+

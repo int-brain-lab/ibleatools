@@ -1,5 +1,9 @@
+import logging
+
 import numpy as np
+import pandas as pd
 import scipy.stats
+
 import matplotlib.pyplot as plt
 import matplotlib
 import matplotlib.patches
@@ -10,21 +14,99 @@ from iblutil.numerical import ismember
 from ibl_style.style import figure_style
 from ibl_style.utils import MM_TO_INCH
 import brainbox.ephys_plots
+from matplotlib import (
+    cm,
+)  # This is deprecated, but cannot import matplotlib.colormaps as cm
 
 import ephysatlas.features
 
+
+_logger = logging.getLogger(__name__)
+
 figure_style()
+
+QUANTILES = [0.01, 0.1, 0.9, 0.99]
+BINS = 50
+
+
+def plot_histogram(
+    series, ax=None, quantiles=None, bins=None, xlabel=None, title=None, normalise=False
+):
+    quantiles = quantiles if quantiles is not None else QUANTILES
+    quantile_values = np.quantile(series, quantiles)
+
+    bins = bins if bins is not None else BINS
+
+    hist_values, bin_edges = np.histogram(series, bins=bins)
+    if normalise:
+        hist_values = hist_values / len(series)
+    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+
+    color_indices = np.digitize(bin_centers, quantile_values, right=True)
+    colors = cm.viridis(color_indices / color_indices.max())
+
+    if ax is None:
+        fig, ax = plt.subplots()
+
+    ax.bar(
+        bin_edges[:-1],
+        hist_values,
+        width=np.diff(bin_edges),
+        color=colors,
+        align="edge",
+    )
+
+    ax.set_xlabel(xlabel)
+    if normalise:
+        ax.set_ylabel("Normalised Count")
+    else:
+        ax.set_ylabel("Count")
+    ax.set_title(title)
+    ax.text(
+        0.95,
+        0.95,
+        f"{len(series):,} samples",
+        transform=ax.transAxes,
+        ha="right",
+        va="top",
+        fontsize=12,
+    )
+
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.tick_params(axis="both", which="both", direction="out", length=6)
+    ax.set_facecolor("#f9f9f9")
+    plt.tight_layout()
 
 
 def plot_cumulative_probas(probas, depths, aids, regions=None, ax=None, legend=False):
     """
-    :param probas: (ndepths x nregions) array of probabilities for each region that sum to 1 for each depth
-    :param depths: (ndepths) vector of depths
-    :param aids: (nregions) vector of atlas_ids
-    :param regions: optional: iblatlas.BrainRegion object
-    :param ax:
-    :param legend:
-    :return:
+    Plot cumulative probabilities of brain regions along probe depths.
+
+    Creates a stacked area plot showing the probability distribution of different brain regions
+    at each depth along a probe trajectory. Each region is colored according to its standard
+    atlas color.
+
+    Parameters
+    ----------
+    probas : numpy.ndarray
+        Array of shape (ndepths, nregions) containing probabilities for each region at each depth.
+        Values should sum to 1 across regions for each depth.
+    depths : numpy.ndarray
+        Vector of length ndepths containing the depth values along the probe trajectory.
+    aids : numpy.ndarray
+        Vector of length nregions containing the atlas IDs for each region.
+    regions : iblatlas.BrainRegions, optional
+        BrainRegions object containing region information. If None, a new instance is created.
+    ax : matplotlib.axes.Axes, optional
+        Axes on which to plot. If None, the current axes will be used.
+    legend : bool, default False
+        Whether to display a legend with region names.
+
+    Returns
+    -------
+    matplotlib.axes.Axes
+        The axes object containing the plot.
     """
     regions = regions or BrainRegions()
     _, rids = ismember(aids, regions.id)
@@ -199,16 +281,19 @@ def plot_probe_rect2(xy, color, ax, width=16, height=40, colorbar=False):
 
 
 def figure_features_channel_space(
-    pid_df,
-    features,
-    xy,
-    pid,
-    fig=None,
-    axs=None,
-    br=None,
-    mapping="Cosmos",
-    plot_rect=plot_probe_rect2,
-    cmap="viridis",
+    pid_df: pd.DataFrame,
+    features: list[str],
+    xy: np.ndarray,
+    pid: str,
+    fig: plt.Figure = None,
+    axs: np.ndarray = None,
+    br: BrainRegions = None,
+    mapping: str = "Cosmos",
+    plot_rect: callable = plot_probe_rect2,
+    cmap: str = "viridis",
+    scaler: object = None,
+    vmin: float = None,
+    vmax: float = None,
 ):
     """
     Create a figure displaying electrophysiological features and brain regions along a probe.
@@ -229,7 +314,7 @@ def figure_features_channel_space(
         pid = '0228bcfd-632e-49bd-acd4-c334cf9213e9'
         pid_df = df_voltage[df_voltage.index.get_level_values(0).isin([pid])].copy()
 
-    features : list
+    features : list of str
         List of feature names to display, e.g. ['rms_lf', 'psd_delta', 'rms_ap'].
         These must be column keys in pid_df.
 
@@ -253,11 +338,21 @@ def figure_features_channel_space(
         Brain region mapping to use. The function will look for columns named
         "{mapping}_id" in pid_df.
 
-    plot_rect : function, default plot_probe_rect2
+    plot_rect : callable, default plot_probe_rect2
         Function to use for plotting rectangles. Should accept xy, color, and ax parameters.
 
     cmap : str, default "viridis"
         Colormap name to use for feature visualization.
+
+    scaler : object, optional
+        Scaling to be applied to feature values before displaying. Should have a transform method
+        (like sklearn.preprocessing.StandardScaler).
+
+    vmin : float, optional
+        Minimum value for color normalization. If None, the minimum value in the data is used.
+
+    vmax : float, optional
+        Maximum value for color normalization. If None, the maximum value in the data is used.
 
     Returns
     -------
@@ -270,10 +365,12 @@ def figure_features_channel_space(
     if br is None:
         br = BrainRegions()
     if fig is None or axs is None:
-        fig, axs = plt.subplots(1, len(features) + 4, sharey=False)
+        fig, axs = plt.subplots(1, len(features) + 4, sharey=False, figsize=(9, 5))
+    if scaler is not None:
+        pid_df.loc[:, features] = scaler.transform(pid_df.loc[:, features])
 
     brainbox.ephys_plots.plot_brain_regions(
-        pid_df["atlas_id"].values,
+        pid_df["Allen_id"].values,
         channel_depths=xy[:, 1],
         brain_regions=br,
         display=True,
@@ -286,7 +383,7 @@ def figure_features_channel_space(
         feat_arr = pid_df[[feature]].to_numpy()
         # Plot feature
         # todo OW use the min/max values from the pandera schemes instead
-        color = get_color_feat(feat_arr, cmap_name=cmap)
+        color = get_color_feat(feat_arr, cmap_name=cmap, min_val=vmin, max_val=vmax)
         plot_rect(xy, color, ax=ax)
         ax.set_title(feature, rotation=90)
         ax.set_xticklabels([])
@@ -329,5 +426,76 @@ def figure_features_channel_space(
         right=1 - adjust / width,
         wspace=0,
     )
+    return fig, axs
 
+
+def plot_features_distributions(df_features, x_list=None, title=""):
+    """
+    Create a grid of histograms displaying the distribution of electrophysiological features.
+
+    This function generates a multi-panel figure with histograms for each feature in x_list.
+    Each histogram is color-coded according to feature values and accompanied by a colorbar.
+    The function uses quantile-based limits to handle outliers in the data visualization.
+
+    Parameters
+    ----------
+    None : The function uses global variables:
+        x_list : list
+            List of feature names to plot
+        df_features : pandas.DataFrame
+            DataFrame containing the feature values with feature names as columns
+        title : str
+            Title for the figure
+
+    Returns
+    -------
+    tuple
+        A tuple containing:
+        - fig : matplotlib.figure.Figure
+            The figure object containing all histograms
+        - axs : numpy.ndarray
+            Array of matplotlib.axes.Axes objects for each subplot
+    """
+    if x_list is None:
+        x_list = ephysatlas.features.voltage_features_set()
+    fig, axs = plt.subplots(
+        4, 12, figsize=(16, 9), gridspec_kw={"width_ratios": [4, 0.2] * 6}
+    )
+    axs = axs.flatten()
+    i = 0
+    for feature_name in x_list:
+        ax = axs[i]
+        if feature_name not in df_features.columns:
+            _logger.warning(
+                f"'{feature_name}' not found in the DataFrame. Skipping this feature."
+            )
+            continue
+        feature = df_features.loc[:, feature_name].values
+
+        clim = np.array([np.nanquantile(feature, 0.1), np.nanquantile(feature, 0.9)])
+        hlim = np.array(
+            [np.nanquantile(feature, 0.005), np.nanquantile(feature, 0.995)]
+        )
+
+        # Main histogram plot with box and grid
+        c, x = np.histogram(feature, bins=np.linspace(hlim[0], hlim[1], 64))
+        bars = ax.bar(x[:-1], c / np.sum(c), width=np.diff(x)[0])
+        cmap = plt.get_cmap("PuOr")
+        norm = plt.Normalize(vmin=clim[0], vmax=clim[1])
+        for bar, bin_center in zip(bars, x[:-1]):
+            bar.set_color(cmap(norm(bin_center)))
+
+        # Set box style and grid
+        ax.spines["top"].set_visible(True)
+        ax.spines["right"].set_visible(True)
+        ax.grid(True, linestyle="--", alpha=0.7)
+        ax.set_title(f"Feature: {feature_name}")
+
+        # Add colorbar in second axis
+        cb = plt.colorbar(plt.cm.ScalarMappable(norm=norm, cmap=cmap), cax=axs[i + 1])
+        cb.set_label("Feature value")
+        i += 2
+    for ax in axs[i:]:
+        ax.axis("off")
+    fig.suptitle(title)
     return fig, axs

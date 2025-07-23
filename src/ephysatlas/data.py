@@ -163,6 +163,7 @@ def read_features_from_disk(
     brain_atlas: "iblatlas.atlas.BrainAtlas" = None,
     mappings: list[str] = None,
     strict: bool = True,
+    load_denoised: bool = True,
 ) -> pd.DataFrame:
     """
     Read electrophysiology features from disk and merge with channel information.
@@ -184,6 +185,9 @@ def read_features_from_disk(
     strict : bool, optional
         Whether to raise an error on panderas validation
         Default is True.
+    load_denoised: bool, optional
+        Whether to return the denoised or raw features
+        Default is True.
     Returns
     -------
     pandas.DataFrame
@@ -195,11 +199,14 @@ def read_features_from_disk(
         brain_atlas if brain_atlas is not None else ephysatlas.anatomy.ClassifierAtlas()
     )
     assert brain_atlas is not None, "Brain atlas is required to map labels to regions"
-    assert all(mapping in brain_atlas.regions.mappings for mapping in mappings), (
-        f"Unknown mapping: {mappings}"
-    )
+    assert all(
+        mapping in brain_atlas.regions.mappings for mapping in mappings
+    ), f"Unknown mapping: {mappings}"
     # merge the channel information with the features
-    df_features = pd.read_parquet(path_features / "raw_ephys_features_denoised.pqt")
+    if load_denoised:  # load the denoised features
+        df_features = pd.read_parquet(path_features / "raw_ephys_features_denoised.pqt")
+    else:  # load the raw features
+        df_features = pd.read_parquet(path_features / "raw_ephys_features.pqt")
     df_channels = pd.read_parquet(path_features / "channels.pqt")
     duplicate_cols = set(df_features.columns).intersection(set(df_channels.columns))
     df_channels = df_channels.drop(columns=duplicate_cols)
@@ -209,14 +216,17 @@ def read_features_from_disk(
         right_index=True,
         left_index=True,
     )
-    if "labels" not in df_features.columns:
+    if ("channel_labels" not in df_features.columns) and (
+        "labels" not in df_features.columns
+    ):
         df_features = df_features.merge(
             pd.read_parquet(path_features / "channels_labels.pqt").fillna(0),
             how="inner",
             right_index=True,
             left_index=True,
         )
-    df_features["outside"] = df_features["labels"] == 3
+        df_features.rename(columns={"labels": "channel_labels"}, inplace=True)
+    df_features["outside"] = df_features["channel_labels"] == 3
 
     aids = brain_atlas.get_labels(
         df_features.loc[:, ["x", "y", "z"]].values, mode="clip"
