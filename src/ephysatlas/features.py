@@ -588,12 +588,13 @@ class EphysTransformer(_EphysTransformerInterface):
 
     def transform(self, X: pd.DataFrame, y=None):
         self.validate_X(X)
+        xt = X.copy()
         for column_name in X.columns:
             if column_name in self.fcn_transform_:
-                X.loc[:, column_name] = self.fcn_transform_[column_name](
+                xt.loc[:, column_name] = self.fcn_transform_[column_name](
                     X[column_name].to_numpy()
                 )
-        return X
+        return xt
 
 
 class EphysDenoiser(_EphysTransformerInterface):

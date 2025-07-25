@@ -65,15 +65,33 @@ class TestWaveformFeatures(unittest.TestCase):
         self.assertEqual(4, len(waveforms.keys()))
 
 
-class TestDenoiseFeatures(unittest.TestCase):
+class TestTransformDenoiseFeatures(unittest.TestCase):
     def setUp(self):
         self.df_features = ephysatlas.data.read_features_from_disk(
             FIXTURE_PATH.joinpath("features", "2025_W28"), load_denoised=False
         )
 
+    def test_transform_features(self):
+        et = ephysatlas.features.EphysTransformer()
+        et.fit(self.df_features)
+        df_orig = self.df_features.copy()
+        dft = et.transform(df_orig)
+        np.testing.assert_array_equal(
+            self.df_features["spike_count"], df_orig["spike_count"]
+        )
+        self.assertTrue(
+            np.any(
+                np.not_equal(
+                    self.df_features["spike_count"].to_numpy(),
+                    dft["spike_count"].to_numpy(),
+                )
+            )
+        )
+
     def test_denoise_features(self):
         pid = self.df_features.index.get_level_values(0).unique()[0]
         df_pid = self.df_features.loc[pid, :]
+        dfcopy = df_pid.copy()
         df_denoised = ephysatlas.features.denoise_dataframe(df_pid)
         expected = np.array(
             [
@@ -103,6 +121,7 @@ class TestDenoiseFeatures(unittest.TestCase):
                 1.35432377e00,
             ]
         )
+        np.testing.assert_array_equal(self.df_features.loc[pid, :], dfcopy)
         np.testing.assert_allclose(
             expected,
             df_denoised.loc[:, ephysatlas.features.voltage_features_set()]
