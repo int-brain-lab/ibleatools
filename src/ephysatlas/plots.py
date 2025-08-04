@@ -376,7 +376,7 @@ def figure_features_channel_space(
         display=True,
         ax=axs[0],
     )
-    axs[0].set_title("mapping", rotation=90)
+    axs[0].set_title(mapping, rotation=90)
 
     for i_feat, feature in enumerate(features):
         ax = axs[i_feat + 4]
