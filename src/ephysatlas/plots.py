@@ -370,13 +370,13 @@ def figure_features_channel_space(
         pid_df.loc[:, features] = scaler.transform(pid_df.loc[:, features])
 
     brainbox.ephys_plots.plot_brain_regions(
-        pid_df["Allen_id"].values,
+        pid_df[mapping+"_id"].values,
         channel_depths=xy[:, 1],
         brain_regions=br,
         display=True,
         ax=axs[0],
     )
-    axs[0].set_title("Allen", rotation=90)
+    axs[0].set_title("mapping", rotation=90)
 
     for i_feat, feature in enumerate(features):
         ax = axs[i_feat + 4]
