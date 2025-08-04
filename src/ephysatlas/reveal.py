@@ -51,7 +51,7 @@ def save_figure(func):
     def wrapper(self, *args, save_dir=None, overwrite=False, filename=None, **kwargs):
         # Save figures if save_dir is provided
         method_name = func.__name__
-        filename = f"{self.pid}_{method_name}*.png" if filename is None else filename
+        filename = f"{self.pid}_{method_name}.png" if filename is None else filename
         if save_dir is not None:
             save_dir = Path(save_dir)
             save_dir.mkdir(exist_ok=True, parents=True)
@@ -118,7 +118,7 @@ class AtlasReveal:
         # option to override the default df_pid: this is useful for displaying the raw features if needed
         df_pid = df_pid if df_pid is not None else self.df_pid
         if scaler is not None:
-            kwargs = {"scaler": scaler, "vmin": -1, "vmax": 1}
+            kwargs = {"scaler": scaler, "vmin": -1.2, "vmax": 1.2}
         else:
             kwargs = {}
         fig, axs = ephysatlas.plots.figure_features_channel_space(
