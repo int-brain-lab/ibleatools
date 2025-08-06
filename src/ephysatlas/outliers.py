@@ -115,7 +115,12 @@ def kde_proba_distribution(
     n_above = 0
     n_below = 0
 
-    # TODO for extremely high value (e.g. >10 IQR), remove them, put outlier score to 1
+    # For extremely high value (e.g. >10 IQR), remove them, put outlier score to 1
+    val_replace = np.mean(train_data)  # Use the mean of the train data so it's well within boundaries
+    idx_replace = np.where( (test_data > np.mean(train_data) + 10 * iqr(train_data)) |
+                            (test_data < np.mean(train_data) - 10 * iqr(train_data))
+                            )[0]
+    test_data[idx_replace] = val_replace
 
     if np.max(test_data) > np.max(x_train):
         # Pad above
@@ -150,6 +155,7 @@ def kde_proba_distribution(
 
     # The outlier probability is the inverse
     outp = 1 - y_test
+    outp[idx_replace] = 1  # Replace extreme outliers that were set to default value to outlier score 1
 
     return outp, x_train, hist_train
 
