@@ -1,6 +1,5 @@
 import numpy as np
 import pandas as pd
-from sklearn.neighbors import KernelDensity
 from scipy import stats
 from scipy.interpolate import interp1d
 from scipy.stats import iqr
@@ -401,3 +400,9 @@ def outlier_score_svm(X_train, X_test, nu=0.2, f=0.4, kernel='rbf'):
     model.fit(X_train.reshape(-1, 1))
     pred_svm = model.predict(X_test.reshape(-1, 1))
     return pred_svm
+
+
+def generate_testset(X_train):
+    val_iqr = 3 * iqr(X_train)
+    X_test = np.linspace(min(X_train) - val_iqr, max(X_train) + val_iqr, 100).reshape(-1, 1)
+    return X_test
