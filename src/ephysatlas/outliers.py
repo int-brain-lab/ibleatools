@@ -395,6 +395,11 @@ def get_gamma_svm(X_train, f=0.4):
 
 
 def outlier_score_svm(X_train, X_test, nu=0.2, f=0.4, kernel='rbf'):
+    # Step 0 : Filter the train data to remove large outliers
+    X_train = X_train[
+        np.abs(X_train - np.median(X_train)) <= 5 * iqr(X_train)
+        ]
+
     gamma = get_gamma_svm(X_train, f=f)
     model = OneClassSVM(kernel=kernel, gamma=gamma, nu=nu)
     model.fit(X_train.reshape(-1, 1))
@@ -406,3 +411,74 @@ def generate_testset(X_train):
     val_iqr = 3 * iqr(X_train)
     X_test = np.linspace(min(X_train) - val_iqr, max(X_train) + val_iqr, 100).reshape(-1, 1)
     return X_test
+
+
+def score_svm_1pid(df_base, df_new, features, mapping,
+                   min_ch=14, n_pid=3, min_ch_compute=50):
+    # Regions
+    regions = np.unique(df_new[mapping + "_id"]).astype(int)
+    # Store the features that are outlier per brain region in a dict
+    dictout = dict((el, list()) for el in regions.tolist())
+    dictout["mapping"] = mapping
+    dictout["features"] = features
+
+    for count, region in tqdm.tqdm(enumerate(regions), total=len(regions)):
+        # Get channel indices that are in region, but keeping all info besides features
+        idx_reg = np.where(df_new[mapping + "_id"] == region)
+        df_new_compute = df_new.iloc[idx_reg].copy()
+        df_new_compute["has_outliers"] = False
+
+        listout = list()
+        for feature in features:
+            # print(f"{feature} [{region}]")
+            # Load data for that regions
+            df_train = select_series(
+                df_base, features=[feature], acronym=None, id=region, mapping=mapping
+            )
+            # Get channel indices that are in region, keeping only feature values
+            df_test = select_series(
+                df_new, features=[feature], acronym=None, id=region, mapping=mapping
+            )
+
+            df_pid = select_series(
+                df_base, features=['pid'], acronym=None, id=region, mapping=mapping
+            )
+
+            # For all channels at once, test if outside the distribution for the given features
+            train_data = df_train.to_numpy()
+            test_data = df_test.to_numpy()
+
+            print(f'Train N: {len(train_data)}, Test N: {len(test_data)}')
+
+            # score_out = 0 if N pid or N channel too small in training set
+            if bool((df_pid.nunique().values[0] >= n_pid) & (df_pid.shape[0] >= min_ch_compute)):
+                score_out = outlier_score_svm(train_data, test_data)
+            else:
+                score_out = np.zeros(test_data.shape)
+            # Save into new column
+            df_new_compute[feature + "_extremes"] = score_out
+            # A region is assigned as having outliers if more than N minimum channels are outliers
+            has_outliers = sum(df_new_compute[feature + "_extremes"]) > np.floor(min_ch)
+            if has_outliers:
+                listout.append(feature)
+                if sum(
+                    df_new_compute["has_outliers"] == 0
+                ):  # Reassign only if entirely False
+                    df_new_compute["has_outliers"] = True
+        # Save appended list of feature in dict
+        dictout[region] = listout
+
+        # Concatenate dataframes
+        if count == 0:
+            df_save = df_new_compute.copy()
+        else:
+            df_save = pd.concat([df_save, df_new_compute])
+
+    if df_save["has_outliers"].sum() > 0:
+        has_outlier = True
+    else:
+        has_outlier = False
+
+    # Resort by channel
+    df_save = df_save.sort_values(by=["channel"])
+    return df_save, dictout, has_outlier
