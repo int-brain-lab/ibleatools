@@ -11,6 +11,11 @@ from brainbox.io.one import SpikeSortingLoader
 from ephysatlas.plots import select_series
 from ephysatlas.anatomy import ClassifierRegions, NEW_VOID
 
+from sklearn.svm import OneClassSVM
+from sklearn.cluster import KMeans
+from scipy.signal import find_peaks
+from sklearn.neighbors import KernelDensity
+
 # from ephys_atlas.plots import BINS
 BINS = 50
 
@@ -177,7 +182,7 @@ def kde_proba_1pid(df_base, df_new, features, mapping, p_thresh=0.999999,
 
         listout = list()
         for feature in features:
-            print(f"{feature} [{region}]")
+            # print(f"{feature} [{region}]")
             # Load data for that regions
             df_train = select_series(
                 df_base, features=[feature], acronym=None, id=region, mapping=mapping
@@ -186,11 +191,16 @@ def kde_proba_1pid(df_base, df_new, features, mapping, p_thresh=0.999999,
             df_test = select_series(
                 df_new, features=[feature], acronym=None, id=region, mapping=mapping
             )
+
+            df_pid = select_series(
+                df_base, features=['pid'], acronym=None, id=region, mapping=mapping
+            )
+
             # For all channels at once, test if outside the distribution for the given features
             train_data = df_train.to_numpy()
             test_data = df_test.to_numpy()
             # score_out = 0 if N pid or N channel too small in training set
-            if (len(df_train['pid'].unique()) >= n_pid) and (df_train.shape[0] >= min_ch_compute):
+            if bool((df_pid.nunique().values[0] >= n_pid) & (df_pid.shape[0] >= min_ch_compute)):
                 score_out, _, _ = kde_proba_distribution(train_data, test_data)
             else:
                 score_out = np.zeros(test_data.shape)
@@ -297,3 +307,97 @@ def df_add_channel_label(df, pid, one=None):
     # Merge to get the labels column
     df = df.merge(df_label, left_index=True, right_index=True)
     return df
+
+# ===========================================================
+# ====== SVM ================================================
+
+def detect_modality_auto_bandwidth(data, peak_height_frac=0.1, resolution=500):
+    """
+    Detect unimodal or multimodal distribution using KDE with Silverman's bandwidth.
+
+    Parameters
+    ----------
+    data : array-like
+        Raw data points.
+    peak_height_frac : float, optional
+        Fraction of maximum density for minimum peak height.
+    resolution : int, optional
+        Number of points in the KDE evaluation grid.
+
+    Returns
+    -------
+    modality : str
+        "unimodal" or "multimodal"
+    peaks : array
+        Indices of detected peaks in x_grid.
+    x_grid : array
+        Grid of x values for plotting/debugging.
+    density : array
+        KDE density values on x_grid.
+    bandwidth : float
+        Bandwidth used for KDE (Silverman's rule).
+    """
+
+    data = np.asarray(data)
+    n = len(data)
+    sigma = np.std(data)
+
+    # Silverman's rule of thumb
+    bandwidth = 1.06 * sigma * n ** (-1 / 5)
+
+    # KDE fit
+    kde = KernelDensity(kernel='gaussian', bandwidth=bandwidth).fit(data.reshape(-1, 1))
+
+    # Evaluate density
+    x_grid = np.linspace(data.min(), data.max(), resolution)
+    log_dens = kde.score_samples(x_grid[:, None])
+    density = np.exp(log_dens)
+
+    # Peak detection
+    peaks, _ = find_peaks(density, height=max(density) * peak_height_frac)
+
+    modality = "unimodal" if len(peaks) <= 1 else "multimodal"
+    return modality, peaks, x_grid, density, bandwidth
+
+
+def get_gamma_svm(X_train, f=0.4):
+    '''
+    f : how many times larger you want gamma
+    '''
+    modality, peaks, x_grid, density, bandwidth = detect_modality_auto_bandwidth(X_train)
+    num_peaks = len(peaks)
+
+    if num_peaks <= 1 :
+        # Unimodal
+        sigma = ( iqr(X_train) / 1.349 )  # approximate standard deviation assuming normality
+        if sigma == 0.0:  # Fall back in case IQR is 0
+            sigma = np.std(X_train) / 16
+
+        sigma = sigma / np.sqrt(f)
+
+    else:
+        # Multimodal
+        # Suppose you detected k peaks
+        k = num_peaks  # from your detection method
+
+        # Cluster the data into k groups
+        data_reshaped = X_train.reshape(-1, 1)
+        labels = KMeans(n_clusters=k, n_init=10).fit_predict(data_reshaped)
+
+        # Compute per-cluster STD
+        cluster_stds = [np.std(X_train[labels == i]) for i in range(k)]
+
+        # Use average STD for gamma
+        sigma = np.mean(cluster_stds)
+
+    sigma = sigma / np.sqrt(f)
+    gamma = 1 / (2 * sigma ** 2)
+    return gamma
+
+
+def outlier_score_svm(X_train, X_test, nu=0.2, f=0.4, kernel='rbf'):
+    gamma = get_gamma_svm(X_train, f=f)
+    model = OneClassSVM(kernel=kernel, gamma=gamma, nu=nu)
+    model.fit(X_train.reshape(-1, 1))
+    pred_svm = model.predict(X_test.reshape(-1, 1))
+    return pred_svm
