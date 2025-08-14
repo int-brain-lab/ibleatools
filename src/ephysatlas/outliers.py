@@ -402,7 +402,7 @@ def outlier_score_svm(X_train, X_test, nu=0.2, f=0.4, kernel='rbf'):
 
     gamma = get_gamma_svm(X_train, f=f)
     model = OneClassSVM(kernel=kernel, gamma=gamma, nu=nu)
-    model.fit(X_train.reshape(-1, 1))
+    model.fit(X_train.reshape(-1, 1))  # This is slow for high N ; e.g. 29 seconds for 69k samples
     pred_svm = model.predict(X_test.reshape(-1, 1))
     return pred_svm
 
@@ -414,7 +414,7 @@ def generate_testset(X_train):
 
 
 def score_svm_1pid(df_base, df_new, features, mapping,
-                   min_ch=14, n_pid=3, min_ch_compute=50):
+                   min_ch_outlier=20, n_pid=3, min_ch_compute=100, max_ch_compute = 3000, p_thresh_kde=0.98):
     # Regions
     regions = np.unique(df_new[mapping + "_id"]).astype(int)
     # Store the features that are outlier per brain region in a dict
@@ -450,15 +450,25 @@ def score_svm_1pid(df_base, df_new, features, mapping,
 
             print(f'Train N: {len(train_data)}, Test N: {len(test_data)}')
 
+            # Outlier → 1
+            # Inlier → 0
+
             # score_out = 0 if N pid or N channel too small in training set
             if bool((df_pid.nunique().values[0] >= n_pid) & (df_pid.shape[0] >= min_ch_compute)):
-                score_out = outlier_score_svm(train_data, test_data)
+                score_svm = outlier_score_svm(train_data, test_data)
+                # map the OneClassSVM output from {1, -1} into {0, 1}
+                score_out = np.where(score_svm == -1, 1, 0)
+            elif len(train_data) > max_ch_compute:  # Apply KDE method as SVM model.fit is too slow for high N
+                scoreq_out, _, _ = kde_proba_distribution(train_data, test_data)  # This is a score to be thresholded
+                scoreq_out = scoreq_out.squeeze()  # TODO this should not be necessary, place in kde_proba_distribution
+                score_out = scoreq_out > p_thresh_kde
+                score_out = score_out.astype(int)
             else:
                 score_out = np.zeros(test_data.shape)
             # Save into new column
             df_new_compute[feature + "_extremes"] = score_out
             # A region is assigned as having outliers if more than N minimum channels are outliers
-            has_outliers = sum(df_new_compute[feature + "_extremes"]) > np.floor(min_ch)
+            has_outliers = sum(df_new_compute[feature + "_extremes"]) > np.floor(min_ch_outlier)
             if has_outliers:
                 listout.append(feature)
                 if sum(
