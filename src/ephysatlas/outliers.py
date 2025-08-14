@@ -455,14 +455,17 @@ def score_svm_1pid(df_base, df_new, features, mapping,
 
             # score_out = 0 if N pid or N channel too small in training set
             if bool((df_pid.nunique().values[0] >= n_pid) & (df_pid.shape[0] >= min_ch_compute)):
-                score_svm = outlier_score_svm(train_data, test_data)
-                # map the OneClassSVM output from {1, -1} into {0, 1}
-                score_out = np.where(score_svm == -1, 1, 0)
-            elif len(train_data) > max_ch_compute:  # Apply KDE method as SVM model.fit is too slow for high N
-                scoreq_out, _, _ = kde_proba_distribution(train_data, test_data)  # This is a score to be thresholded
-                scoreq_out = scoreq_out.squeeze()  # TODO this should not be necessary, place in kde_proba_distribution
-                score_out = scoreq_out > p_thresh_kde
-                score_out = score_out.astype(int)
+                if len(train_data) > max_ch_compute:  # Apply KDE method as SVM model.fit is too slow for high N
+                    scoreq_out, _, _ = kde_proba_distribution(train_data,
+                                                              test_data)  # This is a score to be thresholded
+                    scoreq_out = scoreq_out.squeeze()  # TODO this should not be necessary, place in kde_proba_distribution
+                    score_out = scoreq_out > p_thresh_kde
+                    score_out = score_out.astype(int)
+
+                else:
+                    score_svm = outlier_score_svm(train_data, test_data)
+                    # map the OneClassSVM output from {1, -1} into {0, 1}
+                    score_out = np.where(score_svm == -1, 1, 0)
             else:
                 score_out = np.zeros(test_data.shape)
             # Save into new column
