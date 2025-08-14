@@ -81,7 +81,7 @@ def get_feature_cmin(feature_name):
 class DartParameters(pydantic.BaseModel):
     localization_radius: pydantic.PositiveFloat = 150
     chunk_length_samples: pydantic.PositiveInt = 2**15
-    trough_offset: pydantic.PositiveInt = (42,)
+    trough_offset: pydantic.PositiveInt = 42
     scratch_dir: Path | str | None = pydantic.Field(
         default=None,
         description="Scratch directory for temporary files. If None, will use system defaults.",
@@ -409,12 +409,10 @@ def spikes(
     :param params:
     :return:
     """
+    
     params = DartParameters() if params is None else DartParameters(**params)
     logger.info("Starting spike detection")
-    # Update params with scratch_dir if provided
-    if scratch_dir is not None:
-        params.scratch_dir = scratch_dir
-    df_spikes_, d_waveforms = dart_subtraction_numpy(data, fs, geometry, params=params)
+    df_spikes_, d_waveforms = dart_subtraction_numpy(data, fs, geometry, scratch_dir=scratch_dir, params=params)
     logger.info("Spike detection completed")
     df_waveforms = ibldsp.waveforms.compute_spike_features(d_waveforms["denoised"])
     df_spikes = df_spikes_.merge(df_waveforms, left_index=True, right_index=True)
