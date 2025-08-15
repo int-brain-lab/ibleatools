@@ -81,6 +81,10 @@ def kde_proba_distribution(
     - x_train: (E, ) numpy array, x values of the histogram formed using training dataset
     - hist_train: (E, ) numpy array, y values of the histogram formed using training dataset
     """
+    # Do this to force the variables to be local to function
+    test_data = test_data.copy()
+    train_data = train_data.copy()
+
     if len(train_data) > n_min_sample_train:
         # Step 0 : Filter the train data to remove large outliers
         train_data = train_data[
