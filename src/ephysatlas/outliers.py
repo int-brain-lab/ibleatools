@@ -206,19 +206,16 @@ def kde_proba_1pid(df_base, df_new, features, mapping, p_thresh=0.999999,
             if bool((df_pid.nunique().values[0] >= n_pid) & (df_pid.shape[0] >= min_ch_compute)):
                 score_out, _, _ = kde_proba_distribution(train_data, test_data)
             else:
-                score_out = np.zeros(test_data.shape)
+                score_out = -1 * np.ones(test_data.shape)  # Assign value -1 when cannot compute
             # Save into new column
             df_new_compute[feature + "_q"] = score_out
             df_new_compute[feature + "_extremes"] = 0
             df_new_compute.loc[
                 df_new_compute[feature + "_q"] > p_thresh, feature + "_extremes"
             ] = 1
-            # A region is assigned as having outliers if more than half its channels are outliers
-            # Condition on N minimum channel.
-            has_outliers = sum(df_new_compute[feature + "_extremes"]) > np.floor(
-                len(test_data) / 2
-            )
-            if len(test_data) >= min_ch and has_outliers:
+            # A region is assigned as having outliers if N minimum channel are outliers.
+            has_outliers = sum(df_new_compute[feature + "_extremes"]) >= min_ch
+            if has_outliers:
                 listout.append(feature)
                 if sum(
                     df_new_compute["has_outliers"] == 0
