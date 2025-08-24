@@ -399,29 +399,155 @@ def dart_subtraction_numpy(data, fs, geometry, **params):
     return df_spikes, d_waveforms
 
 
+def _spikes_dartsort(data, fs: int, geometry: dict, scratch_dir=None, **params):
+    """
+    Dartsort backend for spike detection.
+    
+    :param data: Raw electrophysiology data
+    :param fs: Sampling frequency
+    :param geometry: Channel geometry dictionary
+    :param scratch_dir: Directory for temporary files
+    :param params: Dartsort parameters
+    :return: df_spikes_, d_waveforms, params_obj
+    """
+    params_obj = DartParameters() if params is None else DartParameters(**params)
+    logger.info("Starting spike detection with Dartsort backend")
+    df_spikes_, d_waveforms = dart_subtraction_numpy(data, fs, geometry, scratch_dir=scratch_dir, params=params_obj)
+    logger.info("Spike detection completed with Dartsort backend")
+    return df_spikes_, d_waveforms, params_obj
+
+
+def _spikes_spikeinterface(data, fs: int, geometry: dict, scratch_dir=None, **params):
+    """
+    SpikeInterface backend for spike detection.
+    
+    :param data: Raw electrophysiology data
+    :param fs: Sampling frequency
+    :param geometry: Channel geometry dictionary  
+    :param scratch_dir: Directory for temporary files
+    :param params: SpikeInterface parameters
+    :return: df_spikes_, d_waveforms, params_obj
+    """
+    try:
+        import spikeinterface.core as sc
+        from probeinterface.neuropixels_tools import read_spikeglx
+        from spikeinterface.sortingcomponents.peak_detection import detect_peaks
+        from probeinterface import Probe
+        from spikeinterface.core.node_pipeline import ExtractDenseWaveforms, ExtractSparseWaveforms
+        from spikeinterface.sortingcomponents.peak_localization import LocalizeCenterOfMass
+        from spikeinterface.core.node_pipeline import run_node_pipeline, PeakRetriever
+    except ImportError as e:
+        raise ImportError(f"SpikeInterface not installed. Please install with: pip install spikeinterface. Error: {e}")
+    
+    logger.info("Starting spike detection with SpikeInterface backend")
+    
+    # Create SpikeInterface recording object
+    recording = sc.NumpyRecording(data.T, sampling_frequency=fs)
+    
+    # Set up probe geometry
+    assert params.get("sr_ap_filepath")
+    from probeinterface.neuropixels_tools import read_spikeglx
+    probe = read_spikeglx(params['sr_ap_filepath']) # TODO: Pending implementation for the case when data is loaded using files, and not pid 
+    recording = recording.set_probe(probe)
+
+    si_params = {
+        'method': params.get('method', 'locally_exclusive'),
+        'peak_sign': params.get('peak_sign', 'neg'),
+        'detect_threshold': params.get('detect_threshold', 5.0),
+        'exclude_sweep_ms': params.get('exclude_sweep_ms', 0.1),
+        'radius_um': params.get('localization_radius', 100),
+        'job_kwargs': params.get('job_kwargs', {})
+    }
+
+    peaks = detect_peaks(recording,  method=si_params['method'],
+                     detect_threshold=si_params['detect_threshold'], radius_um=si_params['radius_um'], **si_params['job_kwargs'])
+    
+    peak_retriever = PeakRetriever(recording, peaks)
+
+    extract_dense_waveforms = ExtractDenseWaveforms(
+                recording, parents=[peak_retriever], ms_before=0.5, ms_after=0.5, return_output=True
+            )
+    pipeline_nodes = [
+                peak_retriever,
+                extract_dense_waveforms,
+                LocalizeCenterOfMass(recording, parents=[peak_retriever, extract_dense_waveforms], radius_um=si_params["radius_um"]),
+            ]
+    job_name = f"localize peaks using center_of_mass"
+    waveform_data, peak_locations = run_node_pipeline(recording, pipeline_nodes, si_params["job_kwargs"], job_name=job_name)
+    waveform_data, peak_locations
+    # # Create DataFrame similar to Dartsort output
+    # df_spikes_ = pd.DataFrame({
+    #     'sample': spikes['sample_index'],
+    #     'channel': spikes['channel_index'],
+    #     'ptp': np.ones(len(spikes)) * 1.0,  # Placeholder - need to compute from waveforms
+    #     'xloc': geometry['x'][spikes['channel_index']],  # Approximate localization
+    #     'yloc': geometry['y'][spikes['channel_index']],  # Approximate localization
+    #     'zloc': np.zeros(len(spikes)),  # Placeholder
+    #     'alpha': np.ones(len(spikes)) * 1.0,  # Placeholder - need proper computation
+    # })
+    
+    # # Create waveforms dictionary in same format as Dartsort
+    # d_waveforms = {
+    #     "raw": waveforms,  # Raw waveforms
+    #     "denoised": waveforms,  # For now, same as raw (could add denoising step)
+    #     "channel_index": we.channel_ids,
+    # }
+    
+    # # Create a simple params object to maintain interface compatibility
+    # # For SpikeInterface, we'll use a dict instead of DartParameters
+    # params_obj = {
+    #     'trough_offset': params.get('trough_offset', 42),  # Default from DartParameters
+    #     **params
+    # }
+    
+    # logger.info("Spike detection completed with SpikeInterface backend")
+    # return df_spikes_, d_waveforms, params_obj
+    raise NotImplementedError("This function is not implemented yet")
+
+
 def spikes(
-    data, fs: int, geometry: dict, return_waveforms=True, scratch_dir=None, **params
+    data, fs: int, geometry: dict, return_waveforms=True, backend="dartsort", scratch_dir=None, **params
 ):
     """
-    :param data:
-    :param fs:
-    :param geometry:
-    :param params:
-    :return:
-    """
+    Spike detection and feature extraction with multiple backend support.
     
-    params = DartParameters() if params is None else DartParameters(**params)
-    logger.info("Starting spike detection")
-    df_spikes_, d_waveforms = dart_subtraction_numpy(data, fs, geometry, scratch_dir=scratch_dir, params=params)
-    logger.info("Spike detection completed")
+    :param data: Raw electrophysiology data [nc, ns] numpy array
+    :param fs: Sampling frequency in Hz
+    :param geometry: Channel geometry dictionary with 'x' and 'y' arrays
+    :param return_waveforms: Whether to return waveforms dictionary
+    :param backend: Backend to use ('dartsort' or 'spikeinterface')
+    :param scratch_dir: Directory for temporary files
+    :param params: Backend-specific parameters
+    :return: DataFrame with aggregated spike features per channel, optionally with waveforms
+    """
+    # Call the appropriate backend function to get raw spike data
+    breakpoint()
+    if backend == "dartsort":
+        df_spikes_, d_waveforms, params_obj = _spikes_dartsort(data, fs, geometry, scratch_dir, **params)
+    elif backend == "spikeinterface":
+        df_spikes_, d_waveforms, params_obj = _spikes_spikeinterface(data, fs, geometry, scratch_dir, **params)
+    else:
+        raise ValueError(f"Unknown backend: {backend}. Supported backends: 'dartsort', 'spikeinterface'")
+    
+    # Common processing for both backends
+    logger.info("Computing waveform features")
     df_waveforms = ibldsp.waveforms.compute_spike_features(d_waveforms["denoised"])
     df_spikes = df_spikes_.merge(df_waveforms, left_index=True, right_index=True)
-    # we cast the float32 values as float64
+    
+    # Cast the float32 values as float64
     df_spikes[df_spikes.select_dtypes(np.float32).columns] = df_spikes.select_dtypes(
         np.float32
     ).astype(np.float64)
-    fcn_mean_time = lambda x: np.mean((x - params.trough_offset)) / fs  # NOQA
-    # aggregation by channel of the spikes / waveforms features
+    
+    # Get trough_offset from params_obj (handle both DartParameters object and dict)
+    if hasattr(params_obj, 'trough_offset'):
+        trough_offset = params_obj.trough_offset
+    else:
+        trough_offset = params_obj.get('trough_offset', 42)
+    
+    fcn_mean_time = lambda x: np.mean((x - trough_offset)) / fs  # NOQA
+    
+    # Aggregation by channel of the spikes / waveforms features
     df_spiking = (
         df_spikes.groupby("channel")
         .agg(
@@ -452,7 +578,9 @@ def spikes(
         )
         .reset_index()
     )
+    
     ModelSpikeFeatures.validate(df_spiking)
+    
     if return_waveforms:
         return df_spiking, d_waveforms | {"df_spikes": df_spikes}
     else:
