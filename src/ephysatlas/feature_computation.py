@@ -24,8 +24,7 @@ logger = logging.getLogger(__name__)
 
 
 def add_target_coordinates(pid=None, one=None, channels=None, traj_dict=None):
-    """
-    Add micro-manipulator target coordinates to channel information using trajectory data.
+    """Add micro-manipulator target coordinates to channel information using trajectory data.
 
     This function calculates the 3D target coordinates (x_target, y_target, z_target) for each channel
     based on the probe insertion trajectory. It supports two modes: retrieving trajectory data from
@@ -33,48 +32,37 @@ def add_target_coordinates(pid=None, one=None, channels=None, traj_dict=None):
     pitch correction and coordinate system transformations to convert from in-vivo coordinates to
     the Allen coordinate system.
 
-    Parameters
-    ----------
-    pid : str, optional
-        Probe insertion ID. Required if using Alyx database mode (when one is provided).
-    one : ONE, optional
-        ONE client instance. Required if using Alyx database mode (when pid is provided).
-    channels : dict
-        Channel information dictionary containing at least 'axial_um' field. Should also contain
-        'rawInd' or 'channel' for channel indexing.
-    traj_dict : dict, optional
-        Dictionary containing trajectory information with keys:
-        - x, y, z: coordinates
-        - depth, theta, phi: insertion parameters
-        Required if not using Alyx database mode.
+    Args:
+        pid (str, optional): Probe insertion ID. Required if using Alyx database mode (when one is provided).
+        one (ONE, optional): ONE client instance. Required if using Alyx database mode (when pid is provided).
+        channels (dict): Channel information dictionary containing at least 'axial_um' field. Should also contain
+            'rawInd' or 'channel' for channel indexing.
+        traj_dict (dict, optional): Dictionary containing trajectory information with keys:
+            - x, y, z: coordinates
+            - depth, theta, phi: insertion parameters
+            Required if not using Alyx database mode.
 
-    Returns
-    -------
-    dict
-        Updated channels dictionary with added 'x_target', 'y_target', and 'z_target' fields
-        containing the 3D coordinates for each channel.
+    Returns:
+        dict: Updated channels dictionary with added 'x_target', 'y_target', and 'z_target' fields
+            containing the 3D coordinates for each channel.
 
-    Raises
-    ------
-    ValueError
-        If neither (pid, one) nor traj_dict is provided.
+    Raises:
+        ValueError: If neither (pid, one) nor traj_dict is provided.
 
-    Example
-    -------
-    >>> from one.api import ONE
-    >>> one = ONE()
-    >>> channels = {'axial_um': np.arange(384) * 20}
-    >>> updated_channels = add_target_coordinates(
-    ...     pid='probe00', one=one, channels=channels
-    ... )
+    Example:
+        >>> from one.api import ONE
+        >>> one = ONE()
+        >>> channels = {'axial_um': np.arange(384) * 20}
+        >>> updated_channels = add_target_coordinates(
+        ...     pid='probe00', one=one, channels=channels
+        ... )
 
-    Notes
-    -----
-    - The function applies a -5 degree pitch correction to account for probe tilt.
-    - Coordinates are transformed from in-vivo to Allen coordinate system.
-    - If channels don't have 'rawInd' or 'channel' fields, it assumes 384 channels.
-    - The function interpolates coordinates along the probe track for each channel.
-    - For Alyx database mode, it prioritizes micro-manipulator provenance trajectories.
+    Note:
+        - The function applies a -5 degree pitch correction to account for probe tilt.
+        - Coordinates are transformed from in-vivo to Allen coordinate system.
+        - If channels don't have 'rawInd' or 'channel' fields, it assumes 384 channels.
+        - The function interpolates coordinates along the probe track for each channel.
+        - For Alyx database mode, it prioritizes micro-manipulator provenance trajectories.
     """
     # Initialize atlas objects for coordinate transformations
     needles = NeedlesAtlas()
@@ -153,64 +141,46 @@ def online_feature_computation(
     scratch_dir=None,
     **kwargs,
 ):
-    """
-    Compute electrophysiological features from SpikeGLX reader objects.
+    """Compute electrophysiological features from SpikeGLX reader objects.
 
     This function serves as an intermediate step in the feature computation pipeline. It takes
     SpikeGLX reader objects for AP (action potential) and LF (local field potential) data,
     validates the requested time range, loads the raw data, detects bad channels, and then
     delegates the actual feature computation to `compute_features_from_raw`.
 
-    Parameters
-    ----------
-    sr_lf : SpikeGLXReader
-        SpikeGLX reader object for LF (local field potential) data.
-    sr_ap : SpikeGLXReader
-        SpikeGLX reader object for AP (action potential) data.
-    t0 : float
-        Start time in seconds for feature computation.
-    duration : float
-        Duration in seconds for feature computation.
-    channels : dict, optional
-        Dictionary containing channel information. If None, channel labels will be detected
-        automatically from the data.
-    features_to_compute : list, optional
-        List of feature sets to compute. If None, uses default feature sets.
-    output_dir : Path, optional
-        Output directory for saving computed features. Defaults to current directory.
-    scratch_dir : Path, optional
-        Directory for temporary files (e.g., dartsort scratch files).
-    **kwargs : dict
-        Additional keyword arguments passed to `compute_features_from_raw`.
+    Args:
+        sr_lf (SpikeGLXReader): SpikeGLX reader object for LF (local field potential) data.
+        sr_ap (SpikeGLXReader): SpikeGLX reader object for AP (action potential) data.
+        t0 (float): Start time in seconds for feature computation.
+        duration (float): Duration in seconds for feature computation.
+        channels (dict, optional): Dictionary containing channel information. If None, channel labels will be detected
+            automatically from the data.
+        features_to_compute (list, optional): List of feature sets to compute. If None, uses default feature sets.
+        output_dir (Path, optional): Output directory for saving computed features. Defaults to current directory.
+        scratch_dir (Path, optional): Directory for temporary files (e.g., dartsort scratch files).
+        **kwargs: Additional keyword arguments passed to `compute_features_from_raw`.
 
-    Returns
-    -------
-    pd.DataFrame
-        DataFrame containing the computed features for the specified time window.
+    Returns:
+        pd.DataFrame: DataFrame containing the computed features for the specified time window.
 
-    Raises
-    ------
-    ValueError
-        If start time is negative or requested time range exceeds data duration.
-    IndexError
-        If data access fails due to invalid time range or channel count.
+    Raises:
+        ValueError: If start time is negative or requested time range exceeds data duration.
+        IndexError: If data access fails due to invalid time range or channel count.
 
-    Example
-    -------
-    >>> from spikeglx import Reader
-    >>> sr_ap = Reader('path/to/ap.bin')
-    >>> sr_lf = Reader('path/to/lf.bin')
-    >>> df = online_feature_computation(
-    ...     sr_lf=sr_lf, sr_ap=sr_ap, t0=100.0, duration=30.0
-    ... )
+    Example:
+        >>> from spikeglx import Reader
+        >>> sr_ap = Reader('path/to/ap.bin')
+        >>> sr_lf = Reader('path/to/lf.bin')
+        >>> df = online_feature_computation(
+        ...     sr_lf=sr_lf, sr_ap=sr_ap, t0=100.0, duration=3.0
+        ... )
 
-    Notes
-    -----
-    - The function calculates optimal FFT lengths for efficient processing.
-    - It validates that the requested time range is within the available data bounds.
-    - LF data access includes a 3-sample latency offset.
-    - Bad channel detection is performed automatically if channel labels are not provided.
-    - The function handles both full recordings and data snippets for channel detection.
+    Note:
+        - The function calculates optimal FFT lengths for efficient processing.
+        - It validates that the requested time range is within the available data bounds.
+        - LF data access includes a 3-sample latency offset.
+        - Bad channel detection is performed automatically if channel labels are not provided.
+        - The function handles both full recordings and data snippets for channel detection.
     """
     # Calculate the next fast length for the AP data to optimize FFT operations
     ns_ap = scipy.fft.next_fast_len(int(sr_ap.fs * duration), real=True)
@@ -296,57 +266,44 @@ def online_feature_computation(
 def load_data_from_pid(
     pid, one, probe_level_dir, recompute_channels=False, eid=None, probe_name=None
 ):
-    """
-    Load electrophysiological data and channel information using a probe ID from the ONE database.
+    """Load electrophysiological data and channel information using a probe ID from the ONE database.
 
-    This function loads both AP and LF  data from the ONE
-    database using a probe ID. It supports both standard ONE clients and OneSdsc clients. The function
-    also handles channel information, either loading it from a cached file or computing it from the
-    SpikeGLX reader. File locking is used to prevent concurrent access to channel files.
+    This function loads both AP and LF data from the ONE database using a probe ID. It supports both
+    standard ONE clients and OneSdsc clients. The function also handles channel information, either
+    loading it from a cached file or computing it from the SpikeGLX reader. File locking is used to
+    prevent concurrent access to channel files.
 
-    Parameters
-    ----------
-    pid : str
-        Probe ID for the data to be loaded.
-    one : ONE
-        ONE client instance for accessing the database.
-    probe_level_dir : Path
-        Directory for probe-level data storage and caching.
-    recompute_channels : bool, optional
-        Whether to recompute channel information even if a cached file exists. Defaults to False.
-    eid : str, optional
-        Session ID. Required when using OneSdsc client.
-    probe_name : str, optional
-        Probe name. Required when using OneSdsc client.
+    Args:
+        pid (str): Probe ID for the data to be loaded.
+        one (ONE): ONE client instance for accessing the database.
+        probe_level_dir (Path): Directory for probe-level data storage and caching.
+        recompute_channels (bool, optional): Whether to recompute channel information even if a cached
+            file exists. Defaults to False.
+        eid (str, optional): Session ID. Required when using OneSdsc client.
+        probe_name (str, optional): Probe name. Required when using OneSdsc client.
 
-    Returns
-    -------
-    tuple
-        A tuple containing:
-        - sr_ap: SpikeGLX reader for AP data
-        - sr_lf: SpikeGLX reader for LF data
-        - channels: Dictionary containing channel information
+    Returns:
+        tuple: A tuple containing:
+            - sr_ap: SpikeGLX reader for AP data
+            - sr_lf: SpikeGLX reader for LF data
+            - channels: Dictionary containing channel information
 
-    Raises
-    ------
-    AssertionError
-        If required parameters are missing for OneSdsc (eid, probe_name) or if data loading fails.
+    Raises:
+        AssertionError: If required parameters are missing for OneSdsc (eid, probe_name) or if data loading fails.
 
-    Example
-    -------
-    >>> from one.api import ONE
-    >>> one = ONE()
-    >>> sr_ap, sr_lf, channels = load_data_from_pid(
-    ...     pid='probe00', one=one, probe_level_dir=Path('output')
-    ... )
+    Example:
+        >>> from one.api import ONE
+        >>> one = ONE()
+        >>> sr_ap, sr_lf, channels = load_data_from_pid(
+        ...     pid='probe00', one=one, probe_level_dir=Path('output')
+        ... )
 
-    Notes
-    -----
-    - The function supports both standard ONE and OneSdsc clients with different parameter requirements.
-    - Channel information is cached in 'channels.pqt' files to avoid recomputation.
-    - File locking prevents concurrent access to channel files during read/write operations.
-    - If channel information cannot be loaded, the function falls back to an empty dictionary.
-    - The function automatically extracts geometry information from SpikeGLX readers when needed.
+    Note:
+        - The function supports both standard ONE and OneSdsc clients with different parameter requirements.
+        - Channel information is cached in 'channels.pqt' files to avoid recomputation.
+        - File locking prevents concurrent access to channel files during read/write operations.
+        - If channel information cannot be loaded, the function falls back to an empty dictionary.
+        - The function automatically extracts geometry information from SpikeGLX readers when needed.
     """
     # Log the start of data loading process
     logger.info(f"Loading data using PID: {pid}")
@@ -427,8 +384,7 @@ def load_data_from_pid(
 
 # TODO - Handle how the probe level directory and channels data is handled. (Similar to the load_data_from_pid case)
 def load_data_from_files(ap_file, lf_file, probe_level_dir):
-    """
-    Load data from .cbin files.
+    """Load data from .cbin files.
 
     Args:
         ap_file (str): Path to AP .cbin file
@@ -437,6 +393,10 @@ def load_data_from_files(ap_file, lf_file, probe_level_dir):
 
     Returns:
         tuple: (sr_ap, sr_lf, channels) SpikeGLX readers and channel information
+
+    Raises:
+        ImportError: If spikeglx package is not available
+        RuntimeError: If loading .cbin files fails
     """
     logger.info(f"Loading data from files: AP={ap_file}, LF={lf_file}")
     try:
@@ -472,8 +432,7 @@ def compute_features(
     recompute_channels=False,
     **kwargs,
 ):
-    """
-    Compute features from either PID or .cbin files.
+    """Compute features from either PID or .cbin files.
 
     Args:
         pid (str or dict, optional): Probe ID or probe info dict. Required if ap_file and lf_file are not provided.
@@ -488,13 +447,21 @@ def compute_features(
             Required if using .cbin files and want to add xyz target information.
         features_to_compute (list, optional): List of feature sets to compute
         output_dir (Path, optional): Output directory for saving features
+        recompute_channels (bool, optional): Whether to recompute channel information. Defaults to False.
         **kwargs: Additional keyword arguments
 
     Returns:
         pd.DataFrame: DataFrame containing computed features
+
+    Raises:
+        ValueError: If ONE client instance is required when using PID, or if both PID and .cbin files are provided,
+            or if both AP and LF .cbin files are not provided when not using PID.
+
+    Note:
+        This function is deprecated. Please use compute_features_from_pid instead.
     """
     logger.warning(
-        "This function is deprecated now. Please use compute_features_from_pid instead."
+        "This function is deprecated now, and will be removed soon. Please use compute_features_from_pid instead."
     )
     # Create a dictionary with all the function arguments
     params = {
@@ -590,70 +557,51 @@ def compute_features_from_pid(
     scratch_dir=None,
     **kwargs,
 ):
-    """
-    Compute electrophysiological features from a probe ID using the ONE database.
+    """Compute electrophysiological features from a probe ID using the ONE database.
 
     This function serves as the main entry point for computing features from a specific probe.
     It handles the complete pipeline: loading data from ONE, setting up output directories,
     processing channel information, computing features, and optionally saving results with metadata.
 
-    Parameters
-    ----------
-    pid : str, optional
-        Probe ID. Required for standard ONE usage, also required for OneSdsc.
-    eid : str, optional
-        Session ID. Required when using OneSdsc.
-    probe_name : str, optional
-        Probe name. Required when using OneSdsc.
-    t_start : float, optional
-        Start time in seconds for feature computation. Defaults to 0.0 if not specified.
-    duration : float, optional
-        Duration in seconds for feature computation. If None, uses the entire available duration.
-    one : ONE
-        ONE client instance. Required for data loading.
-    features_to_compute : list, optional
-        List of feature sets to compute. If None, uses default feature sets.
-    output_dir : Path, optional
-        Output directory for saving features and metadata. If None, features are not saved.
-    recompute_channels : bool, optional
-        Whether to recompute channel information even if channels.pqt file is present . Defaults to False.
-    scratch_dir : Path, optional
-        Directory for temporary files (e.g., dartsort scratch files).
-    **kwargs : dict
-        Additional keyword arguments passed to the feature computation pipeline.
+    Args:
+        pid (str, optional): Probe ID. Required for standard ONE usage, also required for OneSdsc.
+        eid (str, optional): Session ID. Required when using OneSdsc.
+        probe_name (str, optional): Probe name. Required when using OneSdsc.
+        t_start (float, optional): Start time in seconds for feature computation. Defaults to 0.0 if not specified.
+        duration (float, optional): Duration in seconds for feature computation. If None, uses the entire available duration.
+        one (ONE): ONE client instance. Required for data loading.
+        features_to_compute (list, optional): List of feature sets to compute. If None, uses default feature sets.
+        output_dir (Path, optional): Output directory for saving features and metadata. If None, features are not saved.
+        recompute_channels (bool, optional): Whether to recompute channel information even if channels.pqt file is present. 
+            Defaults to False.
+        scratch_dir (Path, optional): Directory for temporary files (e.g., dartsort scratch files).
+        **kwargs: Additional keyword arguments passed to the feature computation pipeline.
 
-    Returns
-    -------
-    pd.DataFrame
-        DataFrame containing the computed features for the specified time window.
+    Returns:
+        pd.DataFrame: DataFrame containing the computed features for the specified time window.
 
-    Raises
-    ------
-    ValueError
-        If ONE client instance is not provided.
-    AssertionError
-        If required parameters are missing for OneSdsc (eid, probe_name).
+    Raises:
+        ValueError: If ONE client instance is not provided.
+        AssertionError: If required parameters are missing for OneSdsc (eid, probe_name).
 
-    Example
-    -------
-    >>> from one.api import ONE
-    >>> one = ONE()
-    >>> df = compute_features_from_pid(
-    ...     pid='probe00',
-    ...     t_start=100.0,
-    ...     duration=30.0,
-    ...     one=one,
-    ...     output_dir=Path('output')
-    ... )
+    Example:
+        >>> from one.api import ONE
+        >>> one = ONE()
+        >>> df = compute_features_from_pid(
+        ...     pid='probe00',
+        ...     t_start=100.0,
+        ...     duration=30.0,
+        ...     one=one,
+        ...     output_dir=Path('output')
+        ... )
 
-    Notes
-    -----
-    - The function automatically determines the maximum available duration if duration is None.
-    - Channel information is cached unless recompute_channels is True.
-    - Target coordinates are added to channel information if not already present.
-    - Features are computed using the online_feature_computation pipeline.
-    - Metadata is added to all output files for provenance tracking.
-    - The function uses file locking to prevent concurrent writes to channel files.
+    Note:
+        - The function automatically determines the maximum available duration if duration is None.
+        - Cached channel information is used unless recompute_channels is True.
+        - Target coordinates are added to channel information if not already present.
+        - Features are computed using the online_feature_computation pipeline.
+        - Metadata is added to all output files for provenance tracking.
+        - The function uses file locking to prevent concurrent writes to channel files.
     """
     # Create a dictionary with all the function arguments for setup_output_directory
     params = {
@@ -783,8 +731,7 @@ def compute_features_from_file(
     scratch_dir=None,
     **kwargs,
 ):
-    """
-    Compute features from .cbin files.
+    """Compute features from .cbin files.
 
     Args:
         ap_file (str): Path to AP .cbin file
@@ -802,6 +749,9 @@ def compute_features_from_file(
 
     Returns:
         pd.DataFrame: DataFrame containing computed features
+
+    Raises:
+        ValueError: If both AP and LF .cbin files are not provided
     """
     # Create a dictionary with all the function arguments
     params = {
@@ -878,71 +828,53 @@ def compute_features_from_raw(
     scratch_dir=None,
     **kwargs,
 ):
-    """
-    Compute electrophysiological features from raw numpy arrays of AP and LF data.
+    """Compute electrophysiological features from raw numpy arrays of AP and LF data.
 
     This function is the core feature computation engine that processes raw electrophysiological data
     and computes various feature sets. It handles data destriping, feature computation for different
     modalities (LF, CSD, AP, waveforms), and optionally saves results to files. The function supports
     both computation and loading of cached features.
 
-    Parameters
-    ----------
-    raw_ap : np.ndarray
-        Raw AP data array of shape (n_channels, n_samples).
-    raw_lf : np.ndarray
-        Raw LF data array of shape (n_channels, n_samples).
-    fs_ap : float
-        Sampling frequency of AP data in Hz.
-    fs_lf : float
-        Sampling frequency of LF data in Hz.
-    geometry : dict
-        Dictionary containing 'x' and 'y' coordinates for each channel.
-    channel_labels : np.ndarray, optional
-        Array of channel labels for bad channel identification. If None, assumes all channels are good.
-    features_to_compute : list, optional
-        List of feature sets to compute. If None, computes all available features.
-        Available options: ['lf', 'csd', 'ap', 'waveforms'].
-    output_dir : Path, optional
-        Directory to save individual feature sets. If None, features are not saved.
-    scratch_dir : Path, optional
-        Directory for temporary files (e.g., dartsort scratch files).
-    **kwargs : dict
-        Additional keyword arguments including:
-        - skip_saved_computation: Skip computation if files already exist
-        - save_waveforms: Save waveform data files
+    Args:
+        raw_ap (np.ndarray): Raw AP data array of shape (n_channels, n_samples).
+        raw_lf (np.ndarray): Raw LF data array of shape (n_channels, n_samples).
+        fs_ap (float): Sampling frequency of AP data in Hz.
+        fs_lf (float): Sampling frequency of LF data in Hz.
+        geometry (dict): Dictionary containing 'x' and 'y' coordinates for each channel.
+        channel_labels (np.ndarray, optional): Array of channel labels for bad channel identification. 
+            If None, assumes all channels are good.
+        features_to_compute (list, optional): List of feature sets to compute. If None, computes all available features.
+            Available options: ['lf', 'csd', 'ap', 'waveforms'].
+        output_dir (Path, optional): Directory to save individual feature sets. If None, features are not saved.
+        scratch_dir (Path, optional): Directory for temporary files (e.g., dartsort scratch files).
+        **kwargs: Additional keyword arguments including:
+            - skip_saved_computation: Skip computation if files already exist
+            - save_waveforms: Save waveform data files
 
-    Returns
-    -------
-    pd.DataFrame
-        DataFrame containing all computed features merged by channel.
+    Returns:
+        pd.DataFrame: DataFrame containing all computed features merged by channel.
 
-    Raises
-    ------
-    AssertionError
-        If input arrays are not 2D, channel counts don't match, or sampling frequencies are invalid.
-    ValueError
-        If invalid feature sets are requested.
+    Raises:
+        AssertionError: If input arrays are not 2D, channel counts don't match, or sampling frequencies are invalid.
+        ValueError: If invalid feature sets are requested.
 
-    Example
-    -------
-    >>> import numpy as np
-    >>> raw_ap = np.random.randn(384, 30000)
-    >>> raw_lf = np.random.randn(384, 3000)
-    >>> geometry = {'x': np.arange(384), 'y': np.arange(384)}
-    >>> df = compute_features_from_raw(
-    ...     raw_ap=raw_ap, raw_lf=raw_lf, fs_ap=30000, fs_lf=2500,
-    ...     geometry=geometry, features_to_compute=['lf', 'ap']
-    ... )
+    Example:
+        >>> import numpy as np
+        >>> raw_ap = np.random.randn(384, 30000)
+        >>> raw_lf = np.random.randn(384, 3000)
+        >>> geometry = {'x': np.arange(384), 'y': np.arange(384)}
+        >>> df = compute_features_from_raw(
+        ...     raw_ap=raw_ap, raw_lf=raw_lf, fs_ap=30000, fs_lf=2500,
+        ...     geometry=geometry, features_to_compute=['lf', 'ap']
+        ... )
 
-    Notes
-    -----
-    - The function applies destriping to both AP and LF data before feature computation.
-    - Features are computed independently and can be cached/loaded from files.
-    - Waveform features have special handling for spike count data types.
-    - All features are merged on the 'channel' column in the final output.
-    - Package version metadata is added to each feature DataFrame.
-    - The function supports skipping computation for existing files to save time.
+    Note:
+        - The function applies destriping to both AP and LF data before feature computation.
+        - Features are computed independently and can be cached/loaded from files.
+        - Waveform features have special handling for spike count data types.
+        - All features are merged on the 'channel' column in the final output.
+        - Package version metadata is added to each feature DataFrame.
+        - The function supports skipping computation for existing files to save time.
     """
     # Validate input array shapes and parameters
     assert raw_ap.ndim == 2 and raw_lf.ndim == 2, "Input arrays must be 2D"
