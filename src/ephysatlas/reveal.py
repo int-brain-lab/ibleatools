@@ -1,3 +1,25 @@
+import functools
+from pathlib import Path
+
+import matplotlib.pyplot as plt
+import pandas as pd
+import numpy as np
+import sklearn.metrics
+import scipy.signal
+
+import ibldsp.plots
+import ibldsp.voltage
+from brainbox.io.one import SpikeSortingLoader
+import brainbox.ephys_plots
+
+import ephysatlas.features
+import ephysatlas.data
+import ephysatlas.anatomy
+import ephysatlas.regionclassifier
+import ephysatlas.plots
+import ephysatlas.fixtures
+
+
 """
 Electrophysiological data visualization and analysis reveal module.
 
@@ -71,27 +93,6 @@ g- decoding model - region predictions
 h- spike sorting data
 i- behaviour events
 """
-
-import functools
-from pathlib import Path
-
-import matplotlib.pyplot as plt
-import pandas as pd
-import numpy as np
-import sklearn.metrics
-import scipy.signal
-
-import ibldsp.plots
-import ibldsp.voltage
-from brainbox.io.one import SpikeSortingLoader
-import brainbox.ephys_plots
-
-import ephysatlas.features
-import ephysatlas.data
-import ephysatlas.anatomy
-import ephysatlas.regionclassifier
-import ephysatlas.plots
-import ephysatlas.fixtures
 
 
 def save_figure(func):

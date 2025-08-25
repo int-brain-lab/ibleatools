@@ -656,6 +656,7 @@ def dart_subtraction_numpy(data, fs, geometry, **params):
             
     Returns:
         tuple: A tuple containing:
+            
             - df_spikes (pd.DataFrame): DataFrame with spike information including
               sample indices, channels, peak-to-peak amplitudes, and localizations.
             - d_waveforms (dict): Dictionary containing raw and denoised waveforms
@@ -758,7 +759,8 @@ def _spikes_dartsort(data, fs: int, geometry: dict, scratch_dir=None, **params):
             
     Returns:
         tuple: A tuple containing:
-            - df_spikes_ (pd.DataFrame): DataFrame with spike information.
+            
+            - ``df_spikes_`` (pd.DataFrame): DataFrame with spike information.
             - d_waveforms (dict): Dictionary containing waveform data.
             - params_obj (DartParameters): Dartsort parameters object.
     """
@@ -784,7 +786,8 @@ def _spikes_spikeinterface(data, fs: int, geometry: dict, scratch_dir=None, **pa
             
     Returns:
         tuple: A tuple containing:
-            - df_spikes_ (pd.DataFrame): DataFrame with spike information.
+            
+            - ``df_spikes_`` (pd.DataFrame): DataFrame with spike information.
             - d_waveforms (dict): Dictionary containing waveform data.
             - params_obj (dict): SpikeInterface parameters object.
             
@@ -800,8 +803,7 @@ def _spikes_spikeinterface(data, fs: int, geometry: dict, scratch_dir=None, **pa
         import spikeinterface.core as sc
         from probeinterface.neuropixels_tools import read_spikeglx
         from spikeinterface.sortingcomponents.peak_detection import detect_peaks
-        from probeinterface import Probe
-        from spikeinterface.core.node_pipeline import ExtractDenseWaveforms, ExtractSparseWaveforms
+        from spikeinterface.core.node_pipeline import ExtractDenseWaveforms
         from spikeinterface.sortingcomponents.peak_localization import LocalizeCenterOfMass
         from spikeinterface.core.node_pipeline import run_node_pipeline, PeakRetriever
     except ImportError as e:
@@ -840,7 +842,7 @@ def _spikes_spikeinterface(data, fs: int, geometry: dict, scratch_dir=None, **pa
                 extract_dense_waveforms,
                 LocalizeCenterOfMass(recording, parents=[peak_retriever, extract_dense_waveforms], radius_um=si_params["radius_um"]),
             ]
-    job_name = f"localize peaks using center_of_mass"
+    job_name = "localize peaks using center_of_mass"
     waveform_data, peak_locations = run_node_pipeline(recording, pipeline_nodes, si_params["job_kwargs"], job_name=job_name)
     waveform_data, peak_locations
     # # Create DataFrame similar to Dartsort output
@@ -908,7 +910,6 @@ def spikes(
         Both backends produce compatible output formats for further processing.
     """
     # Call the appropriate backend function to get raw spike data
-    breakpoint()
     if backend == "dartsort":
         df_spikes_, d_waveforms, params_obj = _spikes_dartsort(data, fs, geometry, scratch_dir, **params)
     elif backend == "spikeinterface":
@@ -1114,6 +1115,15 @@ class _EphysTransformerInterface(
         assert isinstance(X, pd.DataFrame), "X must be a pandas DataFrame"
 
     def fit_transform(self, X: pd.DataFrame = None, y=None):
+        """Fit the transformer and transform the data.
+        
+        Args:
+            X (pd.DataFrame, optional): Input data to fit and transform.
+            y: Ignored, present for compatibility with scikit-learn interface.
+            
+        Returns:
+            pd.DataFrame: Transformed data.
+        """
         self.fit(X)
         return self.transform(X)
 

@@ -89,25 +89,28 @@ def setup_output_directory(params: Dict[str, Any]) -> tuple[Path, Path]:
             
     Returns:
         tuple[Path, Path]: A tuple containing:
-            - probe_level_dir (Path): Path to the probe-level directory
-            - snippet_level_dir (Path): Path to the snippet-level directory
-            If output_dir is None, returns (None, None).
+        - probe_level_dir (Path): Path to the probe-level directory
+        - snippet_level_dir (Path): Path to the snippet-level directory
+        
+        If output_dir is None, returns (None, None).
             
     Raises:
         ValueError: If neither pid nor ap_file is provided.
         
     Note:
         The function creates a hierarchical structure:
-        - Probe level: Uses pid or hash of ap_file
-        - Snippet level: Uses probe info, t_start, and duration
         
-        Example output structure:
-        |-- 76ed566f-59dd-47ff-8ba7-59b11d09b67c
-        |   |-- probe_76ed566f-59dd-47ff-8ba7-59b11d09b67c_000300.0_05.0
-        |   `-- probe_76ed566f-59dd-47ff-8ba7-59b11d09b67c_003000.0_05.0
-        `-- af0a0534-9cdc-4a29-93c0-1342891d74ec
-            |-- probe_af0a0534-9cdc-4a29-93c0-1342891d74ec_000300.0_05.0
-            `-- probe_af0a0534-9cdc-4a29-93c0-1342891d74ec_003000.0_05.0
+        Probe level: Uses pid or hash of ap_file
+        Snippet level: Uses probe info, t_start, and duration
+        
+        Example output structure::
+        
+            |-- 76ed566f-59dd-47ff-8ba7-59b11d09b67c
+            |   |-- probe_76ed566f-59dd-47ff-8ba7-59b11d09b67c_000300.0_05.0
+            |   `-- probe_76ed566f-59dd-47ff-8ba7-59b11d09b67c_003000.0_05.0
+            `-- af0a0534-9cdc-4a29-93c0-1342891d74ec
+                |-- probe_af0a0534-9cdc-4a29-93c0-1342891d74ec_000300.0_05.0
+                `-- probe_af0a0534-9cdc-4a29-93c0-1342891d74ec_003000.0_05.0
     """
 
     if params.get("output_dir") is None:

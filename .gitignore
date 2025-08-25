@@ -182,3 +182,6 @@ testing.ipynb
 scratch/
 .DS_Store
 random_testing_scripts.py
+
+#Sphinx doucmentation
+docs/build/
