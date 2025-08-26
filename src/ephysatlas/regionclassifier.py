@@ -189,7 +189,7 @@ def viterbi(
 
 def infer_regions(df_inference, path_model, n_folds=5):
     for fold in range(n_folds):
-        dict_model = load_model(path_model.joinpath(f"FOLD0{fold}"))
+        _, dict_model = load_model(path_model.joinpath(f"FOLD0{fold}"))
         classifier = dict_model["classifier"]
 
         df_inference["outside"] = 0
