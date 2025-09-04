@@ -6,6 +6,7 @@ The main branch is the trunk and features branches are squashed merge after a su
 
 Contributer steps:
 - [X] make sure the tests pass locally
+- [X] follow Google docstring format for all function and class documentation
 - [X] use `ruff format` and `ruff check` to make sure the formatting is correct
 - [X] `CHANGELOG.md` documents the changes, references the PR, the date and the new version number in `./src/ephysatlas/__init__.py`
 - [X] create a PR from your feature branch to main
