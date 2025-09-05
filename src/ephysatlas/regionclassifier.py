@@ -13,17 +13,21 @@ from ephysatlas import features
 
 
 def save_model(path_model, classifier, meta, subfolder="", identifier=None):
-    """
-    Save model to disk in ubj format with associated meta-data and a hash
-    The model is a set of files in a folder named after the meta-data
-     'VINTAGE' and 'REGION_MAP' fields, with the hash as suffix e.g. 2023_W41_Cosmos_dfd731f0
-    :param classifier:
-    :param meta:
-    :param path_model:
-    :param identifier: optional identifier for the model, defaults to a 8 character hexdigest of the meta data
-    :param subfolder: optional level to add to the model path, for example 'FOLD01' will write to
-        2023_W41_Cosmos_dfd731f0/FOLD01/
-    :return:
+    """Save model to disk in ubj format with associated meta-data and a hash.
+
+    The model is a set of files in a folder named after the meta-data 'VINTAGE' and 'REGION_MAP' fields, 
+    with the hash as suffix e.g. 2023_W41_Cosmos_dfd731f0.
+
+    Args:
+        path_model (Path): Base path where the model will be saved.
+        classifier: The classifier object to save.
+        meta (dict): Metadata dictionary containing model information.
+        subfolder (str, optional): Optional level to add to the model path, for example 'FOLD01' will write to
+            2023_W41_Cosmos_dfd731f0/FOLD01/. Defaults to "".
+        identifier (str, optional): Optional identifier for the model, defaults to a 8 character hexdigest of the meta data.
+
+    Returns:
+        Path: Path where the model was saved.
     """
     meta["MODEL_CLASS"] = (
         f"{classifier.__class__.__module__}.{classifier.__class__.__name__}"
@@ -45,13 +49,19 @@ def save_model(path_model, classifier, meta, subfolder="", identifier=None):
 def download_model(
     local_path: Path, model_name: str, one: ONE, overwrite=False
 ) -> Path:
-    """
-    download_model(Path('/mnt/s0/ephys-atlas-decoding/models'), '2024_W50_Cosmos_lid-basket-sense', one=one)
-    :param local_path:
-    :param model_name:
-    :param one:
-    :param overwrite:
-    :return:
+    """Download a trained model from AWS S3.
+
+    Example:
+        >>> download_model(Path('/mnt/s0/ephys-atlas-decoding/models'), '2024_W50_Cosmos_lid-basket-sense', one=one)
+
+    Args:
+        local_path (Path): Local directory where the model will be downloaded.
+        model_name (str): Name of the model to download from S3.
+        one (ONE): ONE client instance for AWS authentication.
+        overwrite (bool, optional): If True, overwrite existing files. Defaults to False.
+
+    Returns:
+        Path: Path to the downloaded model directory.
     """
     local_path = Path(local_path)
     s3, bucket_name = aws.get_s3_from_alyx(alyx=one.alyx)
@@ -66,21 +76,20 @@ def download_model(
 
 
 def load_model(path_model):
-    """
-    Load a trained XGBoost classifier model from disk.
+    """Load a trained XGBoost classifier model from disk.
 
     This function loads both the model binary and its associated metadata from the
     specified directory. The model is expected to be in UBJ format, and the metadata
     in YAML format.
 
     Args:
-        path_model: Path or str
-            Path to the directory containing the model files.
+        path_model (Path or str): Path to the directory containing the model files.
             The directory should contain 'model.ubj' and 'meta.yaml' files.
 
     Returns:
-        classifier: depends on the model class, usually an XGBClassifier object.
-        model_info: dict
+        tuple: A tuple containing:
+            - classifier: The loaded classifier object (usually an XGBClassifier).
+            - model_info (dict): Dictionary containing the model metadata.
     """
     path_model = Path(path_model)
     # load model
@@ -98,21 +107,19 @@ def _step_viterbi(
     transition_probs: np.ndarray,
     observed_state: int,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """Runs one step of the Viterbi algorithm.
+    """Run one step of the Viterbi algorithm.
 
     Args:
-        mu_prev: probability distribution with shape (num_hidden),
-            the previous mu
-        emission_probs: the emission probability matrix (num_hidden,
-            num_observed)
-        transition_probs: the transition probability matrix, with
-            shape (num_hidden, num_hidden)
-        observed_state: the observed state at the current step
+        mu_prev (np.ndarray): Probability distribution with shape (num_hidden), the previous mu.
+        emission_probs (np.ndarray): The emission probability matrix (num_hidden, num_observed).
+        transition_probs (np.ndarray): The transition probability matrix, with shape (num_hidden, num_hidden).
+        observed_state (int): The observed state at the current step.
 
     Returns:
-        - the mu for the next step
-        - the maximizing previous state, before the current state,
-          as an int array with shape (num_hidden)
+        tuple: A tuple containing:
+            - mu_new (np.ndarray): The mu for the next step.
+            - max_prev_states (np.ndarray): The maximizing previous state, before the current state,
+              as an int array with shape (num_hidden).
     """
 
     pre_max = mu_prev * transition_probs.T
@@ -129,29 +136,22 @@ def viterbi(
     start_probs: np.ndarray,
     observed_states: List[int],
 ) -> Tuple[List[int], float]:
-    """Runs the Viterbi algorithm to get the most likely state sequence.
+    """Run the Viterbi algorithm to get the most likely state sequence.
 
     Args:
-        emission_probs: the emission probability matrix (num_hidden,
-            num_observed)
-        transition_probs: the transition probability matrix, with
-            shape (num_hidden, num_hidden)
-        start_probs: the initial probabilies for each state, with shape
-            (num_hidden)
-        observed_states: the observed states at each step
+        emission_probs (np.ndarray): The emission probability matrix (num_hidden, num_observed).
+        transition_probs (np.ndarray): The transition probability matrix, with shape (num_hidden, num_hidden).
+        start_probs (np.ndarray): The initial probabilities for each state, with shape (num_hidden).
+        observed_states (List[int]): The observed states at each step.
 
     Returns:
-        - the most likely series of states
-        - the joint probability of that series of states and the observed
+        tuple: A tuple containing:
+            - sequence (List[int]): The most likely series of states.
+            - sequence_prob (float): The joint probability of that series of states and the observed.
 
-        @article{
-            title    = "Coding the Viterbi Algorithm in Numpy",
-            journal  = "Ben's Blog",
-            author   = "Benjamin Bolte",
-            year     = "2020",
-            month    = "03",
-            url      = "https://ben.bolte.cc/viterbi",
-        }
+    Note:
+        This implementation is based on the article "Coding the Viterbi Algorithm in Numpy" by Benjamin Bolte (2020).
+        Available at: https://ben.bolte.cc/viterbi
     """
     num_hidden_states = transition_probs.shape[0]
     num_observed_states = emission_probs.shape[1]
@@ -188,6 +188,23 @@ def viterbi(
 
 
 def infer_regions(df_inference, path_model, n_folds=5):
+    """Infer brain regions using a trained classifier model across multiple folds.
+
+    This function loads a trained model for each fold and performs inference on the input data.
+    It applies denoising to the input features before prediction and aggregates results across all folds.
+
+    Args:
+        df_inference (pd.DataFrame): DataFrame containing features for inference.
+        path_model (Path): Path to the directory containing the trained model folds.
+        n_folds (int, optional): Number of folds to use for inference. Defaults to 5.
+
+    Returns:
+        tuple: A tuple containing:
+            - predicted_probas (np.ndarray): Array of shape (n_folds, n_samples, n_classes) containing 
+              prediction probabilities for each fold.
+            - predicted_region (np.ndarray): Array of shape (n_folds, n_samples) containing 
+              predicted region labels for each fold.
+    """
     for fold in range(n_folds):
         dict_model = load_model(path_model.joinpath(f"FOLD0{fold}"))
         classifier = dict_model["classifier"]

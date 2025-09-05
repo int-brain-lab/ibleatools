@@ -1,10 +1,12 @@
 """
 Module designed to work on the anatomy of the brain prior to the encoding/decoding analysis.
-The EcondingAtlas is a version of the Allen Atlas relabeled to account for void labels inside of the skull compared to outside.
 
-    ea = EncodingAtlas()
-    from atlasview import atlasview
-    av = atlasview.view(atlas=ea)
+The EncodingAtlas is a version of the Allen Atlas relabeled to account for void labels inside of the skull compared to outside.
+
+Example:
+    >>> ea = EncodingAtlas()
+    >>> from atlasview import atlasview
+    >>> av = atlasview.view(atlas=ea)
 """
 
 import functools
@@ -32,11 +34,15 @@ class ClassifierRegions(iblatlas.regions.BrainRegions):
         super().__init__()
 
     def add_new_region(self, new_region):
-        """
-        Adds a new region to the brain regions object
-        The region will be lateralized and added at the end of the regions list
-        :param new_region: dictionary with keys 'id', 'name', 'acronym', 'rgb', 'level', 'parent'
-        :return: indices of the new regions
+        """Adds a new region to the brain regions object.
+
+        The region will be lateralized and added at the end of the regions list.
+
+        Args:
+            new_region (dict): Dictionary with keys 'id', 'name', 'acronym', 'rgb', 'level', 'parent'
+
+        Returns:
+            tuple: Indices of the new regions
         """
         assert new_region["id"] not in self.id, "Region ID already exists"
         order = np.max(self.order) + 1
@@ -69,10 +75,10 @@ class ClassifierRegions(iblatlas.regions.BrainRegions):
 
 
 class ClassifierAtlas(AllenAtlas):
-    """
-    The Encoding Atlas is a version of the Allen Atlas where the regions labels volume is reworked:
-    -   voids inside the skull are relabeled to a new region, this is done computing the convex hull of the non-void
-    labels and then splitting the void in two regions: one below the convex hull and one above
+    """The Encoding Atlas is a version of the Allen Atlas where the regions labels volume is reworked.
+
+    Voids inside the skull are relabeled to a new region. This is done by computing the convex hull of the non-void
+    labels and then splitting the void in two regions: one below the convex hull and one above.
     """
 
     def __init__(self, **kwargs):
@@ -82,8 +88,7 @@ class ClassifierAtlas(AllenAtlas):
         self.assign_voids_inside_skull()
 
     def assign_voids_inside_skull(self):
-        """
-        Identifies and relabels void voxels that are inside the skull.
+        """Identifies and relabels void voxels that are inside the skull.
 
         This method creates a mask of the brain's convex hull and identifies all voxels
         below this hull. Any voxels that were previously labeled as void (0) and are
@@ -96,7 +101,7 @@ class ClassifierAtlas(AllenAtlas):
         4. Adding the new void_fluid region to the brain regions
         5. Relabeling appropriate voxels with the new region ID
 
-        Parameters:
+        Args:
             None
 
         Returns:
@@ -114,10 +119,12 @@ class ClassifierAtlas(AllenAtlas):
         self.label[np.logical_and(self.label == 0, mask_hull)] = ivoids[0]
 
     def compute_surface(self):
-        """
-        Here we compute the convex hull of the surface of the brain
-        All voids below the surface are re-assigned to void_fluid new region
-        :return:
+        """Compute the convex hull of the surface of the brain.
+
+        All voids below the surface are re-assigned to void_fluid new region.
+
+        Returns:
+            None: The method modifies the atlas surface in-place.
         """
         super().compute_surface()
         # note that ideally we should rather take the points within the convex hull of the brain seen from the top
@@ -138,32 +145,25 @@ class ClassifierAtlas(AllenAtlas):
 
 @functools.lru_cache(maxsize=32)
 def regions_transition_matrix(ba=None, mapping=None):
-    """
-    Computes transition matrices between brain regions based on vertical adjacency.
+    """Computes transition matrices between brain regions based on vertical adjacency.
 
     This function calculates how brain regions are spatially connected to each other
     by analyzing transitions between regions along the dorsal-ventral axis. It creates
     a matrix where each element (i,j) represents the number of voxel transitions
     from region i to region j when moving along the dorsal-ventral direction.
 
-    Parameters
-    ----------
-    ba : ClassifierAtlas, optional
-        Brain atlas object to use for the computation. If None, a new ClassifierAtlas
-        instance will be created.
-    mapping : str, optional
-        The region mapping to use (e.g., 'Allen', 'Cosmos', 'Beryl').
-        Defaults to 'Cosmos' if None.
+    Args:
+        ba (ClassifierAtlas, optional): Brain atlas object to use for the computation. If None, a new ClassifierAtlas
+            instance will be created.
+        mapping (str, optional): The region mapping to use (e.g., 'Allen', 'Cosmos', 'Beryl').
+            Defaults to 'Cosmos' if None.
 
-    Returns
-    -------
-    state_transitions : numpy.ndarray
-        A square matrix where element (i,j) represents the number of voxel
-        transitions from region i to region j along the dorsal-ventral axis.
-    voxel_occurences : numpy.ndarray
-        A vector containing the count of voxels for each region in the mapping.
-    region_ids : numpy.ndarray
-        The region IDs corresponding to the rows/columns in the transition matrix.
+    Returns:
+        tuple: A tuple containing:
+            - state_transitions (numpy.ndarray): A square matrix where element (i,j) represents the number of voxel
+                transitions from region i to region j along the dorsal-ventral axis.
+            - voxel_occurences (numpy.ndarray): A vector containing the count of voxels for each region in the mapping.
+            - region_ids (numpy.ndarray): The region IDs corresponding to the rows/columns in the transition matrix.
     """
     ba = ba if ba is not None else ClassifierAtlas()
     ba.compute_surface()

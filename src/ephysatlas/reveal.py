@@ -1,24 +1,3 @@
-"""
-Figure 01: ce - Features with checkerboard pattern, make sure to add the Atlas ID, Cosmos and the unique atlas ID next to it
-Figure 02: bcg - Prediction of vanilla model + confidence
-Figure 03: bcg - Histology slices
-Figure 04: a(c) - AP band snippet (raw / destriped)
-Figure 05: a(c) - LF band snippet (raw / destriped)
-Figure 06: ad - Bad channel AP (NB: also plot the actual outcome from the dataframe, ie. the one in ALF)
-Figure 07: h(ci) - Raster + behaviour start/stop times + snippets (computed and the one displayed) + spike sorting version
-
-Data types:
-a- raw data
-b- target coordinates
-c- ground truth: ephys aligned coordinates
-d- bad channels
-e- features (denoised)
-f- encoding model - outlier predictions
-g- decoding model - region predictions
-h- spike sorting data
-i- behaviour events
-"""
-
 import functools
 from pathlib import Path
 
@@ -41,10 +20,95 @@ import ephysatlas.plots
 import ephysatlas.fixtures
 
 
+"""
+Electrophysiological data visualization and analysis reveal module.
+
+This module provides comprehensive visualization tools for electrophysiological data
+analysis, including feature visualization, classifier results, histology slices,
+voltage traces, and bad channel detection. It serves as a high-level interface
+for creating publication-ready figures from electrophysiological recordings.
+
+The module includes:
+- Feature visualization with histology overlays
+- Classifier prediction results and confidence analysis
+- Histology slice visualization with probe trajectories
+- AP and LFP voltage trace visualization
+- Bad channel detection and analysis
+- Automated figure saving and management
+
+Classes:
+    AtlasReveal: Main class for creating comprehensive electrophysiological visualizations
+
+Functions:
+    save_figure: Decorator for automatically saving figures with configurable options
+
+Constants:
+    STREAM (bool): Default streaming mode for data loading
+
+Examples:
+    >>> from ephysatlas.reveal import AtlasReveal
+    >>> import one.alf.io as alfio
+    >>> 
+    >>> # Initialize reveal object
+    >>> one = alfio.One()
+    >>> pid = "0228bcfd-632e-49bd-acd4-c334cf9213e9"
+    >>> reveal = AtlasReveal(one=one, pid=pid)
+    >>> 
+    >>> # Create feature visualization
+    >>> fig, axs = reveal.figure_01_features_with_histology_columns()
+    >>> 
+    >>> # Create classifier results visualization
+    >>> fig, axs = reveal.figure_02_classifier_results()
+
+Note:
+    This module integrates with the IBL (International Brain Laboratory) ecosystem
+    and provides automated figure generation for electrophysiological data analysis.
+    It includes built-in figure saving capabilities and supports both raw and
+    processed data visualization.
+
+See Also:
+    ephysatlas.features : Feature extraction and processing
+    ephysatlas.plots : Basic plotting utilities
+    ephysatlas.anatomy : Anatomical classification and atlas functionality
+    ephysatlas.regionclassifier : Brain region classification models
+"""
+
+"""
+Figure 01: ce - Features with checkerboard pattern, make sure to add the Atlas ID, Cosmos and the unique atlas ID next to it
+Figure 02: bcg - Prediction of vanilla model + confidence
+Figure 03: bcg - Histology slices
+Figure 04: a(c) - AP band snippet (raw / destriped)
+Figure 05: a(c) - LF band snippet (raw / destriped)
+Figure 06: ad - Bad channel AP (NB: also plot the actual outcome from the dataframe, ie. the one in ALF)
+Figure 07: h(ci) - Raster + behaviour start/stop times + snippets (computed and the one displayed) + spike sorting version
+
+Data types:
+a- raw data
+b- target coordinates
+c- ground truth: ephys aligned coordinates
+d- bad channels
+e- features (denoised)
+f- encoding model - outlier predictions
+g- decoding model - region predictions
+h- spike sorting data
+i- behaviour events
+"""
+
+
 def save_figure(func):
-    """
-    Decorator that optionally saves figures returned by methods.
+    """Decorator that optionally saves figures returned by methods.
+
     The decorated method should return a figure or a list of figures as its first return value.
+
+    Args:
+        func: The function to be decorated.
+
+    Returns:
+        function: Wrapped function with figure saving capability.
+
+    Note:
+        The decorated method should return a tuple where the first element is a figure or list of figures.
+        The decorator will automatically save figures if save_dir is provided.
     """
 
     @functools.wraps(func)
@@ -98,9 +162,14 @@ class AtlasReveal:
 
     @staticmethod
     def _aggregate_dephs(df_pid):
-        """
-        Aggregate by depths
-        :return:
+        """Aggregate data by depths.
+
+        Args:
+            df_pid (pd.DataFrame): DataFrame containing probe data.
+
+        Returns:
+            pd.DataFrame: DataFrame aggregated by axial_um with mean values for numeric columns
+                and mode values for label columns (Cosmos_id, Allen_id).
         """
         df_depths = df_pid.groupby("axial_um").mean(numeric_only=True)
         columns_labels = ["Cosmos_id", "Allen_id"]
@@ -115,6 +184,22 @@ class AtlasReveal:
 
     @save_figure
     def figure_01_features_with_histology_columns(self, scaler=None, df_pid=None):
+        """Create feature visualization with histology columns.
+
+        This method creates a comprehensive visualization showing electrophysiological features
+        plotted in channel space with histology overlays.
+
+        Args:
+            scaler (sklearn.preprocessing.StandardScaler, optional): Scaler for normalizing features.
+                If provided, features are scaled to [-1.2, 1.2] range. Defaults to None.
+            df_pid (pd.DataFrame, optional): DataFrame containing probe data. If None, uses self.df_pid.
+                This is useful for displaying raw features if needed. Defaults to None.
+
+        Returns:
+            tuple: A tuple containing:
+                - fig (matplotlib.figure.Figure): The created figure.
+                - axs (matplotlib.axes.Axes): The axes containing the plot.
+        """
         # option to override the default df_pid: this is useful for displaying the raw features if needed
         df_pid = df_pid if df_pid is not None else self.df_pid
         if scaler is not None:
@@ -135,6 +220,22 @@ class AtlasReveal:
 
     @staticmethod
     def _plot_raw_ephys(voltage, fs, xy, regions=None, df_pid=None, **kwargs):
+        """Plot raw electrophysiological data with brain regions and voltage traces.
+
+        Args:
+            voltage (np.ndarray): Voltage data array.
+            fs (float): Sampling frequency in Hz.
+            xy (np.ndarray): Channel coordinates array.
+            regions (iblatlas.regions.BrainRegions, optional): Brain regions object for plotting.
+                Defaults to None.
+            df_pid (pd.DataFrame, optional): DataFrame containing probe data. Defaults to None.
+            **kwargs: Additional keyword arguments passed to plotting functions.
+
+        Returns:
+            tuple: A tuple containing:
+                - fig (matplotlib.figure.Figure): The created figure.
+                - axs (matplotlib.axes.Axes): Array of axes containing the plots.
+        """
         fig, axs = plt.subplots(
             1, 3, figsize=(16, 8), gridspec_kw={"width_ratios": [1, 14, 0.4]}
         )
@@ -152,6 +253,30 @@ class AtlasReveal:
 
     @save_figure
     def figure_02_classifier_results(self, df_predictions=None, path_model=None):
+        """Create classifier results visualization.
+
+        This method creates a comprehensive visualization showing the results of the channel regions classifier,
+        including true labels, predictions, confidence scores, and cumulative probabilities.
+
+        Args:
+            df_predictions (pd.DataFrame, optional): DataFrame containing classifier predictions.
+                If None, predictions are computed using the loaded model. Defaults to None.
+            path_model (Path, optional): Path to the trained model directory. Required if df_predictions is None.
+                Defaults to None.
+
+        Returns:
+            tuple: A tuple containing:
+                - fig (matplotlib.figure.Figure): The created figure.
+                - axs (matplotlib.axes.Axes): Array of axes containing the plots.
+
+        Note:
+            The figure shows:
+            - Brain regions with Allen labels
+            - True labels (Allen and Cosmos)
+            - Classifier predictions
+            - Confidence scores
+            - Cumulative probabilities across depths
+        """
         # Figure 02: results of the channel regions classifer
         classifier, model_info = ephysatlas.regionclassifier.load_model(path_model)
         rids = np.array(model_info["CLASSES"])
@@ -286,6 +411,23 @@ class AtlasReveal:
 
     @save_figure
     def figure_03_histology_slices(self):
+        """Create histology slice visualization with probe trajectories.
+
+        This method creates a visualization showing three orthogonal slices through the brain atlas
+        with overlaid probe trajectories, including both planned and aligned coordinates.
+
+        Returns:
+            tuple: A tuple containing:
+                - fig (matplotlib.figure.Figure): The created figure.
+                - axs (matplotlib.axes.Axes): Array of axes containing the three slice views.
+
+        Note:
+            The figure shows:
+            - Coronal slice (AP view) at median y-coordinate
+            - Sagittal slice (ML view) at median x-coordinate  
+            - Horizontal slice (DV view) at median z-coordinate
+            - Both planned (target) and aligned (actual) probe trajectories
+        """
         fig, axs = plt.subplots(
             1, 3, figsize=(14, 5), gridspec_kw={"width_ratios": self.atlas.bc.nxyz}
         )
@@ -334,6 +476,23 @@ class AtlasReveal:
 
     @save_figure
     def figure_04_ap_voltage(self):
+        """Create AP band voltage visualization.
+
+        This method creates visualizations showing AP band voltage traces, comparing raw and preprocessed data.
+        The data is filtered and destriped to show the effects of preprocessing.
+
+        Returns:
+            tuple: A tuple containing:
+                - figs (list): List of two figures showing raw and preprocessed AP data.
+                - axs (list): List of axes arrays for each figure.
+
+        Note:
+            The method shows:
+            - Raw AP voltage traces with high-pass filtering
+            - Preprocessed AP voltage traces after destriping
+            - Both visualizations include brain region overlays and channel information
+            - Data is extracted from a 1-second window starting at 600 seconds
+        """
         t0, duration = 600, 1
         channel_labels = True  # TODO
         AP_XLIM = (0.47, 0.53)
@@ -361,6 +520,24 @@ class AtlasReveal:
 
     @save_figure
     def figure_05_lfp_voltage(self):
+        """Create LFP voltage and CSD visualization.
+
+        This method creates visualizations showing LFP voltage traces and current source density (CSD) analysis.
+        The data is filtered, destriped, and processed to show both voltage and CSD representations.
+
+        Returns:
+            tuple: A tuple containing:
+                - figs (list): List of two figures showing preprocessed LFP and CSD data.
+                - axs (list): List of axes arrays for each figure.
+
+        Note:
+            The method shows:
+            - Preprocessed LFP voltage traces after filtering and destriping
+            - Current source density (CSD) analysis with Cadzow denoising
+            - Both visualizations include brain region overlays and channel information
+            - Data is extracted from a 4-second window starting at 600 seconds
+            - CSD is computed with 5x decimation and 200 Hz maximum frequency
+        """
         CSD_RANGE_AM3 = 10_000
         LF_XLIM = (1, 3)
 
@@ -403,6 +580,23 @@ class AtlasReveal:
 
     @save_figure
     def figure_06_bad_channels(self):
+        """Create bad channel detection visualization.
+
+        This method creates a visualization showing the results of bad channel detection
+        on AP band voltage data, including channel labels and feature analysis.
+
+        Returns:
+            tuple: A tuple containing:
+                - fig (matplotlib.figure.Figure): The created figure.
+                - axs (matplotlib.axes.Axes): The axes containing the bad channel analysis.
+
+        Note:
+            The method shows:
+            - Raw AP voltage traces
+            - Bad channel detection results
+            - Channel features used for detection
+            - Data is extracted from a 1-second window starting at 600 seconds
+        """
         t0, duration = 600, 1
         raw = self.sr_ap[
             slice(int(self.sr_ap.fs * t0), int((t0 + duration) * self.sr_ap.fs)),

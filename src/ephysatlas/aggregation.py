@@ -19,36 +19,28 @@ logger = logging.getLogger(__name__)
 def aggregate_all_probes(
     path_list: List[Path], base_level_dir: Path | None | str = None
 ):
-    """
-    Aggregate snippet-level data from multiple probe directories into a single DataFrame.
+    """Aggregate snippet-level data from multiple probe directories into a single DataFrame.
 
     This function iterates over a list of probe directory paths, calling `get_aggregated_snippets_df` on each to extract and concatenate their snippet-level data into a unified DataFrame. Optionally, it can annotate the result with a `base_level_dir` column in case the base_directory is moved.
 
-    Parameters
-    ----------
-    path_list : List[pathlib.Path]
-        List of Path objects, each pointing to a probe directory containing snippet-level data to aggregate. Each directory must be compatible with `get_aggregated_snippets_df`.
-    base_level_dir : Path or str or None, optional
-        If provided, this value will update the column ('base_level_dir') to the resulting DataFrame for all rows.
+    Args:
+        path_list (List[pathlib.Path]): List of Path objects, each pointing to a probe directory containing snippet-level data to aggregate. Each directory must be compatible with `get_aggregated_snippets_df`.
+        base_level_dir (Path or str or None, optional): If provided, this value will update the column ('base_level_dir') to the resulting DataFrame for all rows.
 
-    Returns
-    -------
-    pandas.DataFrame
-        A DataFrame containing the concatenated snippet-level data from all probes in `path_list`.
+    Returns:
+        pandas.DataFrame: A DataFrame containing the concatenated snippet-level data from all probes in `path_list`.
 
-    Example
-    -------
-    >>> from pathlib import Path
-    >>> probe_dirs = [Path('/data/probe1'), Path('/data/probe2')]
-    >>> df = aggregate_all_probes(probe_dirs, base_level_dir='/data')
-    >>> print(df.head())
+    Example:
+        >>> from pathlib import Path
+        >>> probe_dirs = [Path('/data/probe1'), Path('/data/probe2')]
+        >>> df = aggregate_all_probes(probe_dirs, base_level_dir='/data')
+        >>> print(df.head())
 
-    Notes
-    -----
-    - Each path in `path_list` should point to a directory structure compatible with `get_aggregated_snippets_df`.
-    - The function ignores index continuity and resets the index in the returned DataFrame.
-    - If `base_level_dir` is provided, it is stored as a string in the 'base_level_dir' column for all rows.
-    - This function does not perform validation on the contents of the aggregated DataFrames beyond concatenation.
+    Note:
+        - Each path in `path_list` should point to a directory structure compatible with `get_aggregated_snippets_df`.
+        - The function ignores index continuity and resets the index in the returned DataFrame.
+        - If `base_level_dir` is provided, it is stored as a string in the 'base_level_dir' column for all rows.
+        - This function does not perform validation on the contents of the aggregated DataFrames beyond concatenation.
     """
     df = pd.DataFrame()
     for path in path_list:
@@ -64,37 +56,29 @@ def aggregate_all_probes(
 def concatenate_channels_data(
     parquet_files_channels: List[Path], output_dir: Path | None = None
 ):
-    """
-    Aggregate and validate channel-level metadata from multiple probe directories into a single DataFrame.
+    """Aggregate and validate channel-level metadata from multiple probe directories into a single DataFrame.
 
     This function reads channel information from a list of Parquet files (one per probe), validates each DataFrame against the `ChannelDataFrameSchema`, and concatenates them into a single DataFrame. The result is grouped by ('pid', 'channel') and the first occurrence is kept for each group. If a 'channel_labels' column is present, it is dropped with a warning. Optionally, the aggregated DataFrame can be saved to a Parquet file in the specified output directory.
 
-    Parameters
-    ----------
-    parquet_files_channels : List[pathlib.Path]
-        List of Path objects, each pointing to a Parquet file containing channel-level metadata for a probe. Each file must be compatible with `ChannelDataFrameSchema`.
-    output_dir : Path or None, optional
-        If provided, the aggregated DataFrame is saved as 'channels.pqt' in this directory. The directory is created if it does not exist. Default is None (no file is written).
+    Args:
+        parquet_files_channels (List[pathlib.Path]): List of Path objects, each pointing to a Parquet file containing channel-level metadata for a probe. Each file must be compatible with `ChannelDataFrameSchema`.
+        output_dir (Path or None, optional): If provided, the aggregated DataFrame is saved as 'channels.pqt' in this directory. The directory is created if it does not exist. Default is None (no file is written).
 
-    Returns
-    -------
-    pandas.DataFrame
-        A DataFrame containing the concatenated and grouped channel metadata from all input files. Indexed by ('pid', 'channel').
+    Returns:
+        pandas.DataFrame: A DataFrame containing the concatenated and grouped channel metadata from all input files. Indexed by ('pid', 'channel').
 
-    Example
-    -------
-    >>> from pathlib import Path
-    >>> parquet_files = [Path('probe1/channels.pqt'), Path('probe2/channels.pqt')]
-    >>> df_channels = concatenate_channels_data(parquet_files, output_dir=Path('output'))
-    >>> print(df_channels.head())
+    Example:
+        >>> from pathlib import Path
+        >>> parquet_files = [Path('probe1/channels.pqt'), Path('probe2/channels.pqt')]
+        >>> df_channels = concatenate_channels_data(parquet_files, output_dir=Path('output'))
+        >>> print(df_channels.head())
 
-    Notes
-    -----
-    - Each input file is validated using `ChannelDataFrameSchema.validate`.
-    - If a file lacks a 'channel' column, it is created from the DataFrame index.
-    - The result is grouped by ('pid', 'channel') and the first entry is kept for each group.
-    - If a 'channel_labels' column is present, it is dropped with a warning.
-    - If `output_dir` is provided, the result is saved as 'channels.pqt' in that directory.
+    Note:
+        - Each input file is validated using `ChannelDataFrameSchema.validate`.
+        - If a file lacks a 'channel' column, it is created from the DataFrame index.
+        - The result is grouped by ('pid', 'channel') and the first entry is kept for each group.
+        - If a 'channel_labels' column is present, it is dropped with a warning.
+        - If `output_dir` is provided, the result is saved as 'channels.pqt' in that directory.
     """
     df_channels = []
     for i, fc in enumerate(parquet_files_channels):
@@ -123,35 +107,28 @@ def concatenate_channels_data(
 
 
 def get_features_from_snippets(snippet_level_dir: Path):
-    """
-    Load and merge all feature tables from a snippet-level directory into a single DataFrame.
+    """Load and merge all feature tables from a snippet-level directory into a single DataFrame.
 
     This function scans the given directory for all Parquet files (*.pqt), loads each as a DataFrame,
     and merges them on the 'channel' column using an outer join. The result is a wide DataFrame
     containing all available features for each channel in the snippet.
 
-    Parameters
-    ----------
-    snippet_level_dir : Path
-        Path to the directory containing snippet-level feature Parquet files. Each file should have a 'channel' column.
+    Args:
+        snippet_level_dir (Path): Path to the directory containing snippet-level feature Parquet files. Each file should have a 'channel' column.
 
-    Returns
-    -------
-    pandas.DataFrame
-        A DataFrame where each row corresponds to a channel, and columns are the union of all features
-        found in the Parquet files in the directory. Channels missing from some files will have NaNs for those features.
+    Returns:
+        pandas.DataFrame: A DataFrame where each row corresponds to a channel, and columns are the union of all features
+            found in the Parquet files in the directory. Channels missing from some files will have NaNs for those features.
 
-    Example
-    -------
-    >>> from pathlib import Path
-    >>> df = get_features_from_snippets(Path('probe1/snippet_0001'))
-    >>> print(df.head())
+    Example:
+        >>> from pathlib import Path
+        >>> df = get_features_from_snippets(Path('probe1/snippet_0001'))
+        >>> print(df.head())
 
-    Notes
-    -----
-    - All Parquet files in the directory are loaded and merged. Files must have a 'channel' column.
-    - The merge is performed as an outer join, so all channels present in any file are included.
-    - If no Parquet files are found, the function returns an empty DataFrame.
+    Note:
+        - All Parquet files in the directory are loaded and merged. Files must have a 'channel' column.
+        - The merge is performed as an outer join, so all channels present in any file are included.
+        - If no Parquet files are found, the function returns an empty DataFrame.
     """
     # Ensure the input is a Path object
     snippet_level_dir = Path(snippet_level_dir)
@@ -176,44 +153,37 @@ def get_features_from_snippets(snippet_level_dir: Path):
 
 
 def concat_raw_features(input_df: pd.DataFrame):
-    """
-    Concatenate raw features from multiple snippet directories into a single DataFrame.
+    """Concatenate raw features from multiple snippet directories into a single DataFrame.
 
     This function iterates over each row in the input DataFrame, constructs the path to each snippet directory,
     loads the raw features from that directory using `get_features_from_snippets`, and concatenates all results
     into a single DataFrame. This is typically used to combine features from multiple snippets of a pid.
 
-    Parameters
-    ----------
-    input_df : pandas.DataFrame
-        DataFrame containing at least two columns:
-        - 'base_level_dir': Base directory path for each snippet
-        - 'snippet_level_dir': Relative path to the snippet directory within the base directory
+    Args:
+        input_df (pandas.DataFrame): DataFrame containing at least two columns:
+            - 'base_level_dir': Base directory path for each snippet
+            - 'snippet_level_dir': Relative path to the snippet directory within the base directory
 
-    Returns
-    -------
-    pandas.DataFrame
-        A DataFrame containing all raw features from all snippet directories, concatenated vertically.
-        Each row represents features for a single channel from a single snippet.
+    Returns:
+        pandas.DataFrame: A DataFrame containing all raw features from all snippet directories, concatenated vertically.
+            Each row represents features for a single channel from a single snippet.
 
-    Example
-    -------
-    >>> import pandas as pd
-    >>> from pathlib import Path
-    >>> input_df = pd.DataFrame({
-    ...     'base_level_dir': ['/data/probe1', '/data/probe2'],
-    ...     'snippet_level_dir': ['snippet_001', 'snippet_002']
-    ... })
-    >>> df = concat_raw_features(input_df)
-    >>> print(df.head())
+    Example:
+        >>> import pandas as pd
+        >>> from pathlib import Path
+        >>> input_df = pd.DataFrame({
+        ...     'base_level_dir': ['/data/probe1', '/data/probe2'],
+        ...     'snippet_level_dir': ['snippet_001', 'snippet_002']
+        ... })
+        >>> df = concat_raw_features(input_df)
+        >>> print(df.head())
 
-    Notes
-    -----
-    - The function expects each row in `input_df` to have 'base_level_dir' and 'snippet_level_dir' columns.
-    - Snippet directories are constructed as `base_level_dir / snippet_level_dir`.
-    - Features are loaded using `get_features_from_snippets` for each snippet directory.
-    - The index is reset during concatenation to ensure continuous indexing.
-    - If a snippet directory is empty or invalid, it will be skipped (resulting in an empty DataFrame for that row).
+    Note:
+        - The function expects each row in `input_df` to have 'base_level_dir' and 'snippet_level_dir' columns.
+        - Snippet directories are constructed as `base_level_dir / snippet_level_dir`.
+        - Features are loaded using `get_features_from_snippets` for each snippet directory.
+        - The index is reset during concatenation to ensure continuous indexing.
+        - If a snippet directory is empty or invalid, it will be skipped (resulting in an empty DataFrame for that row).
     """
     # Initialize an empty DataFrame to store all concatenated features
     df_final = pd.DataFrame()
@@ -230,8 +200,7 @@ def concat_raw_features(input_df: pd.DataFrame):
 
 
 def aggregate_raw_features(concatenated_df: pd.DataFrame):
-    """
-    Aggregate raw electrophysiological features by grouping on probe ID and channel.
+    """Aggregate raw electrophysiological features by grouping on probe ID and channel.
 
     This function takes a DataFrame containing raw features from multiple snippets and aggregates them
     by ('pid', 'channel') groups. It uses different aggregation strategies for different feature types:
@@ -239,37 +208,31 @@ def aggregate_raw_features(concatenated_df: pd.DataFrame):
     - 'channel_labels': Mode (most frequent value)
     - All other features: Median of non-null values
 
-    Parameters
-    ----------
-    concatenated_df : pandas.DataFrame
-        DataFrame containing raw electrophysiological features with at least 'pid' and 'channel' columns.
-        Should contain features that match the ModelRawFeatures schema.
+    Args:
+        concatenated_df (pandas.DataFrame): DataFrame containing raw electrophysiological features with at least 'pid' and 'channel' columns.
+            Should contain features that match the ModelRawFeatures schema.
 
-    Returns
-    -------
-    pandas.DataFrame
-        A DataFrame with one row per unique ('pid', 'channel') combination, containing aggregated
-        feature values. The DataFrame is indexed by ('pid', 'channel').
+    Returns:
+        pandas.DataFrame: A DataFrame with one row per unique ('pid', 'channel') combination, containing aggregated
+            feature values. The DataFrame is indexed by ('pid', 'channel').
 
-    Example
-    -------
-    >>> import pandas as pd
-    >>> df = pd.DataFrame({
-    ...     'pid': ['probe1', 'probe1', 'probe2'],
-    ...     'channel': [1, 1, 2],
-    ...     'spike_count': [10, 15, 20],
-    ...     'amplitude': [0.5, 0.6, 0.4]
-    ... })
-    >>> agg_df = aggregate_raw_features(df)
-    >>> print(agg_df)
+    Example:
+        >>> import pandas as pd
+        >>> df = pd.DataFrame({
+        ...     'pid': ['probe1', 'probe1', 'probe2'],
+        ...     'channel': [1, 1, 2],
+        ...     'spike_count': [10, 15, 20],
+        ...     'amplitude': [0.5, 0.6, 0.4]
+        ... })
+        >>> agg_df = aggregate_raw_features(df)
+        >>> print(agg_df)
 
-    Notes
-    -----
-    - Only features that exist in both the input DataFrame and ModelRawFeatures schema are aggregated.
-    - The function handles missing values appropriately for each feature type.
-    - For 'spike_count', null values are treated as zeros before taking the mean.
-    - For 'channel_labels', if no mode exists, the result is NaN.
-    - The result maintains the multi-index structure ('pid', 'channel').
+    Note:
+        - Only features that exist in both the input DataFrame and ModelRawFeatures schema are aggregated.
+        - The function handles missing values appropriately for each feature type.
+        - For 'spike_count', null values are treated as zeros before taking the mean.
+        - For 'channel_labels', if no mode exists, the result is NaN.
+        - The result maintains the multi-index structure ('pid', 'channel').
     """
     # Get the list of valid raw feature columns from the schema
     raw_features_columns = ModelRawFeatures.to_schema().columns.keys()
@@ -301,53 +264,43 @@ def aggregate_raw_features(concatenated_df: pd.DataFrame):
 
 
 def get_aggregated_features_per_pid(snippet_df_per_pid: pd.DataFrame):
-    """
-    Process and aggregate raw features for a single probe ID (PID) across all its snippets.
+    """Process and aggregate raw features for a single probe ID (PID) across all its snippets.
 
     This function takes a DataFrame containing snippet information for a single PID, concatenates
     all raw features from those snippets, aggregates them by channel, and enriches the result with
     channel metadata (axial and lateral positions). The function ensures that only one PID is
     processed at a time and that the required channel metadata file exists.
 
-    Parameters
-    ----------
-    snippet_df_per_pid : pandas.DataFrame
-        DataFrame containing snippet information for a single PID. Must have columns:
-        - 'pid': Probe ID (must be unique across all rows)
-        - 'base_level_dir': Base directory path for each snippet
-        - 'snippet_level_dir': Relative path to the snippet directory
+    Args:
+        snippet_df_per_pid (pandas.DataFrame): DataFrame containing snippet information for a single PID. Must have columns:
+            - 'pid': Probe ID (must be unique across all rows)
+            - 'base_level_dir': Base directory path for each snippet
+            - 'snippet_level_dir': Relative path to the snippet directory
 
-    Returns
-    -------
-    pandas.DataFrame
-        A DataFrame with one row per channel for the PID, containing:
-        - Aggregated raw electrophysiological features
-        - Channel metadata (axial_um, lateral_um)
-        - pid and channel columns as regular columns (not index)
+    Returns:
+        pandas.DataFrame: A DataFrame with one row per channel for the PID, containing:
+            - Aggregated raw electrophysiological features
+            - Channel metadata (axial_um, lateral_um)
+            - pid and channel columns as regular columns (not index)
 
-    Raises
-    ------
-    AssertionError
-        If the DataFrame contains more than one unique PID.
-    FileNotFoundError
-        If the channels.pqt file is not found in the snippet directory's parent.
+    Raises:
+        AssertionError: If the DataFrame contains more than one unique PID.
+        FileNotFoundError: If the channels.pqt file is not found in the snippet directory's parent.
 
-    Example
-    -------
-    >>> import pandas as pd
-    >>> snippet_df = pd.DataFrame({
-    ...     'pid': ['probe1', 'probe1'],
-    ...     'base_level_dir': ['/data/probe1', '/data/probe1'],
-    ...     'snippet_level_dir': ['snippet_001', 'snippet_002']
-    ... })
-    >>> agg_df = get_aggregated_features_per_pid(snippet_df)
-    >>> print(agg_df.head())
+    Example:
+        >>> import pandas as pd
+        >>> snippet_df = pd.DataFrame({
+        ...     'pid': ['probe1', 'probe1'],
+        ...     'base_level_dir': ['/data/probe1', '/data/probe1'],
+        ...     'snippet_level_dir': ['snippet_001', 'snippet_002']
+        ... })
+        >>> agg_df = get_aggregated_features_per_pid(snippet_df)
+        >>> print(agg_df.head())
 
-    Notes
-    -----
-    - The function requires that all rows have the same PID value.
-    - Channel metadata is loaded from channels.pqt in the snippet directory's parent.
-    - The result includes both aggregated features and channel position information.
+    Note:
+        - The function requires that all rows have the same PID value.
+        - Channel metadata is loaded from channels.pqt in the snippet directory's parent.
+        - The result includes both aggregated features and channel position information.
     """
     # Ensure only one PID is present in the DataFrame
     assert (
@@ -389,48 +342,40 @@ def get_aggregated_features_per_pid(snippet_df_per_pid: pd.DataFrame):
 def get_aggregated_raw_features(
     snippet_df: pd.DataFrame, output_dir: Path | None = None
 ):
-    """
-    Process and aggregate raw features for multiple probe IDs (PIDs) across all their snippets.
+    """Process and aggregate raw features for multiple probe IDs (PIDs) across all their snippets.
 
     This function takes a DataFrame containing snippet information for multiple PIDs, processes each PID
     individually using `get_aggregated_features_per_pid`, and combines all results into a single DataFrame.
     The final result is indexed by ('pid', 'channel') and optionally saved to a Parquet file.
 
-    Parameters
-    ----------
-    snippet_df : pandas.DataFrame
-        DataFrame containing snippet information for multiple PIDs. Must have columns:
-        - 'pid': Probe ID
-        - 'base_level_dir': Base directory path for each snippet
-        - 'snippet_level_dir': Relative path to the snippet directory
-    output_dir : Path or None, optional
-        If provided, the aggregated DataFrame is saved as 'raw_ephys_features.pqt' in this directory.
-        The directory is created if it does not exist. Default is None (no file is written).
+    Args:
+        snippet_df (pandas.DataFrame): DataFrame containing snippet information for multiple PIDs. Must have columns:
+            - 'pid': Probe ID
+            - 'base_level_dir': Base directory path for each snippet
+            - 'snippet_level_dir': Relative path to the snippet directory
+        output_dir (Path or None, optional): If provided, the aggregated DataFrame is saved as 'raw_ephys_features.pqt' in this directory.
+            The directory is created if it does not exist. Default is None (no file is written).
 
-    Returns
-    -------
-    pandas.DataFrame
-        A DataFrame indexed by ('pid', 'channel') containing aggregated raw electrophysiological features
-        and channel metadata for all PIDs. Each row represents one channel from one PID.
+    Returns:
+        pandas.DataFrame: A DataFrame indexed by ('pid', 'channel') containing aggregated raw electrophysiological features
+            and channel metadata for all PIDs. Each row represents one channel from one PID.
 
-    Example
-    -------
-    >>> import pandas as pd
-    >>> from pathlib import Path
-    >>> snippet_df = pd.DataFrame({
-    ...     'pid': ['probe1', 'probe1', 'probe2', 'probe2'],
-    ...     'base_level_dir': ['/data/probe1', '/data/probe1', '/data/probe2', '/data/probe2'],
-    ...     'snippet_level_dir': ['snippet_001', 'snippet_002', 'snippet_001', 'snippet_002']
-    ... })
-    >>> agg_df = get_aggregated_raw_features(snippet_df, output_dir=Path('output'))
-    >>> print(agg_df.head())
+    Example:
+        >>> import pandas as pd
+        >>> from pathlib import Path
+        >>> snippet_df = pd.DataFrame({
+        ...     'pid': ['probe1', 'probe1', 'probe2', 'probe2'],
+        ...     'base_level_dir': ['/data/probe1', '/data/probe1', '/data/probe2', '/data/probe2'],
+        ...     'snippet_level_dir': ['snippet_001', 'snippet_002', 'snippet_001', 'snippet_002']
+        ... })
+        >>> agg_df = get_aggregated_raw_features(snippet_df, output_dir=Path('output'))
+        >>> print(agg_df.head())
 
-    Notes
-    -----
-    - Each PID is processed independently using `get_aggregated_features_per_pid`.
-    - The function groups the input DataFrame by 'pid' and processes each group separately.
-    - If `output_dir` is provided, the result is saved as 'raw_ephys_features.pqt'.
-    - The function handles multiple PIDs efficiently by aggregating the features for a PID before concatting across multiple pids..
+    Note:
+        - Each PID is processed independently using `get_aggregated_features_per_pid`.
+        - The function groups the input DataFrame by 'pid' and processes each group separately.
+        - If `output_dir` is provided, the result is saved as 'raw_ephys_features.pqt'.
+        - The function handles multiple PIDs efficiently by aggregating the features for a PID before concatting across multiple pids.
     """
     # Initialize an empty DataFrame to store results from all PIDs
     agg_df = pd.DataFrame()
@@ -456,42 +401,34 @@ def get_aggregated_raw_features(
 def denoise_raw_features_data(
     agg_raw_ephys_features: pd.DataFrame, output_dir: Path | None = None
 ):
-    """
-    Apply denoising to aggregated raw electrophysiological features for each probe ID (PID).
+    """Apply denoising to aggregated raw electrophysiological features for each probe ID (PID).
 
     This function takes aggregated raw features and applies denoising algorithms to reduce noise
     and improve signal quality. The denoising is performed PID-by-PID using the `denoise_dataframe`
     function, which requires channel labels for each PID. The process preserves the original column
     structure while handling nan and noisy results.
 
-    Parameters
-    ----------
-    agg_raw_ephys_features : pandas.DataFrame
-        DataFrame containing aggregated raw electrophysiological features, typically indexed by
-        ('pid', 'channel'). Must contain a 'channel_labels' column for each PID.
-    output_dir : Path or None, optional
-        If provided, the denoised DataFrame is saved as 'raw_ephys_features_denoised.pqt' in this directory.
-        The directory is created if it does not exist. Default is None (no file is written).
+    Args:
+        agg_raw_ephys_features (pandas.DataFrame): DataFrame containing aggregated raw electrophysiological features, typically indexed by
+            ('pid', 'channel'). Must contain a 'channel_labels' column for each PID.
+        output_dir (Path or None, optional): If provided, the denoised DataFrame is saved as 'raw_ephys_features_denoised.pqt' in this directory.
+            The directory is created if it does not exist. Default is None (no file is written).
 
-    Returns
-    -------
-    pandas.DataFrame
-        A DataFrame with the same structure as the input but with denoised feature values.
-        The denoising process reduces noise while preserving the original column structure.
+    Returns:
+        pandas.DataFrame: A DataFrame with the same structure as the input but with denoised feature values.
+            The denoising process reduces noise while preserving the original column structure.
 
-    Example
-    -------
-    >>> import pandas as pd
-    >>> # Assuming agg_df is a DataFrame with aggregated raw features
-    >>> denoised_df = denoise_raw_features_data(agg_df, output_dir=Path('output'))
-    >>> print(denoised_df.head())
+    Example:
+        >>> import pandas as pd
+        >>> # Assuming agg_df is a DataFrame with aggregated raw features
+        >>> denoised_df = denoise_raw_features_data(agg_df, output_dir=Path('output'))
+        >>> print(denoised_df.head())
 
-    Notes
-    -----
-    - The function processes each PID separately to apply PID-specific denoising.
-    - Denoising requires channel labels, which must be present in the 'channel_labels' column.
-    - The denoising factor (fac) is set to 1, which can be adjusted in the denoise_dataframe function.
-    - If `output_dir` is provided, the result is saved as 'raw_ephys_features_denoised.pqt'.
+    Note:
+        - The function processes each PID separately to apply PID-specific denoising.
+        - Denoising requires channel labels, which must be present in the 'channel_labels' column.
+        - The denoising factor (fac) is set to 1, which can be adjusted in the denoise_dataframe function.
+        - If `output_dir` is provided, the result is saved as 'raw_ephys_features_denoised.pqt'.
     """
     # Store the original column names to preserve structure
     original_columns = agg_raw_ephys_features.columns.tolist()
@@ -522,58 +459,49 @@ def denoise_raw_features_data(
 def produce_output_dataframes(
     snippets_df: pd.DataFrame, input_dir: Path, output_dir: Path | None = None
 ):
-    """
-    Orchestrate the complete pipeline to produce aggregated and denoised electrophysiological data.
+    """Orchestrate the complete pipeline to produce aggregated and denoised electrophysiological data.
 
     This function serves as the main entry point for processing electrophysiological data from multiple
     probes. It coordinates the entire pipeline: aggregating channel metadata, processing raw features,
     and applying denoising. The function handles both the data processing and optional file output.
 
-    Parameters
-    ----------
-    snippets_df : pandas.DataFrame
-        DataFrame containing snippet information for multiple PIDs. Must have columns:
-        - 'pid': Probe ID
-        - 'base_level_dir': Base directory path for each snippet
-        - 'snippet_level_dir': Relative path to the snippet directory
-    input_dir : Path
-        Root directory containing probe data. The function searches for 'channels.pqt' files
-        in subdirectories of this path.
-    output_dir : Path or None, optional
-        If provided, all output DataFrames are saved as Parquet files in this directory:
-        - 'snippets_df.pqt': Input snippets DataFrame
-        - 'channels.pqt': Aggregated channel metadata
-        - 'raw_ephys_features.pqt': Aggregated raw features
-        - 'raw_ephys_features_denoised.pqt': Denoised features
-        The directory is created if it does not exist. Default is None (no files are written).
+    Args:
+        snippets_df (pandas.DataFrame): DataFrame containing snippet information for multiple PIDs. Must have columns:
+            - 'pid': Probe ID
+            - 'base_level_dir': Base directory path for each snippet
+            - 'snippet_level_dir': Relative path to the snippet directory
+        input_dir (Path): Root directory containing probe data. The function searches for 'channels.pqt' files
+            in subdirectories of this path.
+        output_dir (Path or None, optional): If provided, all output DataFrames are saved as Parquet files in this directory:
+            - 'snippets_df.pqt': Input snippets DataFrame
+            - 'channels.pqt': Aggregated channel metadata
+            - 'raw_ephys_features.pqt': Aggregated raw features
+            - 'raw_ephys_features_denoised.pqt': Denoised features
+            The directory is created if it does not exist. Default is None (no files are written).
 
-    Returns
-    -------
-    tuple
-        A tuple containing three DataFrames:
-        - df_channels: Aggregated channel metadata with position information
-        - df_raw_ephys: Aggregated raw electrophysiological features
-        - df_features_denoise: Denoised electrophysiological features
+    Returns:
+        tuple: A tuple containing three DataFrames:
+            - df_channels: Aggregated channel metadata with position information
+            - df_raw_ephys: Aggregated raw electrophysiological features
+            - df_features_denoise: Denoised electrophysiological features
 
-    Example
-    -------
-    >>> import pandas as pd
-    >>> from pathlib import Path
-    >>> snippets_df = pd.DataFrame({
-    ...     'pid': ['probe1', 'probe2'],
-    ...     'base_level_dir': ['/data/probe1', '/data/probe2'],
-    ...     'snippet_level_dir': ['snippet_001', 'snippet_001']
-    ... })
-    >>> channels, raw_features, denoised_features = produce_output_dataframes(
-    ...     snippets_df, Path('/data'), Path('output')
-    ... )
+    Example:
+        >>> import pandas as pd
+        >>> from pathlib import Path
+        >>> snippets_df = pd.DataFrame({
+        ...     'pid': ['probe1', 'probe2'],
+        ...     'base_level_dir': ['/data/probe1', '/data/probe2'],
+        ...     'snippet_level_dir': ['snippet_001', 'snippet_001']
+        ... })
+        >>> channels, raw_features, denoised_features = produce_output_dataframes(
+        ...     snippets_df, Path('/data'), Path('output')
+        ... )
 
-    Notes
-    -----
-    - The function searches for 'channels.pqt' files recursively in the input directory.
-    - All processing steps are performed sequentially: channel aggregation, feature aggregation, then denoising.
-    - If output_dir is provided, all intermediate and final results are saved as Parquet files.
-    - This function serves as a high-level wrapper around the individual processing functions.
+    Note:
+        - The function searches for 'channels.pqt' files recursively in the input directory.
+        - All processing steps are performed sequentially: channel aggregation, feature aggregation, then denoising.
+        - If output_dir is provided, all intermediate and final results are saved as Parquet files.
+        - This function serves as a high-level wrapper around the individual processing functions.
     """
     # Ensure output_dir is a Path object and create it if needed
     output_dir = Path(output_dir)

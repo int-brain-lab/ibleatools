@@ -1,3 +1,110 @@
+"""
+Electrophysiological feature extraction and processing module.
+
+This module provides comprehensive tools for extracting, processing, and analyzing
+electrophysiological features from neural recordings. It supports multiple backends
+for spike detection and feature computation, including Dartsort and SpikeInterface.
+
+The module includes:
+- Feature extraction from AP (action potential) and LF (local field potential) bands
+- Current source density (CSD) computation
+- Spike detection and waveform analysis
+- Feature denoising using total variation filters
+- Data validation using Pandera schemas
+- Transformer classes for scikit-learn compatibility
+
+Classes
+-------
+DartParameters
+    Configuration parameters for Dartsort backend
+ChannelDataFrameSchema
+    Pandera schema for channel data validation
+ModelLfFeatures
+    Schema for local field potential features
+ModelCsdFeatures
+    Schema for current source density features
+ModelApFeatures
+    Schema for action potential features
+ModelSpikeFeatures
+    Schema for spike waveform features
+ModelChannelLayout
+    Schema for channel layout information
+ModelHistologyPlanned
+    Schema for planned histology coordinates
+ModelHistologyResolved
+    Schema for resolved histology coordinates
+ModelRawFeatures
+    Combined schema for all raw features
+EphysTransformer
+    Transformer for applying feature transformations
+EphysDenoiser
+    Transformer for denoising electrophysiological features
+
+Functions
+---------
+_setup_scratch_directory
+    Set up scratch directory with fallback logic
+voltage_features_set
+    Get list of feature column names by provenance
+lf
+    Compute LF features from numpy array
+csd
+    Compute CSD features from numpy array
+ap
+    Compute AP features from numpy array
+dart_subtraction_numpy
+    Perform spike detection using Dartsort
+spikes
+    Spike detection and feature extraction with multiple backend support
+xcor_acor_ratio
+    Compute cross-correlation over auto-correlation ratio
+denoise_shank
+    Denoise AP features using total variation filter
+denoise_dataframe
+    Apply total variation filter denoising to features
+
+Constants
+---------
+__features_version__ : str
+    Version of the feature extractor code
+BANDS : dict
+    Frequency bands for spectral analysis
+FEATURES_LIST : list
+    List of available feature types
+
+Examples
+--------
+>>> from ephysatlas.features import lf, csd, ap
+>>> import numpy as np
+>>> 
+>>> # Generate sample data
+>>> data = np.random.randn(64, 30000)  # 64 channels, 30k samples
+>>> fs = 30000  # 30 kHz sampling rate
+>>> 
+>>> # Compute LF features
+>>> lf_features = lf(data, fs)
+>>> 
+>>> # Compute CSD features
+>>> geometry = {'x': np.arange(64), 'y': np.zeros(64)}
+>>> csd_features = csd(data, fs, geometry)
+>>> 
+>>> # Compute AP features
+>>> ap_data = np.random.randn(64, 10000)
+>>> ap_features = ap(ap_data, geometry, np.zeros(64))
+
+Notes
+-----
+This module requires several dependencies including numpy, pandas, scipy,
+scikit-image, and optionally dartsort for advanced spike detection.
+GPU acceleration is supported through the dartsort backend.
+
+See Also
+--------
+ibldsp.waveforms : Waveform processing utilities
+ibldsp.cadzow : Cadzow denoising algorithms
+ibldsp.voltage : Voltage processing utilities
+"""
+
 from abc import ABC
 import logging
 from pathlib import Path
@@ -31,15 +138,18 @@ __features_version__ = (
 
 # TODO - Scratch_dir path is not working as expected. Even if I pass the scratch_dir argument in the main compute_features function, here I am gettig log from Path("/scratch/dartsort/")
 def _setup_scratch_directory(scratch_dir=None):
-    """
-    Set up scratch directory with fallback logic.
+    """Set up scratch directory with fallback logic.
 
     Args:
         scratch_dir (Path or str, optional): Preferred scratch directory path.
             If None, will try system defaults.
 
     Returns:
-        Path: Path to the created scratch directory
+        Path: Path to the created scratch directory.
+
+    Note:
+        This function first tries to use the SDSC scratch directory (/scratch/dartsort/),
+        and falls back to the system temp directory if that fails.
     """
     if scratch_dir is not None:
         scratch_path = Path(scratch_dir)
@@ -74,14 +184,40 @@ FEATURES_LIST = ["raw_ap", "raw_lf", "localisation", "waveforms"]
 
 
 def get_feature_cmin(feature_name):
-    # todo
+    """Get the minimum value for a given feature.
+    
+    Args:
+        feature_name (str): Name of the feature.
+        
+    Returns:
+        float: Minimum value for the feature.
+        
+    Note:
+        This function is currently a placeholder and needs implementation.
+    """
+    # TODO: Implement feature minimum value retrieval
     pass
 
 
 class DartParameters(pydantic.BaseModel):
+    """Configuration parameters for Dartsort backend.
+    
+    This class defines the parameters used for spike detection and feature
+    extraction using the Dartsort algorithm.
+    
+    Attributes:
+        localization_radius (float): Radius in micrometers for spike localization.
+            Defaults to 150.
+        chunk_length_samples (int): Length of data chunks in samples for processing.
+            Defaults to 2^15 (32768).
+        trough_offset (int): Offset in samples from spike peak to trough.
+            Defaults to 42.
+        scratch_dir (Path or str, optional): Scratch directory for temporary files.
+            If None, will use system defaults.
+    """
     localization_radius: pydantic.PositiveFloat = 150
     chunk_length_samples: pydantic.PositiveInt = 2**15
-    trough_offset: pydantic.PositiveInt = (42,)
+    trough_offset: pydantic.PositiveInt = 42
     scratch_dir: Path | str | None = pydantic.Field(
         default=None,
         description="Scratch directory for temporary files. If None, will use system defaults.",
@@ -89,6 +225,22 @@ class DartParameters(pydantic.BaseModel):
 
 
 class ChannelDataFrameSchema(pa.DataFrameModel):
+    """Pandera schema for channel data validation.
+    
+    This schema defines the structure and validation rules for channel
+    information including spatial coordinates and anatomical labels.
+    
+    Attributes:
+        pid (Series[str]): Probe insertion ID.
+        channel (Series[int]): Channel index.
+        x (Series[float]): X-coordinate in micrometers.
+        y (Series[float]): Y-coordinate in micrometers.
+        z (Series[float]): Z-coordinate in micrometers.
+        axial_um (Series[float]): Axial distance in micrometers.
+        lateral_um (Series[float]): Lateral distance in micrometers.
+        acronym (Series[str]): Brain region acronym.
+        atlas_id (Series[int]): Atlas region identifier.
+    """
     pid: Series[str] = pa.Field()
     channel: Series[int] = pa.Field()
     x: Series[float] = pa.Field()
@@ -101,10 +253,33 @@ class ChannelDataFrameSchema(pa.DataFrameModel):
 
 
 class BaseChannelFeatures(pa.DataFrameModel):
+    """Base class for channel-based feature schemas.
+    
+    This is an abstract base class that provides the foundation for
+    all channel-based feature validation schemas.
+    
+    Note:
+        The channel field is expected to be an index in derived classes.
+    """
     pass  # channel: Index[int] = pa.Field(check_name=True)
 
 
 class ModelLfFeatures(BaseChannelFeatures):
+    """Schema for local field potential features.
+    
+    This schema defines the structure and validation rules for local field
+    potential (LFP) features including RMS values and power spectral density
+    across different frequency bands.
+    
+    Attributes:
+        rms_lf (Series[float]): Root mean square of LFP signal in dB.
+        psd_delta (Series[float]): Power spectral density in delta band (0-4 Hz).
+        psd_theta (Series[float]): Power spectral density in theta band (4-10 Hz).
+        psd_alpha (Series[float]): Power spectral density in alpha band (8-12 Hz).
+        psd_beta (Series[float]): Power spectral density in beta band (15-30 Hz).
+        psd_gamma (Series[float]): Power spectral density in gamma band (30-90 Hz).
+        psd_lfp (Series[float]): Power spectral density in full LFP band (0-90 Hz).
+    """
     rms_lf: Series[float] = pa.Field(
         coerce=True, metadata={"transform": lambda x: 20 * np.log10(x)}
     )
@@ -117,6 +292,21 @@ class ModelLfFeatures(BaseChannelFeatures):
 
 
 class ModelCsdFeatures(BaseChannelFeatures):
+    """Schema for current source density features.
+    
+    This schema defines the structure and validation rules for current source
+    density (CSD) features including RMS values and power spectral density
+    across different frequency bands.
+    
+    Attributes:
+        rms_lf_csd (Series[float]): Root mean square of CSD signal in dB.
+        psd_delta_csd (Series[float]): CSD power spectral density in delta band (0-4 Hz).
+        psd_theta_csd (Series[float]): CSD power spectral density in theta band (4-10 Hz).
+        psd_alpha_csd (Series[float]): CSD power spectral density in alpha band (8-12 Hz).
+        psd_beta_csd (Series[float]): CSD power spectral density in beta band (15-30 Hz).
+        psd_gamma_csd (Series[float]): CSD power spectral density in gamma band (30-90 Hz).
+        psd_lfp_csd (Series[float]): CSD power spectral density in full LFP band (0-90 Hz).
+    """
     rms_lf_csd: Series[float] = pa.Field(
         coerce=True, metadata={"transform": lambda x: 20 * np.log10(x)}
     )
@@ -129,6 +319,16 @@ class ModelCsdFeatures(BaseChannelFeatures):
 
 
 class ModelApFeatures(BaseChannelFeatures):
+    """Schema for action potential features.
+    
+    This schema defines the structure and validation rules for action potential
+    (AP) features including RMS values and correlation ratios.
+    
+    Attributes:
+        rms_ap (Series[float]): Root mean square of AP signal in dB.
+        cor_ratio (Series[float]): Cross-correlation over auto-correlation ratio.
+        channel_labels (Series[int]): Quality labels for channels.
+    """
     rms_ap: Series[float] = pa.Field(
         coerce=True, metadata={"transform": lambda x: 20 * np.log10(x)}
     )
@@ -137,6 +337,27 @@ class ModelApFeatures(BaseChannelFeatures):
 
 
 class ModelSpikeFeatures(BaseChannelFeatures):
+    """Schema for spike waveform features.
+    
+    This schema defines the structure and validation rules for spike waveform
+    features including timing, amplitude, and slope characteristics.
+    
+    Attributes:
+        alpha_mean (Series[float]): Mean alpha parameter for spike localization.
+        alpha_std (Series[float]): Standard deviation of alpha parameter.
+        depolarisation_slope (Series[float]): Slope during depolarization phase.
+        peak_time_secs (Series[float]): Time to peak in seconds.
+        peak_val (Series[float]): Peak amplitude value.
+        polarity (Series[float]): Spike polarity (positive/negative).
+        recovery_slope (Series[float]): Slope during recovery phase.
+        recovery_time_secs (Series[float]): Recovery time in seconds.
+        repolarisation_slope (Series[float]): Slope during repolarization phase.
+        spike_count (float): Number of spikes (log2 transformed).
+        tip_time_secs (Series[float]): Time to tip in seconds.
+        tip_val (Series[float]): Tip amplitude value.
+        trough_time_secs (Series[float]): Time to trough in seconds.
+        trough_val (Series[float]): Trough amplitude value.
+    """
     alpha_mean: Series[float] = pa.Field(coerce=True)
     alpha_std: Series[float] = pa.Field(coerce=True)
     depolarisation_slope: Series[float] = pa.Field(coerce=True)
@@ -159,17 +380,48 @@ class ModelSpikeFeatures(BaseChannelFeatures):
 
 
 class ModelChannelLayout(BaseChannelFeatures):
+    """Schema for channel layout information.
+    
+    This schema defines the structure and validation rules for channel
+    layout features including spatial positioning.
+    
+    Attributes:
+        axial_um (Series[float]): Axial distance in micrometers.
+        lateral_um (Series[float]): Lateral distance in micrometers.
+    """
     axial_um: Series[float] = pa.Field(coerce=True)
     lateral_um: Series[float] = pa.Field(coerce=True)
 
 
 class ModelHistologyPlanned(BaseChannelFeatures):
+    """Schema for planned histology coordinates.
+    
+    This schema defines the structure and validation rules for planned
+    histology coordinates before actual histological analysis.
+    
+    Attributes:
+        x_target (Series[float]): Target X-coordinate in micrometers.
+        y_target (Series[float]): Target Y-coordinate in micrometers.
+        z_target (Series[float]): Target Z-coordinate in micrometers.
+    """
     x_target: Series[float] = pa.Field(coerce=True)
     y_target: Series[float] = pa.Field(coerce=True)
     z_target: Series[float] = pa.Field(coerce=True)
 
 
 class ModelHistologyResolved(BaseChannelFeatures):
+    """Schema for resolved histology coordinates.
+    
+    This schema defines the structure and validation rules for resolved
+    histology coordinates after actual histological analysis.
+    
+    Attributes:
+        x (Series[float]): Resolved X-coordinate in micrometers.
+        y (Series[float]): Resolved Y-coordinate in micrometers.
+        z (Series[float]): Resolved Z-coordinate in micrometers.
+        atlas_id (Series[int]): Atlas region identifier.
+        acronym (Series[str]): Brain region acronym.
+    """
     x: Series[float] = pa.Field(coerce=True)
     y: Series[float] = pa.Field(coerce=True)
     z: Series[float] = pa.Field(coerce=True)
@@ -184,15 +436,35 @@ class ModelRawFeatures(
     ModelLfFeatures,
     ModelChannelLayout,
 ):
+    """Combined schema for all raw features.
+    
+    This schema combines all individual feature schemas into a single
+    comprehensive schema for raw electrophysiological data validation.
+    
+    Note:
+        This class inherits from multiple feature schemas to provide
+        a unified interface for all feature types.
+    """
     pass
 
 
 def voltage_features_set(features_list=FEATURES_LIST):
-    """
-    THis function returns the list of features columns names depending on their provenance.
-    This is useful to select the columns for training
-    :param features_list: optional, defaults to ['raw_ap', 'raw_lf', 'raw_lf_csd', 'waveforms', 'micro-manipulator'], or 'all'
-    :return:
+    """Get list of feature column names by provenance.
+    
+    This function returns the list of features columns names depending on their provenance.
+    This is useful to select the columns for training.
+    
+    Args:
+        features_list (list, optional): List of feature groups to include.
+            Defaults to ['raw_ap', 'raw_lf', 'localisation', 'waveforms'].
+            Use 'all' to include all available feature groups.
+            
+    Returns:
+        list: Sorted list of feature column names excluding the 'channel' column.
+        
+    Note:
+        The looping preserves the order of the features groups in the list.
+        Available feature groups: 'raw_ap', 'raw_lf', 'raw_lf_csd', 'waveforms', 'micro-manipulator'.
     """
     if features_list == "all":
         features_list = [
@@ -245,6 +517,20 @@ def voltage_features_set(features_list=FEATURES_LIST):
 
 
 def _get_power_in_band(fscale, period, band):
+    """Calculate power in a specific frequency band.
+    
+    Args:
+        fscale (np.ndarray): Frequency scale array.
+        period (np.ndarray): Periodogram values.
+        band (list): Frequency band [low, high] in Hz.
+        
+    Returns:
+        np.ndarray: Power in the specified band in dB relative to v/sqrt(Hz).
+        
+    Note:
+        This function weights the frequencies using a cosine window and
+        computes the weighted average power in the specified band.
+    """
     band = np.array(band)
     # weight the frequencies
     fweights = ibldsp.utils.fcn_cosine([-np.diff(band), 0])(
@@ -257,13 +543,24 @@ def _get_power_in_band(fscale, period, band):
 
 
 def lf(data, fs, bands=None):
-    """
-    Computes the LF features from a numpy array
-    :param data: numpy array with the data (channels, samples)
-    :param fs: sampling interval (Hz)
-    :param bands: dictionary with the bands to compute (default: BANDS constant)
-    :return: pandas dataframe with the columns ['channel', 'rms_lf', 'psd_delta', 'psd_theta', 'psd_alpha', 'psd_beta',
-       'psd_gamma', 'psd_lfp']
+    """Compute LF features from a numpy array.
+    
+    Computes the local field potential (LF) features from electrophysiological data
+    including RMS values and power spectral density across different frequency bands.
+    
+    Args:
+        data (np.ndarray): Data array with shape (channels, samples).
+        fs (float): Sampling frequency in Hz.
+        bands (dict, optional): Dictionary with frequency bands to compute.
+            Defaults to BANDS constant.
+            
+    Returns:
+        pd.DataFrame: DataFrame with columns ['channel', 'rms_lf', 'psd_delta',
+            'psd_theta', 'psd_alpha', 'psd_beta', 'psd_gamma', 'psd_lfp'].
+            
+    Note:
+        The function computes RMS values and power spectral density for each
+        frequency band defined in the BANDS constant.
     """
     bands = BANDS if bands is None else bands
     nc = data.shape[0]  # number of channels
@@ -278,15 +575,27 @@ def lf(data, fs, bands=None):
 
 
 def csd(data, fs, geometry, bands=None, decimate=10):
-    """
-    Computes the CSD features from a numpy array
-    :param data: numpy array with the data (channels, samples)
-    :param fs: sampling interval (Hz)
-    :param geometry: dictionary with the geometry (x, y) of the channels
-    :param bands: dictionary with the bands to compute (default: BANDS constant)
-    :params decimate: decimation factor for the CSD calculation (default: 10)
-    :return: pandas dataframe with the columns ['channel', 'rms_lf_csd', 'psd_delta_csd', 'psd_theta_csd', 'psd_alpha_csd',
-       'psd_beta_csd', 'psd_gamma_csd', 'psd_lfp_csd']
+    """Compute CSD features from a numpy array.
+    
+    Computes the current source density (CSD) features from electrophysiological data
+    including RMS values and power spectral density across different frequency bands.
+    
+    Args:
+        data (np.ndarray): Data array with shape (channels, samples).
+        fs (float): Sampling frequency in Hz.
+        geometry (dict): Dictionary with channel geometry containing 'x' and 'y' arrays.
+        bands (dict, optional): Dictionary with frequency bands to compute.
+            Defaults to BANDS constant.
+        decimate (int, optional): Decimation factor for CSD calculation.
+            Defaults to 10.
+            
+    Returns:
+        pd.DataFrame: DataFrame with columns ['channel', 'rms_lf_csd', 'psd_delta_csd',
+            'psd_theta_csd', 'psd_alpha_csd', 'psd_beta_csd', 'psd_gamma_csd', 'psd_lfp_csd'].
+            
+    Note:
+        The function applies Cadzow denoising and current source density computation
+        before computing the spectral features.
     """
     data_rs = scipy.signal.decimate(data, decimate, axis=1, ftype="fir")
     data_rs = ibldsp.cadzow.cadzow_np1(data_rs, rank=2, fs=fs, niter=1, fmax=90)
@@ -300,10 +609,25 @@ def csd(data, fs, geometry, bands=None, decimate=10):
 
 
 def ap(data, geometry=None, channel_labels=None):
-    """
-    Computes the LF features from a numpy array
-    :param data: numpy array with the AP band data (channels, samples)
-    :return: pandas dataframe with the columns ['channel', 'rms_ap']
+    """Compute AP features from a numpy array.
+    
+    Computes the action potential (AP) features from electrophysiological data
+    including RMS values and correlation ratios.
+    
+    Args:
+        data (np.ndarray): AP band data array with shape (channels, samples).
+        geometry (dict): Dictionary with channel geometry containing 'x' and 'y' arrays.
+        channel_labels (np.ndarray): Array of channel quality labels.
+            
+    Returns:
+        pd.DataFrame: DataFrame with columns ['channel', 'rms_ap', 'cor_ratio', 'channel_labels'].
+        
+    Raises:
+        AssertionError: If geometry or channel_labels are not provided.
+        
+    Note:
+        This function computes RMS values and cross-correlation ratios for
+        action potential band data.
     """
     assert geometry is not None, "Geometry is required for AP band computation"
     assert channel_labels is not None, "Channel labels are required"
@@ -318,9 +642,30 @@ def ap(data, geometry=None, channel_labels=None):
 
 
 def dart_subtraction_numpy(data, fs, geometry, **params):
-    """
-    :param data: [nc, ns] numpy array of voltage traces, z-scored or not
-    :return:
+    """Perform spike detection using Dartsort.
+    
+    This function performs spike detection and feature extraction using the
+    Dartsort algorithm with configurable parameters.
+    
+    Args:
+        data (np.ndarray): Voltage traces array with shape [nc, ns] where nc is
+            number of channels and ns is number of samples. Data can be z-scored or not.
+        fs (float): Sampling frequency in Hz.
+        geometry (dict): Dictionary with channel geometry containing 'x' and 'y' arrays.
+        **params: Additional parameters for Dartsort configuration.
+            
+    Returns:
+        tuple: A tuple containing:
+            
+            - df_spikes (pd.DataFrame): DataFrame with spike information including
+              sample indices, channels, peak-to-peak amplitudes, and localizations.
+            - d_waveforms (dict): Dictionary containing raw and denoised waveforms
+              and channel indices.
+              
+    Note:
+        This function requires the dartsort package to be installed.
+        It creates temporary directories for processing and cleans them up afterward.
+        GPU acceleration is supported when available.
     """
 
     params = DartParameters() if params is None else DartParameters(**params)
@@ -399,31 +744,198 @@ def dart_subtraction_numpy(data, fs, geometry, **params):
     return df_spikes, d_waveforms
 
 
+def _spikes_dartsort(data, fs: int, geometry: dict, scratch_dir=None, **params):
+    """Dartsort backend for spike detection.
+    
+    This function serves as the Dartsort backend for the main spikes function,
+    handling spike detection and feature extraction using Dartsort.
+    
+    Args:
+        data (np.ndarray): Raw electrophysiology data.
+        fs (int): Sampling frequency in Hz.
+        geometry (dict): Channel geometry dictionary.
+        scratch_dir (str, optional): Directory for temporary files.
+        **params: Dartsort parameters.
+            
+    Returns:
+        tuple: A tuple containing:
+            
+            - ``df_spikes_`` (pd.DataFrame): DataFrame with spike information.
+            - d_waveforms (dict): Dictionary containing waveform data.
+            - params_obj (DartParameters): Dartsort parameters object.
+    """
+    params_obj = DartParameters() if params is None else DartParameters(**params)
+    logger.info("Starting spike detection with Dartsort backend")
+    df_spikes_, d_waveforms = dart_subtraction_numpy(data, fs, geometry, scratch_dir=scratch_dir, params=params_obj)
+    logger.info("Spike detection completed with Dartsort backend")
+    return df_spikes_, d_waveforms, params_obj
+
+
+def _spikes_spikeinterface(data, fs: int, geometry: dict, scratch_dir=None, **params):
+    """SpikeInterface backend for spike detection.
+    
+    This function serves as the SpikeInterface backend for the main spikes function,
+    handling spike detection and feature extraction using SpikeInterface.
+    
+    Args:
+        data (np.ndarray): Raw electrophysiology data.
+        fs (int): Sampling frequency in Hz.
+        geometry (dict): Channel geometry dictionary.
+        scratch_dir (str, optional): Directory for temporary files.
+        **params: SpikeInterface parameters.
+            
+    Returns:
+        tuple: A tuple containing:
+            
+            - ``df_spikes_`` (pd.DataFrame): DataFrame with spike information.
+            - d_waveforms (dict): Dictionary containing waveform data.
+            - params_obj (dict): SpikeInterface parameters object.
+            
+    Raises:
+        ImportError: If SpikeInterface is not installed.
+        NotImplementedError: This function is not yet fully implemented.
+        
+    Note:
+        This function is currently a placeholder and needs full implementation
+        for SpikeInterface backend support.
+    """
+    try:
+        import spikeinterface.core as sc
+        from probeinterface.neuropixels_tools import read_spikeglx
+        from spikeinterface.sortingcomponents.peak_detection import detect_peaks
+        from spikeinterface.core.node_pipeline import ExtractDenseWaveforms
+        from spikeinterface.sortingcomponents.peak_localization import LocalizeCenterOfMass
+        from spikeinterface.core.node_pipeline import run_node_pipeline, PeakRetriever
+    except ImportError as e:
+        raise ImportError(f"SpikeInterface not installed. Please install with: pip install spikeinterface. Error: {e}")
+    
+    logger.info("Starting spike detection with SpikeInterface backend")
+    
+    # Create SpikeInterface recording object
+    recording = sc.NumpyRecording(data.T, sampling_frequency=fs)
+    
+    # Set up probe geometry
+    assert params.get("sr_ap_filepath")
+    from probeinterface.neuropixels_tools import read_spikeglx
+    probe = read_spikeglx(params['sr_ap_filepath']) # TODO: Pending implementation for the case when data is loaded using files, and not pid 
+    recording = recording.set_probe(probe)
+
+    si_params = {
+        'method': params.get('method', 'locally_exclusive'),
+        'peak_sign': params.get('peak_sign', 'neg'),
+        'detect_threshold': params.get('detect_threshold', 5.0),
+        'exclude_sweep_ms': params.get('exclude_sweep_ms', 0.1),
+        'radius_um': params.get('localization_radius', 100),
+        'job_kwargs': params.get('job_kwargs', {})
+    }
+
+    peaks = detect_peaks(recording,  method=si_params['method'],
+                     detect_threshold=si_params['detect_threshold'], radius_um=si_params['radius_um'], **si_params['job_kwargs'])
+    
+    peak_retriever = PeakRetriever(recording, peaks)
+
+    extract_dense_waveforms = ExtractDenseWaveforms(
+                recording, parents=[peak_retriever], ms_before=0.5, ms_after=0.5, return_output=True
+            )
+    pipeline_nodes = [
+                peak_retriever,
+                extract_dense_waveforms,
+                LocalizeCenterOfMass(recording, parents=[peak_retriever, extract_dense_waveforms], radius_um=si_params["radius_um"]),
+            ]
+    job_name = "localize peaks using center_of_mass"
+    waveform_data, peak_locations = run_node_pipeline(recording, pipeline_nodes, si_params["job_kwargs"], job_name=job_name)
+    waveform_data, peak_locations
+    # # Create DataFrame similar to Dartsort output
+    # df_spikes_ = pd.DataFrame({
+    #     'sample': spikes['sample_index'],
+    #     'channel': spikes['channel_index'],
+    #     'ptp': np.ones(len(spikes)) * 1.0,  # Placeholder - need to compute from waveforms
+    #     'xloc': geometry['x'][spikes['channel_index']],  # Approximate localization
+    #     'yloc': geometry['y'][spikes['channel_index']],  # Approximate localization
+    #     'zloc': np.zeros(len(spikes)),  # Placeholder
+    #     'alpha': np.ones(len(spikes)) * 1.0,  # Placeholder - need proper computation
+    # })
+    
+    # # Create waveforms dictionary in same format as Dartsort
+    # d_waveforms = {
+    #     "raw": waveforms,  # Raw waveforms
+    #     "denoised": waveforms,  # For now, same as raw (could add denoising step)
+    #     "channel_index": we.channel_ids,
+    # }
+    
+    # # Create a simple params object to maintain interface compatibility
+    # # For SpikeInterface, we'll use a dict instead of DartParameters
+    # params_obj = {
+    #     'trough_offset': params.get('trough_offset', 42),  # Default from DartParameters
+    #     **params
+    # }
+    
+    # logger.info("Spike detection completed with SpikeInterface backend")
+    # return df_spikes_, d_waveforms, params_obj
+    raise NotImplementedError("This function is not implemented yet")
+
+
 def spikes(
-    data, fs: int, geometry: dict, return_waveforms=True, scratch_dir=None, **params
+    data, fs: int, geometry: dict, return_waveforms=True, backend="dartsort", scratch_dir=None, **params
 ):
+    """Spike detection and feature extraction with multiple backend support.
+    
+    This function performs spike detection and feature extraction using either
+    Dartsort or SpikeInterface backend, with comprehensive feature computation
+    including waveform analysis and spike characterization.
+    
+    Args:
+        data (np.ndarray): Raw electrophysiology data with shape [nc, ns] where
+            nc is number of channels and ns is number of samples.
+        fs (int): Sampling frequency in Hz.
+        geometry (dict): Channel geometry dictionary with 'x' and 'y' arrays.
+        return_waveforms (bool, optional): Whether to return waveforms dictionary.
+            Defaults to True.
+        backend (str, optional): Backend to use ('dartsort' or 'spikeinterface').
+            Defaults to 'dartsort'.
+        scratch_dir (str, optional): Directory for temporary files.
+        **params: Backend-specific parameters.
+            
+    Returns:
+        pd.DataFrame or tuple: If return_waveforms is False, returns DataFrame with
+            aggregated spike features per channel. If True, returns tuple of
+            (DataFrame, waveforms_dict).
+            
+    Raises:
+        ValueError: If an unknown backend is specified.
+        
+    Note:
+        The function aggregates spike features by channel and computes various
+        waveform characteristics including timing, amplitude, and slope features.
+        Both backends produce compatible output formats for further processing.
     """
-    :param data:
-    :param fs:
-    :param geometry:
-    :param params:
-    :return:
-    """
-    params = DartParameters() if params is None else DartParameters(**params)
-    logger.info("Starting spike detection")
-    # Update params with scratch_dir if provided
-    if scratch_dir is not None:
-        params.scratch_dir = scratch_dir
-    df_spikes_, d_waveforms = dart_subtraction_numpy(data, fs, geometry, params=params)
-    logger.info("Spike detection completed")
+    # Call the appropriate backend function to get raw spike data
+    if backend == "dartsort":
+        df_spikes_, d_waveforms, params_obj = _spikes_dartsort(data, fs, geometry, scratch_dir, **params)
+    elif backend == "spikeinterface":
+        df_spikes_, d_waveforms, params_obj = _spikes_spikeinterface(data, fs, geometry, scratch_dir, **params)
+    else:
+        raise ValueError(f"Unknown backend: {backend}. Supported backends: 'dartsort', 'spikeinterface'")
+    
+    # Common processing for both backends
+    logger.info("Computing waveform features")
     df_waveforms = ibldsp.waveforms.compute_spike_features(d_waveforms["denoised"])
     df_spikes = df_spikes_.merge(df_waveforms, left_index=True, right_index=True)
-    # we cast the float32 values as float64
+    
+    # Cast the float32 values as float64
     df_spikes[df_spikes.select_dtypes(np.float32).columns] = df_spikes.select_dtypes(
         np.float32
     ).astype(np.float64)
-    fcn_mean_time = lambda x: np.mean((x - params.trough_offset)) / fs  # NOQA
-    # aggregation by channel of the spikes / waveforms features
+    
+    # Get trough_offset from params_obj (handle both DartParameters object and dict)
+    if hasattr(params_obj, 'trough_offset'):
+        trough_offset = params_obj.trough_offset
+    else:
+        trough_offset = params_obj.get('trough_offset', 42)
+    
+    fcn_mean_time = lambda x: np.mean((x - trough_offset)) / fs  # NOQA
+    
+    # Aggregation by channel of the spikes / waveforms features
     df_spiking = (
         df_spikes.groupby("channel")
         .agg(
@@ -454,7 +966,9 @@ def spikes(
         )
         .reset_index()
     )
+    
     ModelSpikeFeatures.validate(df_spiking)
+    
     if return_waveforms:
         return df_spiking, d_waveforms | {"df_spikes": df_spikes}
     else:
@@ -462,12 +976,25 @@ def spikes(
 
 
 def xcor_acor_ratio(v: np.ndarray, geometry: dict, n_neighbor: int = 3) -> np.ndarray:
-    """
-    Cross corr over auto-correlation ratio
-    :param v: voltage array for AP band (nc, ns)
-    :param geometry: geometry dict with 'x' and 'y' arrays for the electrode positions (nc, )
-    :param n_diags: number of n
-    :return: np.ndarray of size (nc, )
+    """Compute cross-correlation over auto-correlation ratio.
+    
+    This function calculates the ratio of cross-correlation between neighboring
+    channels over the auto-correlation for each channel in the AP band data.
+    
+    Args:
+        v (np.ndarray): Voltage array for AP band with shape (nc, ns) where
+            nc is number of channels and ns is number of samples.
+        geometry (dict): Geometry dictionary with 'x' and 'y' arrays for
+            electrode positions.
+        n_neighbor (int, optional): Number of neighboring channels to consider.
+            Defaults to 3.
+            
+    Returns:
+        np.ndarray: Array of size (nc,) containing the correlation ratios.
+        
+    Note:
+        The function computes covariance matrices and extracts diagonal elements
+        to calculate cross-correlation ratios for neighboring channels.
     """
     # %% on calcule la matrice de covariance
     n_mirror = 12
@@ -514,15 +1041,27 @@ def xcor_acor_ratio(v: np.ndarray, geometry: dict, n_neighbor: int = 3) -> np.nd
 def denoise_shank(
     feature: np.ndarray, xy: np.ndarray, labels: np.ndarray | None = None, fac: int = 1
 ) -> np.ndarray:
-    """
-    Denoise the AP feature using a maximum variation filter. Interpolates the feature in a square grid,
-    performs the filtering, and then interpolates back to the original grid.
-
-    :param feature: AP feature to denoise (nc)
-    :param xy: Coordinates of the AP feature (nc, 2)
-    :param labels: Channels quality annotation (nc), if different than 0, channel is discarded and interpolated. Set to None for no annotation.
-    :param fac: Factor for the TV denoising in median deviation units(default 1)
-    :return: Denoised AP (nc)
+    """Denoise AP features using total variation filter.
+    
+    Denoise the AP feature using a maximum variation filter. Interpolates the
+    feature in a square grid, performs the filtering, and then interpolates
+    back to the original grid.
+    
+    Args:
+        feature (np.ndarray): AP feature to denoise with shape (nc,).
+        xy (np.ndarray): Coordinates of the AP feature with shape (nc, 2).
+        labels (np.ndarray, optional): Channel quality annotation array with shape (nc,).
+            If different than 0, channel is discarded and interpolated.
+            Set to None for no annotation. Defaults to None.
+        fac (int, optional): Factor for the TV denoising in median deviation units.
+            Defaults to 1.
+            
+    Returns:
+        np.ndarray: Denoised AP features with shape (nc,).
+        
+    Note:
+        This function uses scikit-image's total variation Chambolle denoising
+        algorithm to smooth the feature values while preserving edges.
     """
     isvalid = ~np.isnan(feature)
     xyu = np.unique(xy[:, 0]), np.unique(xy[:, 1])
@@ -552,6 +1091,15 @@ class _EphysTransformerInterface(
     sklearn.base.TransformerMixin,
     sklearn.base.BaseEstimator,
 ):
+    """Abstract base class for electrophysiological feature transformers.
+    
+    This class provides the interface for transformers that work with
+    electrophysiological features, implementing scikit-learn's transformer
+    interface and setting pandas as the default output format.
+    
+    Note:
+        This is an abstract base class that should not be instantiated directly.
+    """
     def __init__(self):
         super().__init__()
         self.set_output(transform="pandas")
@@ -567,6 +1115,15 @@ class _EphysTransformerInterface(
         assert isinstance(X, pd.DataFrame), "X must be a pandas DataFrame"
 
     def fit_transform(self, X: pd.DataFrame = None, y=None):
+        """Fit the transformer and transform the data.
+        
+        Args:
+            X (pd.DataFrame, optional): Input data to fit and transform.
+            y: Ignored, present for compatibility with scikit-learn interface.
+            
+        Returns:
+            pd.DataFrame: Transformed data.
+        """
         self.fit(X)
         return self.transform(X)
 

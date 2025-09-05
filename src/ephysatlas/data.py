@@ -27,15 +27,19 @@ def get_waveforms_coordinates(
     return_complex=False,
     return_indices=False,
 ):
-    """
-    Reproduces the localisation code channel selection when extracting waveforms from raw data.
+    """Reproduces the localisation code channel selection when extracting waveforms from raw data.
+
     Args:
-        trace_indices: np.array (nspikes,): index of the trace of the detected spike )
-        xy: (optional)
-        extract_radius_um: radius from peak trace: all traces within this radius will be included
-        return_complex: if True, returns the complex coordinates, otherwise returns a 3D x, y, z array
-        return_indices: if True, returns the indices of the channels within the radius
-    Returns: (np.array, np.array) (nspikes, ntraces, n_coordinates) of axial and transverse coordinates, (nspikes, ntraces) of indices
+        trace_indices (np.array): Index of the trace of the detected spike (nspikes,).
+        xy (np.array, optional): Complex coordinates of channels. If None, uses neuropixel trace header.
+        extract_radius_um (float, optional): Radius from peak trace. All traces within this radius will be included. Defaults to EXTRACT_RADIUS_UM.
+        return_complex (bool, optional): If True, returns the complex coordinates, otherwise returns a 3D x, y, z array. Defaults to False.
+        return_indices (bool, optional): If True, returns the indices of the channels within the radius. Defaults to False.
+
+    Returns:
+        np.array or tuple: 
+            - If return_indices is False: (nspikes, ntraces, n_coordinates) array of axial and transverse coordinates
+            - If return_indices is True: tuple of (coordinates, indices) where indices is (nspikes, ntraces) array
     """
     if xy is None:
         th = neuropixel.trace_header(version=1)
@@ -58,12 +62,16 @@ def get_waveforms_coordinates(
 
 
 def _get_channel_distances_indices(xy, extract_radius_um=EXTRACT_RADIUS_UM):
-    """
-    params: xy: ntr complex array of x and y coordinates of each channel relative to the probe
-    Computes the distance between each channel and all the other channels, and find the
-    indices of the channels that are within the radius.
-    For each row the indices of the channels within the radius are returned.
-    returns: channel_dist: ntr x ntr_wav matrix of channel indices within the radius., where ntr_wav is the
+    """Compute the distance between each channel and all other channels, and find indices within radius.
+
+    For each row, the indices of the channels within the specified radius are returned.
+
+    Args:
+        xy (np.array): ntr complex array of x and y coordinates of each channel relative to the probe.
+        extract_radius_um (float, optional): Extraction radius in micrometers. Defaults to EXTRACT_RADIUS_UM.
+
+    Returns:
+        np.array: ntr x ntr_wav matrix of channel indices within the radius, where ntr_wav is the maximum number of channels within radius.
     """
     ntr = xy.shape[0]
     channel_dist = np.zeros((ntr, ntr)) * np.nan
@@ -76,9 +84,15 @@ def _get_channel_distances_indices(xy, extract_radius_um=EXTRACT_RADIUS_UM):
 
 
 def atlas_pids_autism(one):
-    """
-    Get autism data from JP
-    fmr1 mouse line
+    """Get autism data from JP fmr1 mouse line.
+
+    Args:
+        one: ONE client instance for accessing the database.
+
+    Returns:
+        tuple: A tuple containing:
+            - List of insertion IDs for FMR subjects
+            - List of full insertion information for FMR subjects
     """
     project = "angelaki_mouseASD"
     # Get all insertions for this project
@@ -96,6 +110,17 @@ def atlas_pids_autism(one):
 
 
 def atlas_pids(one, tracing=False):
+    """Get atlas PIDs from the IBL neuropixel brainwide project.
+
+    Args:
+        one: ONE client instance for accessing the database.
+        tracing (bool, optional): If True, only return insertions with existing tracing. Defaults to False.
+
+    Returns:
+        tuple: A tuple containing:
+            - List of insertion IDs
+            - List of full insertion information
+    """
     django_strg = [
         "session__projects__name__icontains,ibl_neuropixel_brainwide_01",
         "session__qc__lt,50",
@@ -111,6 +136,15 @@ def atlas_pids(one, tracing=False):
 
 
 def read_correlogram(file_correlogram, nclusters):
+    """Read correlogram data from a binary file.
+
+    Args:
+        file_correlogram (str or Path): Path to the correlogram binary file.
+        nclusters (int): Number of clusters in the data.
+
+    Returns:
+        np.ndarray: Memory-mapped correlogram array of shape (nclusters, nbins).
+    """
     nbins = int(Path(file_correlogram).stat().st_size / nclusters / 4)
     mmap_correlogram = np.memmap(
         file_correlogram, dtype="int32", shape=(nclusters, nbins)
@@ -126,15 +160,24 @@ def download_tables(
     overwrite=False,
     extended=False,
 ):
-    """
-    :param local_path: pathlib.Path() where the data will be stored locally
-    :param label: revision string "2024_W04"
-    :param one:
-    :param verify: checks the indices and consistency of the dataframes and raise an error if not consistent
-    :param overwrite: force redownloading if file exists
-    :param extended: if True, will download also extended datasets, such as cross-correlograms that take up
-    more space than just the tables (coople hundreds Mb for the table, several GB with extended data)
-    :return:
+    """Download electrophysiology data tables from AWS S3.
+
+    Downloads aggregated electrophysiology data from the IBL AWS S3 bucket to a local directory.
+
+    Args:
+        local_path (Path): Path where the data will be stored locally.
+        label (str, optional): Revision string (e.g., "2024_W04"). Defaults to "2024_W50".
+        one: ONE client instance for AWS authentication.
+        verify (bool, optional): Checks the indices and consistency of the dataframes and raises an error if not consistent. Defaults to False.
+        overwrite (bool, optional): Force redownloading if file exists. Defaults to False.
+        extended (bool, optional): If True, will download also extended datasets, such as cross-correlograms that take up
+            more space than just the tables (couple hundreds Mb for the table, several GB with extended data). Defaults to False.
+
+    Returns:
+        Path: Local path where the data was downloaded.
+
+    Raises:
+        AssertionError: If the specified label is not found on AWS.
     """
     # The AWS private credentials are stored in Alyx, so that only one authentication is required
     local_path = Path(local_path).joinpath(label)
@@ -165,34 +208,27 @@ def read_features_from_disk(
     strict: bool = True,
     load_denoised: bool = True,
 ) -> pd.DataFrame:
-    """
-    Read electrophysiology features from disk and merge with channel information.
+    """Read electrophysiology features from disk and merge with channel information.
 
     This function loads raw electrophysiology features, channel information, and channel labels
     from parquet files, merges them into a single dataframe, and adds brain region mapping
     information using the provided brain atlas.
 
-    Parameters
-    ----------
-    path_features : pathlib.Path
-        Path to the directory containing the feature parquet files.
-    brain_atlas : iblatlas.atlas.BrainAtlas
-        Brain atlas object used to map coordinates to brain regions.
-        Must be provided to enable region mapping.
-    mappings : list, optional
-        List of brain region mapping ontologies to include.
-        Default is ['Cosmos', 'Beryl'].
-    strict : bool, optional
-        Whether to raise an error on panderas validation
-        Default is True.
-    load_denoised: bool, optional
-        Whether to return the denoised or raw features
-        Default is True.
-    Returns
-    -------
-    pandas.DataFrame
-        DataFrame containing merged electrophysiology features with channel information
-        and brain region mappings.
+    Args:
+        path_features (Path): Path to the directory containing the feature parquet files.
+        brain_atlas (iblatlas.atlas.BrainAtlas, optional): Brain atlas object used to map coordinates to brain regions.
+            Must be provided to enable region mapping.
+        mappings (list, optional): List of brain region mapping ontologies to include.
+            Default is ['Cosmos', 'Beryl'].
+        strict (bool, optional): Whether to raise an error on panderas validation. Default is True.
+        load_denoised (bool, optional): Whether to return the denoised or raw features. Default is True.
+
+    Returns:
+        pd.DataFrame: DataFrame containing merged electrophysiology features with channel information
+            and brain region mappings.
+
+    Raises:
+        AssertionError: If brain atlas is not provided or if unknown mappings are specified.
     """
     mappings = ["Cosmos", "Beryl"] if mappings is None else mappings
     brain_atlas = (
@@ -243,13 +279,17 @@ def read_features_from_disk(
 
 
 def compute_depth_dataframe(df_raw_features, df_clusters, df_channels):
-    """
-    Compute a features dataframe for each pid and depth along the probe,
-    merging the raw voltage features, and the clusters features
-    :param df_voltage:
-    :param df_clusters:
-    :param df_channels:
-    :return:
+    """Compute a features dataframe for each pid and depth along the probe.
+
+    Merges the raw voltage features and the clusters features, aggregating by depth.
+
+    Args:
+        df_raw_features (pd.DataFrame): DataFrame containing raw voltage features.
+        df_clusters (pd.DataFrame): DataFrame containing cluster information.
+        df_channels (pd.DataFrame): DataFrame containing channel information.
+
+    Returns:
+        pd.DataFrame: DataFrame with features aggregated by (pid, axial_um) groups.
     """
     df_depth_clusters = df_clusters.groupby(["pid", "axial_um"]).agg(
         amp_max=pd.NamedAgg(column="amp_max", aggfunc="mean"),
@@ -308,6 +348,11 @@ def compute_depth_dataframe(df_raw_features, df_clusters, df_channels):
 
 
 def get_config():
+    """Load configuration from the config-ephys-atlas.yaml file.
+
+    Returns:
+        dict: Configuration dictionary loaded from the YAML file.
+    """
     file_yaml = Path(__file__).parents[2].joinpath("config-ephys-atlas.yaml")
     with open(file_yaml, "r") as stream:
         config = yaml.safe_load(stream)
@@ -315,11 +360,14 @@ def get_config():
 
 
 def compute_summary_stat(df_voltage, features):
-    """
-    Summary statistics
-    :param df_voltage:
-    :param features:
-    :return:
+    """Compute summary statistics for specified features.
+
+    Args:
+        df_voltage (pd.DataFrame): DataFrame containing voltage features.
+        features (str or list): Feature name(s) to compute statistics for.
+
+    Returns:
+        pd.DataFrame: Summary statistics including median, q05, q95, and dq (q95 - q05).
     """
     # The behavior of loc is inconsistent
     # If you input a str instead of a list, it returns a Series instead of a dataframe
@@ -337,12 +385,17 @@ def compute_summary_stat(df_voltage, features):
 
 
 def sort_feature(values, features, ascending=True):
-    """
-    Sort the value (metrics being p-value, or else)
-    :param values:
-    :param features:
-    :param ascending:
-    :return:
+    """Sort features based on their values.
+
+    Args:
+        values (np.array): Array of values to sort by (e.g., p-values, metrics).
+        features (np.array): Array of feature names corresponding to the values.
+        ascending (bool, optional): If True, sort in ascending order. Defaults to True.
+
+    Returns:
+        tuple: A tuple containing:
+            - values_sort (np.array): Sorted values
+            - features_sort (np.array): Features sorted according to the values
     """
     id_sort = np.argsort(values)
     if not ascending:
@@ -353,12 +406,18 @@ def sort_feature(values, features, ascending=True):
 
 
 def prepare_mat_plot(array_in, id_feat, diag_val=0):
-    """
+    """Prepare matrix for plotting from brain-to-brain regions comparison results.
+
     From the matrix storing the results of brain-to-brain regions comparison in the upper triangle for all features,
-    select a feature and create a matrix with transpose for plotting in 2D
-    :param array_in: array of N region x N region x N feature
-    :param id_feat: index of feature that will be displayed
-    :return:
+    select a feature and create a matrix with transpose for plotting in 2D.
+
+    Args:
+        array_in (np.array): Array of N region x N region x N feature.
+        id_feat (int): Index of feature that will be displayed.
+        diag_val (float, optional): Value to fill the lower triangle. Defaults to 0.
+
+    Returns:
+        np.array: Matrix prepared for plotting with symmetric values.
     """
     mat_plot = np.squeeze(array_in[:, :, id_feat].copy())
     mat_plot[np.tril_indices_from(mat_plot)] = diag_val  # replace Nan by 0
@@ -367,6 +426,16 @@ def prepare_mat_plot(array_in, id_feat, diag_val=0):
 
 
 def prepare_df_voltage(df_voltage, df_channels, br=None):
+    """Prepare voltage DataFrame by merging with channel information and adding derived features.
+
+    Args:
+        df_voltage (pd.DataFrame): DataFrame containing voltage features.
+        df_channels (pd.DataFrame): DataFrame containing channel information.
+        br (iblatlas.atlas.BrainRegions, optional): Brain regions object for mapping. If None, creates a new one.
+
+    Returns:
+        pd.DataFrame: Prepared DataFrame with merged channel information, region mappings, and derived features.
+    """
     if br is None:
         br = iblatlas.atlas.BrainRegions()
     df_voltage = pd.merge(
