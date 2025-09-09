@@ -16,7 +16,7 @@ Core Functions
 ---------------
 
 Directory Management
-~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. automodule:: ephysatlas.utils
    :members:
@@ -25,7 +25,7 @@ Directory Management
    :no-index:
 
 Metadata Management
-~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. automodule:: ephysatlas.utils
    :members:

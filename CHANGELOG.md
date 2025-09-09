@@ -4,6 +4,17 @@ This file documents the changes to the features for supported feature versions.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 
+## [0.2.1] - 2025-01-27
+
+### Added
+- Added Sphinx documentation system
+- How-to guides for common tasks
+- Installation and configuration documentation
+- Using Google docstring format everywhere now
+- Sphinx build configuration and Makefile for documentation generation
+- Added True label score in the reveal figure.
+
+
 ## [0.2.0] - 2025-07-23 - [#23](https://github.com/int-brain-lab/ibleatools/pull/23)
 
 ### Added

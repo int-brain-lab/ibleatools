@@ -304,6 +304,7 @@ class AtlasReveal:
         df_pid_merged["confidence"] = np.max(
             df_pid_merged.loc[:, [str(c) for c in rids]], axis=1
         )
+        df_pid_merged["true_label_score"] = df_pid_merged.apply(lambda row: row[str(row['Cosmos_id'])] , axis=1)
         df_depths = df_pid_merged.drop("acronym", axis=1).groupby("axial_um").mean()
 
         fig, axs = plt.subplots(
@@ -403,7 +404,7 @@ class AtlasReveal:
         )  # Adjust labelpad as needed
 
         fig.suptitle(
-            f"PID {self.pid} \n accuracy {accuracy:0.2} \n confidence {np.mean(df_pid_merged['confidence']): 0.2}",
+            f"PID {self.pid} \n accuracy {accuracy:0.2} \n confidence {np.mean(df_pid_merged['confidence']): 0.2} \n true label score {np.mean(df_pid_merged['true_label_score']): 0.2}",
             y=0.08,
             fontweight="bold",
         )

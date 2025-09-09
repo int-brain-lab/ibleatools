@@ -53,7 +53,7 @@ Model Results Visualization
    :no-index:
 
 Probe Visualization
-~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. automodule:: ephysatlas.plots
    :members:
@@ -62,7 +62,7 @@ Probe Visualization
    :no-index:
 
 Feature Visualization
-~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. automodule:: ephysatlas.plots
    :members:
