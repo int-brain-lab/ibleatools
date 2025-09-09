@@ -14,6 +14,39 @@ from ephysatlas.anatomy import ClassifierRegions, NEW_VOID
 
 BASE_PATH = Path('/Users/gaellechapuis/Documents/Work/EphysAtlas')
 
+def remove_void_root(df_voltage, mapping, br, list_acronyms=None):
+    if list_acronyms is None:
+        list_acronyms = ['void', 'root', 'void_fluid'] # Todo remove void liquid
+    vect_void_root = br.acronym2id(list_acronyms)
+    df_voltage = df_voltage[~df_voltage[mapping + "_id"].isin(vect_void_root)]
+    return df_voltage
+
+
+def set_common_region(df_voltage, df_autism, id_region_voltage, id_region_autism, mapping):
+    set_common = set(id_region_voltage).intersection(set(id_region_autism))
+    df_voltage = df_voltage[df_voltage[mapping + "_id"].isin(set_common)]
+    df_autism = df_autism[df_autism[mapping + "_id"].isin(set_common)]
+    return df_voltage, df_autism
+
+def get_br_id_min_pid(df, mapping, min_pid):
+    df_pid = df[[mapping+'_id', 'pid']].copy()
+    df_pid = df_pid.drop_duplicates()
+    gr_reg = df_pid.groupby([mapping+'_id']).aggregate('count')
+    id_region = gr_reg[gr_reg['pid']>=min_pid].index
+    # Keeps rows with brain region col values
+    filtered_df = df[df[mapping+'_id'].isin(id_region)]
+    return filtered_df, id_region
+
+
+def get_br_id_min_channel(df, mapping, min_channel):
+    df_channel = df[[mapping+'_id', 'pid', 'channel']].copy()
+    df_channel = df_channel.drop_duplicates()  # This should not change the df
+    gr_reg = df_channel.groupby([mapping+'_id']).aggregate('count')
+    id_region = gr_reg[gr_reg['channel']>=min_channel].index
+    # Keeps rows with brain region col values
+    filtered_df = df[df[mapping+'_id'].isin(id_region)]
+    return filtered_df, id_region
+
 def download_baseline_data(local_data_path=BASE_PATH, label='2025_W28', one=None):
     if one is None: one = ONE(base_url='https://alyx.internationalbrainlab.org', mode='remote')
     download_path = ephysatlas.data.download_tables(local_data_path, label=label, one=one)
@@ -22,7 +55,9 @@ def download_baseline_data(local_data_path=BASE_PATH, label='2025_W28', one=None
 def get_autism_baseline_data(path_autism, path_baseline,
                              APPLY_DENOISING = False, APPLY_TRANSFORMER = True,
                              strict = True, load_denoised = False,
-                             features=None, br=None):
+                             features=None, br=None,
+                             min_pid=5, min_channel=200, mapping='Beryl',
+                             remove_voidroot=True):
 
     # This function assumes the data is already downloaded
 
@@ -58,6 +93,27 @@ def get_autism_baseline_data(path_autism, path_baseline,
 
     df_voltage = df_voltage.reset_index().dropna()
     df_autism = df_autism.reset_index().dropna()
+
+    # Remove bad channels ; keep only good channels with label 0
+    df_voltage = df_voltage[df_voltage["channel_labels"] == 0]
+    df_autism = df_autism[df_autism["channel_labels"] == 0]
+
+    # Remove void and root
+    if remove_voidroot:
+        df_voltage = remove_void_root(df_voltage, mapping, br)
+        df_autism = remove_void_root(df_autism, mapping, br)
+
+    # Check per region that there is min number of PID
+    df_voltage, id_region_voltage = get_br_id_min_pid(df_voltage, mapping, min_pid)
+    df_autism, id_region_autism = get_br_id_min_pid(df_autism, mapping, min_pid)
+    # Take union of region remaining in Autism / EA
+    df_voltage, df_autism = set_common_region(df_voltage, df_autism, id_region_voltage, id_region_autism, mapping)
+
+    # Check per region that there is at least number channels
+    df_voltage, id_region_voltage = get_br_id_min_channel(df_voltage, mapping, min_channel)
+    df_autism, id_region_autism = get_br_id_min_channel(df_autism, mapping, min_channel)
+    # Take union of region remaining in Autism / EA
+    df_voltage, df_autism = set_common_region(df_voltage, df_autism, id_region_voltage, id_region_autism, mapping)
 
     # -- Check that features are in df columns
     setfeature = set(df_voltage.columns).intersection(set(features))
@@ -137,9 +193,9 @@ def pid_cv_region_summary(df_baseline, df_autism, feature_cols, model_type="log_
 
 
 
-def get_set_classifier_xy(df_region, feature_cols):
+def get_set_classifier_xy(df_region, feature_cols, label_col="label"):
     X = df_region[feature_cols].to_numpy()
-    y = df_region["label"].to_numpy()
+    y = df_region[label_col].to_numpy()
     return X, y
 
 
