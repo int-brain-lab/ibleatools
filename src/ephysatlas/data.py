@@ -14,6 +14,7 @@ import ephysatlas.anatomy
 
 _logger = logging.getLogger("ibllib")
 
+
 SPIKES_ATTRIBUTES = ["clusters", "times", "depths", "amps"]
 CLUSTERS_ATTRIBUTES = ["channels", "depths", "metrics"]
 
@@ -151,6 +152,162 @@ def read_correlogram(file_correlogram, nclusters):
     )
     return mmap_correlogram
 
+def upload_directory_to_s3(
+    local_path,
+    label=None,
+    project=None,
+    agg_level=None,
+    s3_prefix="aggregates/atlas",
+    one=None,
+    overwrite=False,
+):
+    """Upload entire directory structure to AWS S3.
+
+    Uploads all files from a local directory to the IBL AWS S3 bucket, maintaining
+    the directory structure. The files are organized under the specified label,
+    project, and aggregation level in the S3 bucket.
+
+    Args:
+        local_path (Path or str): Local directory path containing files to upload.
+        label (str): Revision string (e.g., "2024_W04"). Used for organizing data in S3.
+        project (str): Project name (e.g., "ea_active", "ea_passive"). Used for organizing data in S3.
+        agg_level (str): Aggregation level (e.g., "agg_full"). Used for organizing data in S3.
+        s3_prefix (str, optional): Base S3 prefix for organizing uploads. Defaults to "aggregates/atlas".
+        one: ONE client instance for AWS authentication.
+        overwrite (bool, optional): If True, overwrite existing files in S3. If False, skip existing files.
+            Defaults to False.
+
+    Returns:
+        None
+
+    Raises:
+        AssertionError: If required parameters (label, project, agg_level, one) are None.
+        FileNotFoundError: If the local_path does not exist.
+
+    Example:
+        >>> from one.api import ONE
+        >>> from pathlib import Path
+        >>> one = ONE()
+        >>> upload_directory_to_s3(
+        ...     local_path=Path('/data/features'),
+        ...     label='2024_W50',
+        ...     project='ea_active',
+        ...     agg_level='agg_full',
+        ...     one=one,
+        ...     overwrite=False
+        ... )
+    """
+    assert label is not None, "Label is required"
+    assert project is not None, "Project is required"
+    assert one is not None, "ONE client instance is required"
+    assert agg_level is not None, "Agg level is required"
+    
+    local_path = Path(local_path)
+    if not local_path.exists():
+        raise FileNotFoundError(f"Local path does not exist: {local_path}")
+    
+    s3_prefix = f"{s3_prefix}/{label}/{project}/{agg_level}"
+    _logger.info(f"Starting upload of {local_path} to S3 prefix: {s3_prefix}")
+    
+    # Get S3 connection and bucket name
+    s3, bucket_name = aws.get_s3_from_alyx(alyx=one.alyx)
+    _logger.info(f"Connected to S3 bucket: {bucket_name}")
+    
+    import os
+    
+    uploaded_count = 0
+    skipped_count = 0
+    
+    for root, dirs, files in os.walk(local_path):
+        for file in files:
+            local_file_path = os.path.join(root, file)
+            relative_path = os.path.relpath(local_file_path, local_path)
+            s3_key = f"{s3_prefix}/{relative_path}"
+            
+            # Check if file exists and overwrite is False
+            if not overwrite:
+                try:
+                    s3.Object(bucket_name, s3_key).load()
+                    _logger.info(f"Skipping existing file: {s3_key}")
+                    skipped_count += 1
+                    continue
+                except Exception as e:
+                    _logger.error(f"Error checking if file exists: {e}")
+            bucket = s3.Bucket(bucket_name)
+            bucket.upload_file(local_file_path, s3_key)
+            _logger.info(f"Uploaded: {local_file_path} -> {s3_key}")
+            uploaded_count += 1
+    
+    _logger.info(f"Upload completed. Files uploaded: {uploaded_count}, Files skipped: {skipped_count}")
+
+def download_features_from_aws(
+    local_path,
+    label=None,
+    project=None,
+    agg_level=None,
+    s3_prefix="aggregates/atlas",
+    one=None,
+    overwrite=False,
+):
+    """Download features from AWS S3.
+
+    Downloads aggregated electrophysiology features from the IBL AWS S3 bucket to a
+    local directory. The files are organized under the specified label, project, and
+    aggregation level in the S3 bucket.
+
+    Args:
+        local_path (Path or str): Local directory path where features will be downloaded.
+            The directory will be created if it doesn't exist.
+        label (str): Revision string (e.g., "2024_W04"). Used for organizing data in S3.
+        project (str): Project name (e.g., "ea_active", "ea_passive"). Used for organizing data in S3.
+        agg_level (str): Aggregation level (e.g., "agg_full"). Used for organizing data in S3.
+        s3_prefix (str, optional): Base S3 prefix for organizing downloads. Defaults to "aggregates/atlas".
+        one: ONE client instance for AWS authentication.
+        overwrite (bool, optional): If True, overwrite existing local files. If False, skip existing files.
+            Defaults to False.
+
+    Returns:
+        Path: Local path where the features were downloaded.
+
+    Raises:
+        AssertionError: If required parameters (label, project, agg_level, one) are None.
+
+    Example:
+        >>> from one.api import ONE
+        >>> from pathlib import Path
+        >>> one = ONE()
+        >>> download_path = download_features_from_aws(
+        ...     local_path=Path('/data/features'),
+        ...     label='2024_W50',
+        ...     project='ea_active',
+        ...     agg_level='agg_full',
+        ...     one=one,
+        ...     overwrite=False
+        ... )
+    """
+    assert label is not None, "Label is required"
+    assert project is not None, "Project is required"
+    assert one is not None, "ONE client instance is required"
+    assert agg_level is not None, "Agg level is required"
+    
+    local_path = Path(local_path)
+    # Make sure that the local path exists
+    local_path.mkdir(parents=True, exist_ok=True)
+    
+    s3_prefix = f"{s3_prefix}/{label}/{project}/{agg_level}"
+    _logger.info(f"Starting download from S3 prefix: {s3_prefix}")
+    
+    # Get S3 connection and bucket name
+    s3, bucket_name = aws.get_s3_from_alyx(alyx=one.alyx)
+    _logger.info(f"Connected to S3 bucket: {bucket_name}")
+    
+    # Download the folder using the AWS utility function
+    local_files = aws.s3_download_folder(
+        s3_prefix, local_path, s3=s3, bucket_name=bucket_name, overwrite=overwrite
+    )
+    
+    _logger.info(f"Download completed. {len(local_files)} files downloaded to {local_path}")
+    return local_path
 
 def download_tables(
     local_path,
