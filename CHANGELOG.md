@@ -3,8 +3,19 @@
 This file documents the changes to the features for supported feature versions.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.2] - 2025-09-25
 
-## [0.2.1] - 2025-01-27
+### Added
+ - Added utility functions for listing the latest labels for features data on AWS.
+ - Added new LF Features related to the slope and intercept of the PSD decay.
+ - Migrated from pip to uv for the Github CI.
+ - Added specparam as a dependency for the spectral parameterization analysis.
+
+### Modified
+ - Modified the `download_tables` function in `ephysatlas.data` module. The specific project and aggregation level can be provided now to the function. Also now the local path is created if it does not exists.
+
+
+## [0.2.1] - 2025-07-27
 
 ### Added
 - Added Sphinx documentation system
