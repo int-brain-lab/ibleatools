@@ -152,166 +152,46 @@ def read_correlogram(file_correlogram, nclusters):
     )
     return mmap_correlogram
 
-def upload_directory_to_s3(
-    local_path,
-    label=None,
-    project=None,
-    agg_level=None,
-    s3_prefix="aggregates/atlas",
-    one=None,
-    overwrite=False,
-):
-    """Upload entire directory structure to AWS S3.
+def get_immediate_children(bucket, prefix=None, delimiter='/', limit=None):
+    """Get the immediate children of a prefix on AWS S3."""
+    import re
+    immediate_children = set()
 
-    Uploads all files from a local directory to the IBL AWS S3 bucket, maintaining
-    the directory structure. The files are organized under the specified label,
-    project, and aggregation level in the S3 bucket.
+    for obj in bucket.objects.filter(Prefix=prefix):
+        key = obj.key[len(prefix):]  # Remove the base prefix from key
+        if delimiter in key:
+            # Extract the immediate child prefix up to the first delimiter
+            child_prefix = key.split(delimiter)[0]
+            if re.match(r'^\d{4}_W\d{2}$', child_prefix):
+                immediate_children.add(child_prefix)
+            else:
+                pass
+                # print(f"Skipping {child_prefix} as it does not match the expected format")
+        else:
+            # This is an object directly inside the prefix (not a folder)
+            # Optional: include or ignore
+            pass
 
-    Args:
-        local_path (Path or str): Local directory path containing files to upload.
-        label (str): Revision string (e.g., "2024_W04"). Used for organizing data in S3.
-        project (str): Project name (e.g., "ea_active", "ea_passive"). Used for organizing data in S3.
-        agg_level (str): Aggregation level (e.g., "agg_full"). Used for organizing data in S3.
-        s3_prefix (str, optional): Base S3 prefix for organizing uploads. Defaults to "aggregates/atlas".
-        one: ONE client instance for AWS authentication.
-        overwrite (bool, optional): If True, overwrite existing files in S3. If False, skip existing files.
-            Defaults to False.
+    # Print all immediate child prefixes
+    return sorted(list(immediate_children), reverse=True)[:limit]
 
-    Returns:
-        None
-
-    Raises:
-        AssertionError: If required parameters (label, project, agg_level, one) are None.
-        FileNotFoundError: If the local_path does not exist.
-
-    Example:
-        >>> from one.api import ONE
-        >>> from pathlib import Path
-        >>> one = ONE()
-        >>> upload_directory_to_s3(
-        ...     local_path=Path('/data/features'),
-        ...     label='2024_W50',
-        ...     project='ea_active',
-        ...     agg_level='agg_full',
-        ...     one=one,
-        ...     overwrite=False
-        ... )
-    """
-    assert label is not None, "Label is required"
-    assert project is not None, "Project is required"
+def list_available_labels(one=None, project = None, limit=None):
+    """List available labels on AWS S3."""
     assert one is not None, "ONE client instance is required"
-    assert agg_level is not None, "Agg level is required"
-    
-    local_path = Path(local_path)
-    if not local_path.exists():
-        raise FileNotFoundError(f"Local path does not exist: {local_path}")
-    
-    s3_prefix = f"{s3_prefix}/{label}/{project}/{agg_level}"
-    _logger.info(f"Starting upload of {local_path} to S3 prefix: {s3_prefix}")
-    
-    # Get S3 connection and bucket name
+    _logger.info(f"Listing available labels for project: {project}")
     s3, bucket_name = aws.get_s3_from_alyx(alyx=one.alyx)
-    _logger.info(f"Connected to S3 bucket: {bucket_name}")
-    
-    import os
-    
-    uploaded_count = 0
-    skipped_count = 0
-    
-    for root, dirs, files in os.walk(local_path):
-        for file in files:
-            local_file_path = os.path.join(root, file)
-            relative_path = os.path.relpath(local_file_path, local_path)
-            s3_key = f"{s3_prefix}/{relative_path}"
-            
-            # Check if file exists and overwrite is False
-            if not overwrite:
-                try:
-                    s3.Object(bucket_name, s3_key).load()
-                    _logger.info(f"Skipping existing file: {s3_key}")
-                    skipped_count += 1
-                    continue
-                except Exception as e:
-                    _logger.error(f"Error checking if file exists: {e}")
-            bucket = s3.Bucket(bucket_name)
-            bucket.upload_file(local_file_path, s3_key)
-            _logger.info(f"Uploaded: {local_file_path} -> {s3_key}")
-            uploaded_count += 1
-    
-    _logger.info(f"Upload completed. Files uploaded: {uploaded_count}, Files skipped: {skipped_count}")
+    bucket = s3.Bucket(bucket_name)
+    return get_immediate_children(bucket, prefix=f"aggregates/atlas/features/{project}/", delimiter='/', limit=limit)
 
-def download_features_from_aws(
-    local_path,
-    label=None,
-    project=None,
-    agg_level=None,
-    s3_prefix="aggregates/atlas",
-    one=None,
-    overwrite=False,
-):
-    """Download features from AWS S3.
-
-    Downloads aggregated electrophysiology features from the IBL AWS S3 bucket to a
-    local directory. The files are organized under the specified label, project, and
-    aggregation level in the S3 bucket.
-
-    Args:
-        local_path (Path or str): Local directory path where features will be downloaded.
-            The directory will be created if it doesn't exist.
-        label (str): Revision string (e.g., "2024_W04"). Used for organizing data in S3.
-        project (str): Project name (e.g., "ea_active", "ea_passive"). Used for organizing data in S3.
-        agg_level (str): Aggregation level (e.g., "agg_full"). Used for organizing data in S3.
-        s3_prefix (str, optional): Base S3 prefix for organizing downloads. Defaults to "aggregates/atlas".
-        one: ONE client instance for AWS authentication.
-        overwrite (bool, optional): If True, overwrite existing local files. If False, skip existing files.
-            Defaults to False.
-
-    Returns:
-        Path: Local path where the features were downloaded.
-
-    Raises:
-        AssertionError: If required parameters (label, project, agg_level, one) are None.
-
-    Example:
-        >>> from one.api import ONE
-        >>> from pathlib import Path
-        >>> one = ONE()
-        >>> download_path = download_features_from_aws(
-        ...     local_path=Path('/data/features'),
-        ...     label='2024_W50',
-        ...     project='ea_active',
-        ...     agg_level='agg_full',
-        ...     one=one,
-        ...     overwrite=False
-        ... )
-    """
-    assert label is not None, "Label is required"
-    assert project is not None, "Project is required"
-    assert one is not None, "ONE client instance is required"
-    assert agg_level is not None, "Agg level is required"
-    
-    local_path = Path(local_path)
-    # Make sure that the local path exists
-    local_path.mkdir(parents=True, exist_ok=True)
-    
-    s3_prefix = f"{s3_prefix}/{label}/{project}/{agg_level}"
-    _logger.info(f"Starting download from S3 prefix: {s3_prefix}")
-    
-    # Get S3 connection and bucket name
-    s3, bucket_name = aws.get_s3_from_alyx(alyx=one.alyx)
-    _logger.info(f"Connected to S3 bucket: {bucket_name}")
-    
-    # Download the folder using the AWS utility function
-    local_files = aws.s3_download_folder(
-        s3_prefix, local_path, s3=s3, bucket_name=bucket_name, overwrite=overwrite
-    )
-    
-    _logger.info(f"Download completed. {len(local_files)} files downloaded to {local_path}")
-    return local_path
+def get_latest_label(one=None, project = None):
+    """Get the latest label on AWS S3."""
+    return list_available_labels(one=one, project = project, limit=1)[0]
 
 def download_tables(
     local_path,
     label="2024_W50",
+    project=None,
+    agg_level="agg_full",
     one=None,
     verify=False,
     overwrite=False,
@@ -320,10 +200,17 @@ def download_tables(
     """Download electrophysiology data tables from AWS S3.
 
     Downloads aggregated electrophysiology data from the IBL AWS S3 bucket to a local directory.
+    For "agg_full", first tries the new path structure then falls back to the original path for
+    backward compatibility. For other agg_levels, uses the direct path structure.
 
     Args:
         local_path (Path): Path where the data will be stored locally.
         label (str, optional): Revision string (e.g., "2024_W04"). Defaults to "2024_W50".
+        project (str, optional): Project name. Defaults to "ea_active" if None.
+        agg_level (str, optional): Aggregation level for the path structure. Defaults to "agg_full".
+            For "agg_full": tries f"aggregates/atlas/features/{project}/{label}/{agg_level}" first,
+            then falls back to f"aggregates/atlas/features/{project}/{label}" for backward compatibility.
+            For other values: uses f"aggregates/atlas/features/{project}/{label}/{agg_level}" directly.
         one: ONE client instance for AWS authentication.
         verify (bool, optional): Checks the indices and consistency of the dataframes and raises an error if not consistent. Defaults to False.
         overwrite (bool, optional): Force redownloading if file exists. Defaults to False.
@@ -336,25 +223,71 @@ def download_tables(
     Raises:
         AssertionError: If the specified label is not found on AWS.
     """
-    # The AWS private credentials are stored in Alyx, so that only one authentication is required
-    local_path = Path(local_path).joinpath(label)
+    # Set default project if None
+    if project is None:
+        project = "ea_active"
+        _logger.warning(f"Project is None, using default project: {project}")
+    
+    # Create local directory structure
+    local_path = Path(local_path).joinpath(project).joinpath(label).joinpath(agg_level)
+    local_path.mkdir(parents=True, exist_ok=True)
+    
+    # Get AWS credentials
     s3, bucket_name = aws.get_s3_from_alyx(alyx=one.alyx)
-    local_files = aws.s3_download_folder(
-        f"aggregates/atlas/{label}",
-        local_path,
-        s3=s3,
-        bucket_name=bucket_name,
-        overwrite=overwrite,
-    )
-    if extended:
+    
+    # Download main data with backward compatibility for agg_full
+    if agg_level == "agg_full":
+        # Try the new path with agg_level first, then fall back to backward compatibility
+        primary_path = f"aggregates/atlas/features/{project}/{label}/{agg_level}"
+        fallback_path = f"aggregates/atlas/features/{project}/{label}"
+        
+        try:
+            local_files = aws.s3_download_folder(
+                primary_path,
+                local_path,
+                s3=s3,
+                bucket_name=bucket_name,
+                overwrite=overwrite,
+            )
+            if len(local_files) == 0:
+                # Primary path doesn't exist, try fallback
+                local_files = aws.s3_download_folder(
+                    fallback_path,
+                    local_path,
+                    s3=s3,
+                    bucket_name=bucket_name,
+                    overwrite=overwrite,
+                )
+        except Exception:
+            # If primary path fails, try fallback
+            local_files = aws.s3_download_folder(
+                fallback_path,
+                local_path,
+                s3=s3,
+                bucket_name=bucket_name,
+                overwrite=overwrite,
+            )
+    else:
+        # For other agg_levels, use the direct path
         local_files = aws.s3_download_folder(
-            f"aggregates/atlas/{label}_extended",
+            f"aggregates/atlas/features/{project}/{label}/{agg_level}",
             local_path,
             s3=s3,
             bucket_name=bucket_name,
             overwrite=overwrite,
         )
-    assert len(local_files), f"aggregates/atlas/{label} not found on AWS"
+    
+    # Download extended data if requested
+    if extended:
+        local_files = aws.s3_download_folder(
+            f"aggregates/atlas/features/{project}/{label}_extended",
+            local_path,
+            s3=s3,
+            bucket_name=bucket_name,
+            overwrite=overwrite,
+        )
+    
+    assert len(local_files), f"aggregates/atlas/{project}/{label} not found on AWS"
     return local_path
 
 
