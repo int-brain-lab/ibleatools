@@ -1,6 +1,7 @@
 import logging
 from pathlib import Path
 import yaml
+import re
 
 import numpy as np
 import pandas as pd
@@ -152,9 +153,17 @@ def read_correlogram(file_correlogram, nclusters):
     )
     return mmap_correlogram
 
-def get_immediate_children(bucket, prefix=None, delimiter='/', limit=None):
-    """Get the immediate children of a prefix on AWS S3."""
-    import re
+def _get_immediate_children(bucket, prefix=None, delimiter='/'):
+    """Base function to get the immediate children of a prefix on AWS S3 as a list.
+    
+    Args:
+        bucket: AWS S3 bucket object
+        prefix (str, optional): S3 prefix to search under
+        delimiter (str, optional): Delimiter to use for splitting keys. Defaults to '/'
+        
+    Returns:
+        list: List of immediate child prefixes
+    """
     immediate_children = set()
 
     for obj in bucket.objects.filter(Prefix=prefix):
@@ -162,26 +171,57 @@ def get_immediate_children(bucket, prefix=None, delimiter='/', limit=None):
         if delimiter in key:
             # Extract the immediate child prefix up to the first delimiter
             child_prefix = key.split(delimiter)[0]
-            if re.match(r'^\d{4}_W\d{2}$', child_prefix):
-                immediate_children.add(child_prefix)
-            else:
-                pass
-                # print(f"Skipping {child_prefix} as it does not match the expected format")
+            immediate_children.add(child_prefix)
         else:
             # This is an object directly inside the prefix (not a folder)
             # Optional: include or ignore
             pass
 
-    # Print all immediate child prefixes
-    return sorted(list(immediate_children), reverse=True)[:limit]
+    return list(immediate_children)
+
+
+def get_immediate_labels(bucket, prefix=None, delimiter='/', limit=None):
+    """Get immediate children under a prefix that match the label format (YYYY_WXX) from AWS S3.
+    
+    Args:
+        bucket: AWS S3 bucket object
+        prefix (str, optional): S3 prefix to search under
+        delimiter (str, optional): Delimiter to use for splitting keys. Defaults to '/'
+        limit (int, optional): Maximum number of results to return
+        
+    Returns:
+        list: List of immediate child prefixes that match the label format
+    """
+    immediate_children = _get_immediate_children(bucket, prefix, delimiter)
+    
+    # Filter for label format (YYYY_WXX)
+    filtered_children = []
+    for child_prefix in immediate_children:
+        if re.match(r'^\d{4}_W\d{2}$', child_prefix):
+            filtered_children.append(child_prefix)
+        else:
+            pass
+            # print(f"Skipping {child_prefix} as it does not match the expected format")
+    
+    return sorted(filtered_children, reverse=True)[:limit]
+
+
+def list_available_projects(one=None):
+    """Get the list of available projects."""
+    assert one is not None, "ONE client instance is required"
+    _logger.info("Listing available projects.")
+    s3, bucket_name = aws.get_s3_from_alyx(alyx=one.alyx)
+    bucket = s3.Bucket(bucket_name)    
+    return _get_immediate_children(bucket, prefix="aggregates/atlas/features/", delimiter='/')
 
 def list_available_labels(one=None, project = None, limit=None):
     """List available labels on AWS S3."""
     assert one is not None, "ONE client instance is required"
+    assert project is not None, "First get list of available projects using list_available_projects(one=one)"
     _logger.info(f"Listing available labels for project: {project}")
     s3, bucket_name = aws.get_s3_from_alyx(alyx=one.alyx)
     bucket = s3.Bucket(bucket_name)
-    return get_immediate_children(bucket, prefix=f"aggregates/atlas/features/{project}/", delimiter='/', limit=limit)
+    return get_immediate_labels(bucket, prefix=f"aggregates/atlas/features/{project}/", delimiter='/', limit=limit)
 
 def get_latest_label(one=None, project = None):
     """Get the latest label on AWS S3."""
