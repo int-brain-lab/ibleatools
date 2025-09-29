@@ -7,6 +7,20 @@ This file documents the changes to the features for supported feature versions.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 
+## [2025_W39]
+
+### Added
+ - Added spectral parameterization features: New PSD decay analysis using the specparam library
+     - Aperiodic component features:
+        - aperiodic_offset: Y-intercept of the 1/f component
+        - aperiodic_exponent: Slope of the aperiodic component
+        - decay_fit_error: RMS error of spectral model fit
+        - decay_fit_r_squared: Goodness of fit metric
+        - decay_n_peaks: Number of detected periodic peaks
+     - Residual power features: Residual power in various frequency bands after removing aperiodic component in the log space.
+        - psd_residual_delta, psd_residual_theta, psd_residual_alpha, psd_residual_beta, psd_residual_gamma, psd_residual_lfp
+
+
 ## [2025_W28]
 
 ### Modified

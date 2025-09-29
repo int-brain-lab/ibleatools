@@ -74,7 +74,6 @@ class TestAggregationOutputs(unittest.TestCase):
             )
         )
         # self.assertTrue(set(df_channels.index.get_level_values('pid').unique()).issubset(set(expected_pids)))
-
         _ = ephysatlas.data.read_features_from_disk(
             output_dir, brain_atlas=self.mock_brain_atlas, strict=True, mappings=[]
         )

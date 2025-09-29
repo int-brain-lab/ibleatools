@@ -113,6 +113,7 @@ import shutil
 import string
 import tempfile
 from typing_extensions import Annotated, List
+from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -132,7 +133,7 @@ import ibldsp.voltage
 logger = logging.getLogger(__name__)
 
 __features_version__ = (
-    "2025.07.01"  # this is the version of this feature extractor code
+    "2025.09.18"  # this is the version of this feature extractor code
 )
 
 
@@ -289,6 +290,17 @@ class ModelLfFeatures(BaseChannelFeatures):
     psd_beta: Series[float] = pa.Field(coerce=True)
     psd_gamma: Series[float] = pa.Field(coerce=True)
     psd_lfp: Series[float] = pa.Field(coerce=True)
+    aperiodic_offset: Optional[Series[float]] = pa.Field(coerce=True)
+    aperiodic_exponent: Optional[Series[float]] = pa.Field(coerce=True)
+    decay_fit_error: Optional[Series[float]] = pa.Field(coerce=True)
+    decay_fit_r_squared: Optional[Series[float]] = pa.Field(coerce=True)
+    decay_n_peaks: Optional[Series[int]] = pa.Field(coerce=True)
+    psd_residual_delta: Optional[Series[float]] = pa.Field(coerce=True, nullable=True)
+    psd_residual_theta: Optional[Series[float]] = pa.Field(coerce=True, nullable=True)
+    psd_residual_alpha: Optional[Series[float]] = pa.Field(coerce=True, nullable=True)
+    psd_residual_beta: Optional[Series[float]] = pa.Field(coerce=True, nullable=True)
+    psd_residual_gamma: Optional[Series[float]] = pa.Field(coerce=True, nullable=True)
+    psd_residual_lfp: Optional[Series[float]] = pa.Field(coerce=True, nullable=True)
 
 
 class ModelCsdFeatures(BaseChannelFeatures):
@@ -541,6 +553,170 @@ def _get_power_in_band(fscale, period, band):
     )  # dB relative to v/sqrt(Hz)
     return p
 
+def get_psd_decay_features(data, fs, fscale, period, bands, nperseg=2048, PSD_range=BANDS["lfp"]):
+    """
+    Extract power spectral density decay features from electrophysiological data.
+    
+    This function computes spectral parameterization features that characterize the 
+    aperiodic (1/f) component of the power spectral density (PSD) using the specparam 
+    library. It fits a model to separate periodic peaks from the aperiodic background
+    in the frequency domain, providing insights into the underlying neural dynamics.
+    
+    Additionally, it computes residual power features by removing the fitted aperiodic
+    component from the observed PSD, highlighting periodic components across different
+    frequency bands.
+    
+    The aperiodic component of neural signals is thought to reflect the balance of 
+    excitation and inhibition in neural circuits, making these features particularly 
+    useful for characterizing brain states and pathological conditions.
+    
+    Parameters
+    ----------
+    data : np.ndarray
+        Input electrophysiological data with shape (n_channels, n_samples).
+        Each row represents a different recording channel.
+    fs : float
+        Sampling frequency of the data in Hz.
+    fscale : np.ndarray
+        Frequency scale array corresponding to the period data.
+    period : np.ndarray
+        2D array of power spectral density values with shape (n_channels, n_frequencies).
+        Each row represents the PSD for a different recording channel.
+    bands : dict
+        Dictionary mapping frequency band names to [min_freq, max_freq] ranges in Hz.
+        Used for computing residual power in specific frequency bands.
+    nperseg : int, optional
+        Length of each segment for Welch's method PSD estimation, by default 2048.
+        Larger values provide better frequency resolution but less temporal averaging.
+    PSD_range : list of float, optional
+        Frequency range [min_freq, max_freq] in Hz for spectral parameterization,
+        by default BANDS["lfp"] which is [0, 90] Hz.
+    
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame with one row per channel containing the following features:
+        
+        **Aperiodic component features:**
+        - aperiodic_offset : float
+            Y-intercept of the aperiodic component fit (log10 power at 1 Hz)
+        - aperiodic_exponent : float  
+            Slope of the aperiodic component in log-log space (1/f exponent)
+        - decay_fit_error : float
+            Root mean square error of the spectral model fit
+        - decay_fit_r_squared : float
+            R-squared goodness of fit for the spectral model
+        - decay_n_peaks : int
+            Number of periodic peaks detected above the aperiodic background
+            
+        **Residual power features (periodic component after aperiodic removal):**
+        - psd_residual_delta : float
+            Residual power in delta band after aperiodic component removal
+        - psd_residual_theta : float
+            Residual power in theta band after aperiodic component removal
+        - psd_residual_alpha : float
+            Residual power in alpha band after aperiodic component removal
+        - psd_residual_beta : float
+            Residual power in beta band after aperiodic component removal
+        - psd_residual_gamma : float
+            Residual power in gamma band after aperiodic component removal
+        - psd_residual_lfp : float
+            Residual power in full LFP band after aperiodic component removal
+    
+    Notes
+    -----
+    The function uses the specparam library (formerly FOOOF) to separate periodic 
+    and aperiodic components of the PSD. The aperiodic component follows a 1/f^β 
+    relationship where β is the aperiodic exponent.
+    
+    Channels with R-squared < 0.9 are flagged as having poor fits, which may 
+    indicate artifacts or unusual spectral properties.
+    
+    The spectral model is configured with:
+    - Peak width limits: [10, 15] Hz
+    - Maximum peaks: 4
+    - Minimum peak height: 0.1
+    
+    The residual curve is computed as:
+    residual = 10^(log10(observed_PSD) - log10(fitted_aperiodic_component))
+    
+    Examples
+    --------
+    >>> import numpy as np
+    >>> # Generate sample data and frequency arrays
+    >>> data = np.random.randn(10, 10000)
+    >>> fs = 1000.0  # 1 kHz sampling rate
+    >>> fscale = np.linspace(0, 90, 100)
+    >>> period = np.random.rand(10, 100)  # Mock PSD data
+    >>> bands = {'delta': [0, 4], 'theta': [4, 10], 'alpha': [8, 12]}
+    >>> features = get_psd_decay_features(data, fs, fscale, period, bands)
+    >>> print(features.columns)
+    Index(['aperiodic_offset', 'aperiodic_exponent', 'decay_fit_error',
+           'decay_fit_r_squared', 'decay_n_peaks', 'psd_residual_delta',
+           'psd_residual_theta', 'psd_residual_alpha', ...], dtype='object')
+    
+    References
+    ----------
+    .. [1] Donoghue, T., Haller, M., Peterson, E. J., Varma, P., Sebastian, P., 
+           Gao, R., ... & Voytek, B. (2020). Parameterizing neural power spectra 
+           into periodic and aperiodic components. Nature neuroscience, 23(12), 1655-1665.
+    """
+    assert period.ndim == 2, "Period must be a 2D array"
+    from scipy.signal import welch
+    # Get a smoothed out version of the PSD
+    frequencies, psd_arr = welch(data, fs, nperseg=nperseg)
+
+    from specparam import SpectralModel
+    # Initialize a model object for spectral parameterization, with some settings
+    fm = SpectralModel(peak_width_limits=[10,15], max_n_peaks=4,
+                   min_peak_height=0.1, verbose=False)
+    
+    result_list = []
+
+    if fscale[0] == 0:
+        fscale = fscale[1:]
+        period = period[:,1:]
+
+    # Fit individual PSD over 3-40 Hz range
+    for i in range(psd_arr.shape[0]):
+        fm.fit(frequencies, psd_arr[i,:], PSD_range)
+
+        fit_result = fm.get_results()
+        offset, slope = fit_result.aperiodic_params
+        
+        result_dict = {"aperiodic_offset": fit_result.aperiodic_params[0],
+                       "aperiodic_exponent": fit_result.aperiodic_params[1],
+                       "decay_fit_error" : fit_result.error,
+                       "decay_fit_r_squared" : fit_result.r_squared,
+                       "decay_n_peaks" : fm.n_peaks_,
+                        }
+        # Get the predicted decay of PSD the curve based on offset and slope
+        psd_decay = offset - np.log10(fscale ** slope)
+        residual_curve = 10**(np.log10(period[i,:]) - psd_decay)
+
+        for b in BANDS:
+            result_dict[f"psd_residual_{b}"] = _get_power_in_band(fscale, residual_curve, bands[b])
+        result_list.append(result_dict)
+
+        # if i==0:
+        #     import matplotlib.pyplot as plt
+        #     fig,ax = plt.subplots(1,2)
+        #     fm.plot(ax=ax[0])
+        #     ax[0].plot(fscale,psd_decay,'g*', markersize=0.1, alpha=0.5)
+        #     ax[1].semilogy(fscale,residual_curve,'r', markersize=0.1, alpha=0.5)
+        #     ax[1].set_xlim(0, 90)
+    
+    psd_decay_features = pd.DataFrame(result_list)
+
+    low_r_squared_channels = psd_decay_features[psd_decay_features['decay_fit_r_squared']<0.9].index
+    logger.info(f"Number of channels with low r squared during psd decay fit: {len(low_r_squared_channels)}")
+    if len(low_r_squared_channels) > 0:
+        logger.warning(f"Channels with low r squared during psd decay fit: {low_r_squared_channels}")
+
+
+    return psd_decay_features
+
+
 
 def lf(data, fs, bands=None):
     """Compute LF features from a numpy array.
@@ -570,6 +746,15 @@ def lf(data, fs, bands=None):
     df_lf["rms_lf"] = ibldsp.utils.rms(data, axis=-1)
     for b in BANDS:
         df_lf[f"psd_{b}"] = _get_power_in_band(fscale, period, bands[b])
+    
+    # Caluclate the Aperiodic and Periodic features
+    logger.info("Calculating Aperiodic and Periodic features")
+    df_decay = get_psd_decay_features(data, fs, fscale, period, bands)
+    assert df_decay.shape[0] == df_lf.shape[0]
+    assert len(set(df_decay.columns) & set(df_lf.columns)) == 0
+    df_lf = pd.concat([df_lf, df_decay], axis=1)
+    
+    
     ModelLfFeatures.validate(df_lf)
     return df_lf
 

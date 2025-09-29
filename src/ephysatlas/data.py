@@ -1,6 +1,7 @@
 import logging
 from pathlib import Path
 import yaml
+import re
 
 import numpy as np
 import pandas as pd
@@ -13,6 +14,7 @@ import ephysatlas.features
 import ephysatlas.anatomy
 
 _logger = logging.getLogger("ibllib")
+
 
 SPIKES_ATTRIBUTES = ["clusters", "times", "depths", "amps"]
 CLUSTERS_ATTRIBUTES = ["channels", "depths", "metrics"]
@@ -151,10 +153,85 @@ def read_correlogram(file_correlogram, nclusters):
     )
     return mmap_correlogram
 
+def _get_immediate_children(bucket, prefix=None, delimiter='/'):
+    """Base function to get the immediate children of a prefix on AWS S3 as a list.
+    
+    Args:
+        bucket: AWS S3 bucket object
+        prefix (str, optional): S3 prefix to search under
+        delimiter (str, optional): Delimiter to use for splitting keys. Defaults to '/'
+        
+    Returns:
+        list: List of immediate child prefixes
+    """
+    immediate_children = set()
+
+    for obj in bucket.objects.filter(Prefix=prefix):
+        key = obj.key[len(prefix):]  # Remove the base prefix from key
+        if delimiter in key:
+            # Extract the immediate child prefix up to the first delimiter
+            child_prefix = key.split(delimiter)[0]
+            immediate_children.add(child_prefix)
+        else:
+            # This is an object directly inside the prefix (not a folder)
+            # Optional: include or ignore
+            pass
+
+    return list(immediate_children)
+
+
+def get_immediate_labels(bucket, prefix=None, delimiter='/', limit=None):
+    """Get immediate children under a prefix that match the label format (YYYY_WXX) from AWS S3.
+    
+    Args:
+        bucket: AWS S3 bucket object
+        prefix (str, optional): S3 prefix to search under
+        delimiter (str, optional): Delimiter to use for splitting keys. Defaults to '/'
+        limit (int, optional): Maximum number of results to return
+        
+    Returns:
+        list: List of immediate child prefixes that match the label format
+    """
+    immediate_children = _get_immediate_children(bucket, prefix, delimiter)
+    
+    # Filter for label format (YYYY_WXX)
+    filtered_children = []
+    for child_prefix in immediate_children:
+        if re.match(r'^\d{4}_W\d{2}$', child_prefix):
+            filtered_children.append(child_prefix)
+        else:
+            pass
+            # print(f"Skipping {child_prefix} as it does not match the expected format")
+    
+    return sorted(filtered_children, reverse=True)[:limit]
+
+
+def list_available_projects(one=None):
+    """Get the list of available projects."""
+    assert one is not None, "ONE client instance is required"
+    _logger.info("Listing available projects.")
+    s3, bucket_name = aws.get_s3_from_alyx(alyx=one.alyx)
+    bucket = s3.Bucket(bucket_name)    
+    return _get_immediate_children(bucket, prefix="aggregates/atlas/features/", delimiter='/')
+
+def list_available_labels(one=None, project = None, limit=None):
+    """List available labels on AWS S3."""
+    assert one is not None, "ONE client instance is required"
+    assert project is not None, "First get list of available projects using list_available_projects(one=one)"
+    _logger.info(f"Listing available labels for project: {project}")
+    s3, bucket_name = aws.get_s3_from_alyx(alyx=one.alyx)
+    bucket = s3.Bucket(bucket_name)
+    return get_immediate_labels(bucket, prefix=f"aggregates/atlas/features/{project}/", delimiter='/', limit=limit)
+
+def get_latest_label(one=None, project = None):
+    """Get the latest label on AWS S3."""
+    return list_available_labels(one=one, project = project, limit=1)[0]
 
 def download_tables(
     local_path,
     label="2024_W50",
+    project=None,
+    agg_level="agg_full",
     one=None,
     verify=False,
     overwrite=False,
@@ -163,10 +240,17 @@ def download_tables(
     """Download electrophysiology data tables from AWS S3.
 
     Downloads aggregated electrophysiology data from the IBL AWS S3 bucket to a local directory.
+    For "agg_full", first tries the new path structure then falls back to the original path for
+    backward compatibility. For other agg_levels, uses the direct path structure.
 
     Args:
         local_path (Path): Path where the data will be stored locally.
         label (str, optional): Revision string (e.g., "2024_W04"). Defaults to "2024_W50".
+        project (str, optional): Project name. Defaults to "ea_active" if None.
+        agg_level (str, optional): Aggregation level for the path structure. Defaults to "agg_full".
+            For "agg_full": tries f"aggregates/atlas/features/{project}/{label}/{agg_level}" first,
+            then falls back to f"aggregates/atlas/features/{project}/{label}" for backward compatibility.
+            For other values: uses f"aggregates/atlas/features/{project}/{label}/{agg_level}" directly.
         one: ONE client instance for AWS authentication.
         verify (bool, optional): Checks the indices and consistency of the dataframes and raises an error if not consistent. Defaults to False.
         overwrite (bool, optional): Force redownloading if file exists. Defaults to False.
@@ -179,25 +263,71 @@ def download_tables(
     Raises:
         AssertionError: If the specified label is not found on AWS.
     """
-    # The AWS private credentials are stored in Alyx, so that only one authentication is required
-    local_path = Path(local_path).joinpath(label)
+    # Set default project if None
+    if project is None:
+        project = "ea_active"
+        _logger.warning(f"Project is None, using default project: {project}")
+    
+    # Create local directory structure
+    local_path = Path(local_path).joinpath(project).joinpath(label).joinpath(agg_level)
+    local_path.mkdir(parents=True, exist_ok=True)
+    
+    # Get AWS credentials
     s3, bucket_name = aws.get_s3_from_alyx(alyx=one.alyx)
-    local_files = aws.s3_download_folder(
-        f"aggregates/atlas/{label}",
-        local_path,
-        s3=s3,
-        bucket_name=bucket_name,
-        overwrite=overwrite,
-    )
-    if extended:
+    
+    # Download main data with backward compatibility for agg_full
+    if agg_level == "agg_full":
+        # Try the new path with agg_level first, then fall back to backward compatibility
+        primary_path = f"aggregates/atlas/features/{project}/{label}/{agg_level}"
+        fallback_path = f"aggregates/atlas/features/{project}/{label}"
+        
+        try:
+            local_files = aws.s3_download_folder(
+                primary_path,
+                local_path,
+                s3=s3,
+                bucket_name=bucket_name,
+                overwrite=overwrite,
+            )
+            if len(local_files) == 0:
+                # Primary path doesn't exist, try fallback
+                local_files = aws.s3_download_folder(
+                    fallback_path,
+                    local_path,
+                    s3=s3,
+                    bucket_name=bucket_name,
+                    overwrite=overwrite,
+                )
+        except Exception:
+            # If primary path fails, try fallback
+            local_files = aws.s3_download_folder(
+                fallback_path,
+                local_path,
+                s3=s3,
+                bucket_name=bucket_name,
+                overwrite=overwrite,
+            )
+    else:
+        # For other agg_levels, use the direct path
         local_files = aws.s3_download_folder(
-            f"aggregates/atlas/{label}_extended",
+            f"aggregates/atlas/features/{project}/{label}/{agg_level}",
             local_path,
             s3=s3,
             bucket_name=bucket_name,
             overwrite=overwrite,
         )
-    assert len(local_files), f"aggregates/atlas/{label} not found on AWS"
+    
+    # Download extended data if requested
+    if extended:
+        local_files = aws.s3_download_folder(
+            f"aggregates/atlas/features/{project}/{label}_extended",
+            local_path,
+            s3=s3,
+            bucket_name=bucket_name,
+            overwrite=overwrite,
+        )
+    
+    assert len(local_files), f"aggregates/atlas/{project}/{label} not found on AWS"
     return local_path
 
 
@@ -262,7 +392,12 @@ def read_features_from_disk(
             left_index=True,
         )
         df_features.rename(columns={"labels": "channel_labels"}, inplace=True)
-    df_features["outside"] = df_features["channel_labels"] == 3
+    if "channel_labels" in df_features.columns:
+        df_features["outside"] = df_features["channel_labels"] == 3
+    elif "labels" in df_features.columns:
+        df_features["outside"] = df_features["labels"] == 3
+    else:
+        raise ValueError("channel_labels or labels not found in the features dataframe")
 
     aids = brain_atlas.get_labels(
         df_features.loc[:, ["x", "y", "z"]].values, mode="clip"
