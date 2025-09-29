@@ -352,7 +352,12 @@ def read_features_from_disk(
             left_index=True,
         )
         df_features.rename(columns={"labels": "channel_labels"}, inplace=True)
-    df_features["outside"] = df_features["channel_labels"] == 3
+    if "channel_labels" in df_features.columns:
+        df_features["outside"] = df_features["channel_labels"] == 3
+    elif "labels" in df_features.columns:
+        df_features["outside"] = df_features["labels"] == 3
+    else:
+        raise ValueError("channel_labels or labels not found in the features dataframe")
 
     aids = brain_atlas.get_labels(
         df_features.loc[:, ["x", "y", "z"]].values, mode="clip"
