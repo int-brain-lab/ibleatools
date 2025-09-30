@@ -7,7 +7,7 @@ import numpy as np
 
 import sklearn.metrics
 from xgboost import XGBClassifier  # pip install xgboost  # https://xgboost.readthedocs.io/en/stable/prediction.html
-
+import xgboost
 import iblutil.numerical
 import ephysatlas.anatomy
 import ephysatlas.data
@@ -15,10 +15,8 @@ import ephysatlas.fixtures
 import ephysatlas.regionclassifier
 
 VINTAGE = '2024_W50'
-VINTAGE = '2025_W28'
-path_features = Path(f'/Users/olivier/Documents/datadisk/ephys-atlas-decoding/features/{VINTAGE}')  # mac
-path_features = Path(f'/mnt/s0/ephys-atlas-decoding/features/{VINTAGE}')  # parede
-path_features = Path(f'/datadisk/Data/paper-ephys-atlas/ephys-atlas-decoding/features/{VINTAGE}')  # ferret
+VINTAGE = '2025_W39'
+path_features = Path(f'/datadisk/Data/paper-ephys-atlas/ephys-atlas-decoding/features/ea_active/{VINTAGE}/agg_full')  # ferret
 
 if not path_features.exists():
     from one.api import ONE
@@ -42,6 +40,26 @@ FEATURE_SET = [
     # "micro-manipulator",
 ]
 x_list = ephysatlas.features.voltage_features_set(FEATURE_SET)
+# x_list = list(set(x_list) - set(
+#     ['aperiodic_exponent',
+#  'aperiodic_offset',
+#  'decay_fit_error',
+#  'decay_fit_r_squared',
+#  'decay_n_peaks',
+#  'psd_residual_alpha',
+#  'psd_residual_beta',
+#  'psd_residual_delta',
+#  'psd_residual_gamma',
+#  'psd_residual_lfp',
+#  'psd_residual_theta']))
+
+
+x_list = list(set(x_list) - set(
+    ['decay_fit_error',
+ 'decay_fit_r_squared'
+     ]))
+
+
 x_list.append("outside")
 
 TRAIN_LABEL = "Cosmos_id"  # ['Beryl_id', 'Cosmos_id']
@@ -56,10 +74,10 @@ def train(test_idx, fold_label=''):
     train_idx = ~test_idx
     print(f"{fold_label}: {df_features.shape[0]} channels", f'training set {np.sum(test_idx) / test_idx.size}')
     df_features.loc[train_idx, :].groupby(TRAIN_LABEL).count()
-    x_train = df_features.loc[train_idx, x_list].values
-    x_test = df_features.loc[test_idx, x_list].values
-    y_train = df_features.loc[train_idx, TRAIN_LABEL].values
-    y_test = df_features.loc[test_idx, TRAIN_LABEL].values
+    x_train = df_features.loc[train_idx, x_list].values.astype(float)
+    x_test = df_features.loc[test_idx, x_list].values.astype(float)
+    y_train = df_features.loc[train_idx, TRAIN_LABEL].values.astype(float)
+    y_test = df_features.loc[test_idx, TRAIN_LABEL].values.astype(float)
     df_test = df_features.loc[test_idx, :].copy()
     classes = np.unique(df_features.loc[train_idx, TRAIN_LABEL])
 
@@ -82,6 +100,7 @@ def train(test_idx, fold_label=''):
     print(f"{fold_label} Accuracy: {accuracy}")
 
     np.testing.assert_array_equal(classes, rids)
+
     return classifier.predict_proba(x_test), classifier, accuracy, confusion_matrix
 
 
@@ -124,7 +143,7 @@ for i in range(n_folds):
 
 
 accuracy = sklearn.metrics.accuracy_score(df_features[TRAIN_LABEL].values, df_predictions['prediction'].values.astype(int))
-sklearn.metrics.ConfusionMatrixDisplay.from_predictions(df_features[TRAIN_LABEL].values, df_predictions['prediction'].values.astype(int), normalize='true', cmap='Blues')
+sklearn.metrics.ConfusionMatrixDisplay.from_predictions(df_features[TRAIN_LABEL].values, df_predictions['prediction'].values.astype(int), normalize='true', cmap='Blues', im_kw=dict(vmax=.75))
 _, classifier, _, _ = train(test_idx=np.zeros(df_features.shape[0], dtype=bool))
 meta = dict(
     RANDOM_SEED=rs,
