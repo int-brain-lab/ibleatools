@@ -284,24 +284,23 @@ class ModelLfFeatures(BaseChannelFeatures):
     rms_lf: Series[float] = pa.Field(
         coerce=True, metadata={"transform": lambda x: 20 * np.log10(x)}
     )
+    psd_lfp: Series[float] = pa.Field(coerce=True)
     psd_delta: Series[float] = pa.Field(coerce=True)
     psd_theta: Series[float] = pa.Field(coerce=True)
     psd_alpha: Series[float] = pa.Field(coerce=True)
     psd_beta: Series[float] = pa.Field(coerce=True)
     psd_gamma: Series[float] = pa.Field(coerce=True)
-    psd_lfp: Series[float] = pa.Field(coerce=True)
-    aperiodic_offset: Optional[Series[float]] = pa.Field(coerce=True)
-    aperiodic_exponent: Optional[Series[float]] = pa.Field(coerce=True)
-    decay_fit_error: Optional[Series[float]] = pa.Field(coerce=True)
-    decay_fit_r_squared: Optional[Series[float]] = pa.Field(coerce=True)
-    decay_n_peaks: Optional[Series[int]] = pa.Field(coerce=True)
+    psd_residual_lfp: Optional[Series[float]] = pa.Field(coerce=True, nullable=True)
     psd_residual_delta: Optional[Series[float]] = pa.Field(coerce=True, nullable=True)
     psd_residual_theta: Optional[Series[float]] = pa.Field(coerce=True, nullable=True)
     psd_residual_alpha: Optional[Series[float]] = pa.Field(coerce=True, nullable=True)
     psd_residual_beta: Optional[Series[float]] = pa.Field(coerce=True, nullable=True)
     psd_residual_gamma: Optional[Series[float]] = pa.Field(coerce=True, nullable=True)
-    psd_residual_lfp: Optional[Series[float]] = pa.Field(coerce=True, nullable=True)
-
+    aperiodic_offset: Optional[Series[float]] = pa.Field(coerce=True)
+    aperiodic_exponent: Optional[Series[float]] = pa.Field(coerce=True)
+    decay_fit_error: Optional[Series[float]] = pa.Field(coerce=True)
+    decay_fit_r_squared: Optional[Series[float]] = pa.Field(coerce=True)
+    decay_n_peaks: Optional[Series[int]] = pa.Field(coerce=True)
 
 class ModelCsdFeatures(BaseChannelFeatures):
     """Schema for current source density features.
@@ -491,40 +490,15 @@ def voltage_features_set(features_list=FEATURES_LIST):
     for feature_group in features_list:
         match feature_group:
             case "raw_ap":
-                x_list += sorted(
-                    list(
-                        set(ModelApFeatures.to_schema().columns.keys())
-                        - set(["channel"])
-                    )
-                )
+                x_list += list(ModelApFeatures.to_schema().columns.keys())
             case "raw_lf":
-                x_list += sorted(
-                    list(
-                        set(ModelLfFeatures.to_schema().columns.keys())
-                        - set(["channel"])
-                    )
-                )
+                x_list += list(ModelLfFeatures.to_schema().columns.keys())
             case "raw_lf_csd":
-                x_list += sorted(
-                    list(
-                        set(ModelCsdFeatures.to_schema().columns.keys())
-                        - set(["channel"])
-                    )
-                )
+                x_list += list(ModelCsdFeatures.to_schema().columns.keys())
             case "waveforms":
-                x_list += sorted(
-                    list(
-                        set(ModelSpikeFeatures.to_schema().columns.keys())
-                        - set(["channel"])
-                    )
-                )
+                x_list += list(ModelSpikeFeatures.to_schema().columns.keys())
             case "micro-manipulator":
-                x_list += sorted(
-                    list(
-                        set(ModelHistologyPlanned.to_schema().columns.keys())
-                        - set(["channel"])
-                    )
-                )
+                x_list += list(ModelHistologyPlanned.to_schema().columns.keys())
     return x_list
 
 

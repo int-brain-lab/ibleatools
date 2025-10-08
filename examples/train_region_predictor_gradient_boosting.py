@@ -14,15 +14,17 @@ import ephysatlas.data
 import ephysatlas.fixtures
 import ephysatlas.regionclassifier
 
-VINTAGE = '2024_W50'
+PROJECT = 'ea_active'
 VINTAGE = '2025_W39'
-path_features = Path(f'/datadisk/Data/paper-ephys-atlas/ephys-atlas-decoding/features/ea_active/{VINTAGE}/agg_full')  # ferret
+LOWQ = ephysatlas.fixtures.misaligned_pids
+
+root_path_features = Path(f'/datadisk/Data/paper-ephys-atlas/ephys-atlas-decoding/features')  # ferret
+path_features = root_path_features.joinpath(PROJECT, VINTAGE, 'agg_full')
 
 if not path_features.exists():
     from one.api import ONE
     one = ONE()
-    ephysatlas.data.download_tables(path_features.parent, label=VINTAGE, one=one)
-LOWQ = ephysatlas.fixtures.misaligned_pids
+    ephysatlas.data.download_tables(path_features, label=VINTAGE, one=one)
 
 brain_atlas = ephysatlas.anatomy.ClassifierAtlas()
 
@@ -54,10 +56,10 @@ x_list = ephysatlas.features.voltage_features_set(FEATURE_SET)
 #  'psd_residual_theta']))
 
 
-x_list = list(set(x_list) - set(
-    ['decay_fit_error',
- 'decay_fit_r_squared'
-     ]))
+# x_list = list(set(x_list) - set(
+#     ['decay_fit_error',
+#  'decay_fit_r_squared'
+#      ]))
 
 
 x_list.append("outside")
