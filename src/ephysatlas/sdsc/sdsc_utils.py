@@ -8,7 +8,7 @@ import logging
 import numpy as np
 
 # Meta variables for the workflow
-PROJECT_NAME = "psychedlics"  # Change this to your project name
+PROJECT_NAME = "test_project"  # Change this to your project name
 OUTPUT_DIR = Path(f"/mnt/sdceph/users/prai1/data/projects/{PROJECT_NAME}")
 VENV_PATH = "/mnt/home/prai1/projects/passive_ephys/.venv/bin/activate"
 TEMPLATE_COMPUTATION_PATH = Path(__file__).parent / "computation_template.py"
