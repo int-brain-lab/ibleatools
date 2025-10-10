@@ -3,6 +3,11 @@
 This file documents the changes to the features for supported feature versions.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+-   `features.voltage_features_set` returns features by categories, sorted as the pydantic model definitions
+
 ## [0.2.2] - 2025-09-25
 
 ### Added
