@@ -300,6 +300,7 @@ def get_aggregated_features_per_pid(snippet_df_per_pid: pd.DataFrame):
     Note:
         - The function requires that all rows have the same PID value.
         - Channel metadata is loaded from channels.pqt in the snippet directory's parent.
+        - Channels with bad alpha are filtered out. And those values are set to NaN.
         - The result includes both aggregated features and channel position information.
     """
     # Ensure only one PID is present in the DataFrame
@@ -318,6 +319,16 @@ def get_aggregated_features_per_pid(snippet_df_per_pid: pd.DataFrame):
 
     # Reset the index to make pid and channel regular columns
     agg_df_per_pid = agg_df_per_pid.reset_index()
+
+    #Filter out the channels with bad alpha
+    ialpha_bad = np.logical_or(
+        agg_df_per_pid['alpha_mean'].values >= (1e3 * np.nanmedian(agg_df_per_pid['alpha_mean'])),
+        agg_df_per_pid['alpha_std'].values >= 1e3 * np.nanmedian(agg_df_per_pid['alpha_std'])
+    )
+    # then we join with the channel information to get coordinates and anatomical information
+    logger.info(f"Number of channels with bad alpha: {np.sum(ialpha_bad)}")
+    agg_df_per_pid.loc[ialpha_bad, 'alpha_mean'] = np.nan
+    agg_df_per_pid.loc[ialpha_bad, 'alpha_std'] = np.nan
 
     # Load channel metadata (axial and lateral positions) from channels.pqt
     # Construct the path to the snippet directory to find its parent

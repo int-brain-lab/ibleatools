@@ -410,14 +410,6 @@ def read_features_from_disk(
     if strict:
         df_features = pd.DataFrame(ephysatlas.features.ModelRawFeatures(df_features))
 
-    ialpha_bad = np.logical_or(
-        df_features['alpha_mean'].values >= (1e3 * np.nanmedian(df_features['alpha_mean'])),
-        df_features['alpha_std'].values >= 1e3 * np.nanmedian(df_features['alpha_std'])
-    )
-    # then we join with the channel information to get coordinates and anatomical information
-    print(f"Number of channels with bad alpha: {np.sum(ialpha_bad)}")
-    df_features.loc[ialpha_bad, 'alpha_mean'] = np.nanmedian(df_features['alpha_mean'])
-    df_features.loc[ialpha_bad, 'alpha_std'] = np.nanmedian(df_features['alpha_std'])
 
     return df_features
 
