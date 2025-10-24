@@ -2,7 +2,6 @@
 import luigi
 import pandas as pd
 from pathlib import Path
-from typing import Dict, Any, List, Tuple
 import os
 import logging
 import numpy as np
@@ -175,7 +174,7 @@ class CreateTaskFile(luigi.Task):
         outp_file = OUTPUT_DIR / 'Full_Task_file'
         
         # Call your implemented function
-        task_file_content = create_task_file(snippets_df, outp_file, run_program_path)
+        _ = create_task_file(snippets_df, outp_file, run_program_path)
         
         # Validate output
         if not Path(outp_file).exists():
@@ -202,12 +201,12 @@ class WorkflowPipeline(luigi.Task):
             f.write("Workflow completed successfully\n")
             f.write(f"Project: {PROJECT_NAME}\n")
             f.write(f"Output directory: {OUTPUT_DIR}\n")
-            f.write(f"Generated files:\n")
-            f.write(f"  - pids_eids_probes.csv\n")
+            f.write("Generated files:\n")
+            f.write("  - pids_eids_probes.csv\n")
             f.write(f"  - {PROJECT_NAME}_snippets_df.csv\n")
-            f.write(f"  - computation.py\n")
-            f.write(f"  - Runprogram.sh\n")
-            f.write(f"  - Full_Task_file\n")
+            f.write("  - computation.py\n")
+            f.write("  - Runprogram.sh\n")
+            f.write("  - Full_Task_file\n")
 
 
 # Placeholder functions - implement these with your actual logic
@@ -226,7 +225,7 @@ def get_pid_list() -> pd.DataFrame:
     insertions = one.alyx.rest('insertions', 'list', django='session__projects__name__icontains,psychedelics')
 
     # Get pids from insertions
-    pids, alyx_pids = [item["id"] for item in insertions], insertions
+    _, alyx_pids = [item["id"] for item in insertions], insertions
 
     # Get the corresponding eids, and probe_names
     df= pd.DataFrame([{'pid':val['id'],'eid':val['session'],'probe_name':val['name']} for val in alyx_pids],columns=['pid','eid','probe_name'])

@@ -133,7 +133,7 @@ import ibldsp.voltage
 logger = logging.getLogger(__name__)
 
 __features_version__ = (
-    "2025.09.18"  # this is the version of this feature extractor code
+    "2025.10.24"  # this is the version of this feature extractor code
 )
 
 

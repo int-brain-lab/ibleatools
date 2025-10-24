@@ -1,9 +1,6 @@
 # Script to launch feature calculations for one pid. 
 
-import os
-import numpy as np
 from pathlib import Path
-import traceback
 from deploy.iblsdsc import OneSdsc
 import argparse
 from ephysatlas.feature_computation import compute_features_from_pid

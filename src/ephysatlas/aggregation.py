@@ -346,17 +346,6 @@ def get_aggregated_features_per_pid(snippet_df_per_pid: pd.DataFrame):
     agg_df_per_pid = agg_df_per_pid.merge(
         df_channels[["channel", "axial_um", "lateral_um"]], on="channel", how="left"
     )
-    #TODO - In general print and handle the outlier for all the feature variables.
-    #Add a code for handling the bad alpha mean and std values and make them as NaNs.
-    ialpha_bad = np.logical_or(
-        agg_df_per_pid['alpha_mean'].values >= (1e3 * np.nanmedian(agg_df_per_pid['alpha_mean'])),
-        agg_df_per_pid['alpha_std'].values >= 1e3 * np.nanmedian(agg_df_per_pid['alpha_std'])
-    )
-    # then we join with the channel information to get coordinates and anatomical information
-    print(f"Number of channels with bad alpha: {np.sum(ialpha_bad)}")
-    agg_df_per_pid.loc[ialpha_bad, 'alpha_mean'] = np.nan
-    agg_df_per_pid.loc[ialpha_bad, 'alpha_std'] = np.nan
-
 
     return agg_df_per_pid
 
