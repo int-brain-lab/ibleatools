@@ -28,7 +28,8 @@ dependencies = [
     "spikeinterface>=0.101.2",
     "xgboost>=3.0.1",
     "joblib==1.5.1",
-    "iblscripts @ git+https://github.com/int-brain-lab/iblscripts.git"
+    "iblscripts @ git+https://github.com/int-brain-lab/iblscripts.git",
+    "luigi>=3.6.0",
 ]
 
 [build-system]

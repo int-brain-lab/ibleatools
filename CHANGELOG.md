@@ -3,6 +3,15 @@
 This file documents the changes to the features for supported feature versions.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.0]
+
+### Added
+- Added SDSC utils for generating task files.
+- Added luigi dependency for workflow management
+- Added bad alpha filtering in aggregation pipeline to improve data quality
+
+### Fixed
+-   `features.voltage_features_set` returns features by categories, sorted as the pydantic model definitions
 ## [0.2.2] - 2025-09-25
 
 ### Added

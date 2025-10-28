@@ -6,6 +6,8 @@ The features are released when necessary with the following tag: yyyy_Www
 This file documents the changes to the features for supported feature versions.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2025_W43]
+  - Added bad alpha filtering in aggregation pipeline to improve data quality
 
 ## [2025_W39]
 

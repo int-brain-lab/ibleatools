@@ -409,6 +409,7 @@ def read_features_from_disk(
     if strict:
         df_features = pd.DataFrame(ephysatlas.features.ModelRawFeatures(df_features))
 
+
     return df_features
 
 
