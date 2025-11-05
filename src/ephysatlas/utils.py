@@ -83,7 +83,7 @@ def setup_output_directory(params: Dict[str, Any]) -> tuple[Path, Path]:
             Must include:
             - output_dir (str, optional): Base output directory path
             - pid (str, optional): Probe ID for directory naming
-            - ap_file (str, optional): AP file path for hash-based naming
+            - filename (str, optional): AP file path for hash-based naming
             - t_start (float): Start time for snippet naming
             - duration (float): Duration for snippet naming
             
@@ -95,12 +95,12 @@ def setup_output_directory(params: Dict[str, Any]) -> tuple[Path, Path]:
         If output_dir is None, returns (None, None).
             
     Raises:
-        ValueError: If neither pid nor ap_file is provided.
+        ValueError: If neither pid nor filename is provided.
         
     Note:
         The function creates a hierarchical structure:
         
-        Probe level: Uses pid or hash of ap_file
+        Probe level: Uses pid or hash of filename
         Snippet level: Uses probe info, t_start, and duration
         
         Example output structure::
@@ -120,21 +120,21 @@ def setup_output_directory(params: Dict[str, Any]) -> tuple[Path, Path]:
     base_dir = Path(params.get("output_dir"))
     base_dir.mkdir(parents=True, exist_ok=True)
 
-    # Create probe level subdirectory (pid or hash of ap_file)
+    # Create probe level subdirectory (pid or hash of filename)
     if params["pid"] is not None:
         probe_level_dir = base_dir / params["pid"]
-    elif params["ap_file"] is not None:
+    elif params["filename"] is not None:
         # For file-based processing, create a hash of just the AP filename
-        ap_file = Path(params["ap_file"]).name
+        filename = Path(params["filename"]).name
         # Create a hash of the filename
-        ap_file_hash = hashlib.md5(ap_file.encode()).hexdigest()[:12]
-        probe_level_dir = base_dir / ap_file_hash
+        filename_hash = hashlib.md5(filename.encode()).hexdigest()[:12]
+        probe_level_dir = base_dir / filename_hash
     else:
-        raise ValueError("Either pid or ap_file must be provided")
+        raise ValueError("Either pid or filename must be provided")
 
     probe_level_dir.mkdir(parents=True, exist_ok=True)
 
-    # Create SNippet level subdirectory
+    # Create Snippet level subdirectory
     # Pad t_start and duration
     t_start_padded = f"{params['t_start']:08.1f}"  # 8 digits with 1 decimal place
     duration_padded = f"{params['duration']:04.1f}"  # 4 digits with 1 decimal place

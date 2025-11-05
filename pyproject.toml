@@ -24,7 +24,7 @@ dependencies = [
     "opt-einsum>=3.4.0",
     "pandera>=0.24.0",
     "pydantic>=2.11.4",
-    "specparam",
+    "specparam==2.0.0rc3",
     "spikeinterface>=0.101.2",
     "xgboost>=3.0.1",
     "joblib==1.5.1",

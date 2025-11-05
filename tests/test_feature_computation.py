@@ -18,8 +18,7 @@ class TestFeatureComputation(unittest.TestCase):
         """Test load_data_from_files with non-existent files"""
         with self.assertRaises(RuntimeError):
             load_data_from_files(
-                "nonexistent_ap.cbin", "nonexistent_lf.cbin", Path(".")
-            )
+                "nonexistent_ap.cbin", "nonexistent_lf.cbin")
 
     def test_load_data_from_files_invalid_file_types(self):
         """Test load_data_from_files with invalid file types"""
@@ -28,7 +27,7 @@ class TestFeatureComputation(unittest.TestCase):
             tempfile.NamedTemporaryFile(suffix=".txt") as tmp_lf,
         ):
             with self.assertRaises(RuntimeError):
-                load_data_from_files(tmp_ap.name, tmp_lf.name, Path("."))
+                load_data_from_files(tmp_ap.name, tmp_lf.name)
 
     def test_add_target_coordinates_no_arguments(self):
         """Test add_target_coordinates with no arguments"""
@@ -185,6 +184,80 @@ class TestFeatureComputation(unittest.TestCase):
                     self.assertEqual(
                         df.attrs["ibleatools_version"], ephysatlas.__version__
                     )
+
+    def test_compute_features_from_raw_with_only_ap_or_lf(self):
+        """Test compute_features_from_raw with only AP data or only LF data"""
+        # Load the destriped data files
+        ap_data = np.load(
+            Path(__file__).parent.joinpath("fixtures", "ap_destriped.npy")
+        )
+        lf_data = np.load(
+            Path(__file__).parent.joinpath("fixtures", "lf_destriped.npy")
+        )
+
+        # Define sampling frequencies (typical values for Neuropixel)
+        fs_ap = 30000.0  # 30 kHz for AP data
+        fs_lf = 2500.0  # 2.5 kHz for LF data
+
+        # Test 1: Only AP data (no LF data)
+        n_channels_ap = ap_data.shape[0]
+        geometry_ap = {
+            "x": np.zeros(n_channels_ap),
+            "y": np.arange(n_channels_ap) * 20,
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir)
+
+            # Test with only AP data - should run without errors
+            result_df_ap = compute_features_from_raw(
+                raw_ap=ap_data,
+                raw_lf=None,
+                fs_ap=fs_ap,
+                fs_lf=None,
+                geometry=geometry_ap,
+                features_to_compute=["ap"],  # Let function determine based on available data
+                output_dir=output_dir,
+            )
+
+            # Check that result is a pandas DataFrame
+            self.assertIsInstance(result_df_ap, pd.DataFrame)
+
+            # Check that DataFrame has expected columns for AP features
+            self.assertIn("channel", result_df_ap.columns)
+            # The function should automatically compute AP and waveforms when only AP is provided
+            # But to avoid long computation, we can just check that it runs without error
+
+        # Test 2: Only LF data (no AP data)
+        n_channels_lf = lf_data.shape[0]
+        geometry_lf = {
+            "x": np.zeros(n_channels_lf),
+            "y": np.arange(n_channels_lf) * 20,
+            "col": np.zeros(n_channels_lf),
+            "row": np.arange(n_channels_lf)
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir)
+
+            # Test with only LF data - should run without errors
+            result_df_lf = compute_features_from_raw(
+                raw_ap=None,
+                raw_lf=lf_data,
+                fs_ap=None,
+                fs_lf=fs_lf,
+                geometry=geometry_lf,
+                features_to_compute=None,  # Let function determine based on available data
+                output_dir=output_dir,
+            )
+
+            # Check that result is a pandas DataFrame
+            self.assertIsInstance(result_df_lf, pd.DataFrame)
+
+            # Check that DataFrame has expected columns for LF features
+            self.assertIn("channel", result_df_lf.columns)
+            # The function should automatically compute LF and CSD when only LF is provided
+            # But to avoid long computation, we can just check that it runs without error
 
 
 if __name__ == "__main__":
