@@ -60,7 +60,7 @@ def add_target_coordinates(pid=None, one=None, channels=None, traj_dict=None):
     Note:
         - The function applies a -5 degree pitch correction to account for probe tilt.
         - Coordinates are transformed from in-vivo to Allen coordinate system.
-        - If channels don't have 'rawInd' or 'channel' fields, it assumes 384 channels.
+        - If channels don't have 'rawInd' or 'channel' fields, it picks the number of channels from the axial_um field.
         - The function interpolates coordinates along the probe track for each channel.
         - For Alyx database mode, it prioritizes micro-manipulator provenance trajectories.
     """
@@ -119,8 +119,9 @@ def add_target_coordinates(pid=None, one=None, channels=None, traj_dict=None):
 
     # Check if the rawInd data exists in the channels dictionary, otherwise use the default 384 channels (Ask OW)
     if ("rawInd" not in channels) and ("channel" not in channels):
-        assert channels["axial_um"].size == 384
-        channels["rawInd"] = np.arange(384)
+        # assert channels["axial_um"].size == 384
+        # Use the same number of channels as in the "axial_um" key
+        channels["rawInd"] = np.arange(channels["axial_um"].size)
 
     # we interpolate the channels from the deepest point up. The neuropixel y coordinate is from the bottom of the probe
     # Update the channels dictionary with the target coordinates
@@ -141,31 +142,42 @@ def online_feature_computation(
     scratch_dir=None,
     **kwargs,
 ):
-    """Compute electrophysiological features from SpikeGLX reader objects.
+    """Compute electrophysiological features from SpikeGLX readers.
 
-    This function serves as an intermediate step in the feature computation pipeline. It takes
-    SpikeGLX reader objects for AP (action potential) and LF (local field potential) data,
-    validates the requested time range, loads the raw data, detects bad channels, and then
-    delegates the actual feature computation to `compute_features_from_raw`.
+    The function loads a snippet of AP (action potential) and/or LF (local field
+    potential) data from SpikeGLX readers, validates the requested time range,
+    performs lightweight bad-channel detection, and forwards the raw arrays to
+    :func:`compute_features_from_raw`. Either stream can be omitted; the
+    underlying feature pipeline will adjust the feature sets and metadata to match
+    the available data.
 
     Args:
-        sr_lf (SpikeGLXReader): SpikeGLX reader object for LF (local field potential) data.
-        sr_ap (SpikeGLXReader): SpikeGLX reader object for AP (action potential) data.
-        t0 (float): Start time in seconds for feature computation.
-        duration (float): Duration in seconds for feature computation.
-        channels (dict, optional): Dictionary containing channel information. If None, channel labels will be detected
-            automatically from the data.
-        features_to_compute (list, optional): List of feature sets to compute. If None, uses default feature sets.
-        output_dir (Path, optional): Output directory for saving computed features. Defaults to current directory.
-        scratch_dir (Path, optional): Directory for temporary files (e.g., dartsort scratch files).
-        **kwargs: Additional keyword arguments passed to `compute_features_from_raw`.
+        sr_lf (SpikeGLXReader, optional): Reader for the LF stream. Provide ``None``
+            to skip LF processing.
+        sr_ap (SpikeGLXReader, optional): Reader for the AP stream. Provide ``None``
+            to skip AP processing.
+        t0 (float): Start time in seconds of the window to process.
+        duration (float): Duration in seconds of the processing window.
+        channels (dict, optional): Channel metadata used for bad-channel labels.
+            When ``channels`` is ``None`` or does not contain ``"labels"``, the
+            function will attempt to infer labels from the available data.
+        features_to_compute (list, optional): Subset of feature families to pass to
+            the downstream computation. ``None`` delegates the decision to
+            :func:`compute_features_from_raw`.
+        output_dir (Path, optional): Directory where intermediate feature parquet
+            files are written. Defaults to the current directory.
+        scratch_dir (Path, optional): Location for temporary scratch data (e.g.
+            dartsort artifacts).
+        **kwargs: Additional options forwarded to
+            :func:`compute_features_from_raw`.
 
     Returns:
-        pd.DataFrame: DataFrame containing the computed features for the specified time window.
+        pd.DataFrame: Feature table covering the requested time window.
 
     Raises:
-        ValueError: If start time is negative or requested time range exceeds data duration.
-        IndexError: If data access fails due to invalid time range or channel count.
+        ValueError: If the requested time window is negative or extends beyond the
+            available samples of the provided reader(s).
+        IndexError: If SpikeGLX fails to provide the requested samples.
 
     Example:
         >>> from spikeglx import Reader
@@ -175,12 +187,14 @@ def online_feature_computation(
         ...     sr_lf=sr_lf, sr_ap=sr_ap, t0=100.0, duration=3.0
         ... )
 
-    Note:
-        - The function calculates optimal FFT lengths for efficient processing.
-        - It validates that the requested time range is within the available data bounds.
-        - LF data access includes a 3-sample latency offset.
-        - Bad channel detection is performed automatically if channel labels are not provided.
-        - The function handles both full recordings and data snippets for channel detection.
+    Notes:
+        - FFT sizes are rounded up to the next fast length for efficient spectral
+          computations.
+        - LF reads include a three-sample latency offset to align with AP timing.
+        - Geometry is sourced from whichever reader is available; at least one
+          reader must define geometry.
+        - Bad-channel detection falls back from full recordings to the extracted
+          snippet when necessary.
     """
     # Validate start time is non-negative
     if t0 < 0:
@@ -406,18 +420,25 @@ def load_data_from_pid(
 
 # TODO - Handle how the probe level directory and channels data is handled. (Similar to the load_data_from_pid case)
 def load_data_from_files(ap_file = None, lf_file = None):
-    """Load data from .cbin files.
+    """Open SpikeGLX `.cbin` recordings and construct channel metadata.
 
     Args:
-        ap_file (str): Path to AP .cbin file
-        lf_file (str): Path to LF .cbin file
+        ap_file (str, optional): Path to an AP `.cbin` file. Leave as ``None``
+            to load only the LF stream.
+        lf_file (str, optional): Path to an LF `.cbin` file. Leave as ``None``
+            to load only the AP stream.
 
     Returns:
-        tuple: (sr_ap, sr_lf, channels) SpikeGLX readers and channel information
+        tuple: ``(sr_ap, sr_lf, channels)`` where ``sr_ap`` and ``sr_lf`` are
+        SpikeGLX ``Reader`` instances (set to ``None`` when a stream is not
+        requested) and ``channels`` is a dictionary containing at least
+        ``"rawInd"``, ``"axial_um"``, and ``"lateral_um"`` values derived from
+        the available geometry.
 
     Raises:
-        ImportError: If spikeglx package is not available
-        RuntimeError: If loading .cbin files fails
+        ValueError: If neither AP nor LF file is supplied.
+        ImportError: If the ``spikeglx`` package is not installed.
+        RuntimeError: If the reader initialization fails for any supplied file.
     """
     logger.info(f"Loading data from files: AP={ap_file}, LF={lf_file}")
 
@@ -433,8 +454,8 @@ def load_data_from_files(ap_file = None, lf_file = None):
         # Todo here I have to add the channel information
         channels = {}
         channels["rawInd"] = np.arange(sr_ap.nc - sr_ap.nsync) if sr_ap is not None else np.arange(sr_lf.nc - sr_lf.nsync)
-        channels["axial_um"] = sr_ap.geometry["y"] or sr_lf.geometry["y"]
-        channels["lateral_um"] = sr_ap.geometry["x"] or sr_lf.geometry["x"]
+        channels["axial_um"] = sr_ap.geometry["y"] if sr_ap is not None else sr_lf.geometry["y"]
+        channels["lateral_um"] = sr_ap.geometry["x"] if sr_ap is not None else sr_lf.geometry["x"]
 
         return sr_ap, sr_lf, channels
     except ImportError:
@@ -680,8 +701,9 @@ def compute_features_from_pid(
 
     # Ensure channel indexing is present (default to 384 channels if not specified)
     if ("rawInd" not in channels) and ("channel" not in channels):
-        assert channels["axial_um"].size == 384
-        channels["rawInd"] = np.arange(384)
+        # assert channels["axial_um"].size == 384
+        # Use the same number of channels as in the "axial_um" key
+        channels["rawInd"] = np.arange(channels["axial_um"].size)
 
     # Set up the channels file path for saving
     if probe_level_dir is not None:
@@ -761,24 +783,31 @@ def compute_features_from_file(
     """Compute features from .cbin files.
 
     Args:
-        ap_file (str): Path to AP .cbin file
-        lf_file (str): Path to LF .cbin file
-        t_start (float, optional): Start time in seconds. Defaults to 0.0 if not specified.
-        duration (float, optional): Duration in seconds. If None, will use the entire available duration.
-        traj_dict (dict, optional): Dictionary containing trajectory information with keys:
-            - x, y, z: coordinates
-            - depth, theta, phi: insertion parameters
-            Required if want to add xyz target information.
-        features_to_compute (list, optional): List of feature sets to compute
-        output_dir (Path, optional): Output directory for saving features
-        scratch_dir (Path, optional): Directory for temporary files (dartsort scratch)
-        **kwargs: Additional keyword arguments
+        ap_file (str, optional): Path to an AP `.cbin` file. Must be supplied if
+            ``lf_file`` is ``None``.
+        lf_file (str, optional): Path to an LF `.cbin` file. Must be supplied if
+            ``ap_file`` is ``None``.
+        t_start (float, optional): Start time (seconds) of the snippet. Defaults
+            to ``0.0`` when omitted.
+        duration (float): Length (seconds) of the snippet to process.
+        traj_dict (dict, optional): Trajectory dictionary with keys ``x``,
+            ``y``, ``z``, ``depth``, ``theta``, ``phi`` for adding target
+            coordinate columns.
+        features_to_compute (list, optional): Feature families to compute. ``None``
+            defers to :func:`online_feature_computation`.
+        output_dir (Path, optional): Root directory for cached outputs. A
+            snippet-level directory is created beneath it.
+        scratch_dir (Path, optional): Location for temporary scratch files
+            generated by downstream feature routines.
+        **kwargs: Additional keyword arguments forwarded to
+            :func:`online_feature_computation`.
 
     Returns:
-        pd.DataFrame: DataFrame containing computed features
+        pd.DataFrame: Aggregated feature table for the requested time range.
 
     Raises:
-        ValueError: If both AP and LF .cbin files are not provided
+        ValueError: If neither AP nor LF file is provided, or if ``duration`` is
+            missing.
     """
 
     # Validate input
@@ -849,6 +878,7 @@ def compute_features_from_raw(
     fs_lf = None,
     geometry = None,
     channel_labels=None,
+    neuropixel_version=1,
     features_to_compute=None,
     output_dir=Path("."),
     scratch_dir=None,
@@ -862,27 +892,42 @@ def compute_features_from_raw(
     both computation and loading of cached features.
 
     Args:
-        raw_ap (np.ndarray): Raw AP data array of shape (n_channels, n_samples).
-        raw_lf (np.ndarray): Raw LF data array of shape (n_channels, n_samples).
-        fs_ap (float): Sampling frequency of AP data in Hz.
-        fs_lf (float): Sampling frequency of LF data in Hz.
-        geometry (dict): Dictionary containing 'x' and 'y' coordinates for each channel.
-        channel_labels (np.ndarray, optional): Array of channel labels for bad channel identification. 
-            If None, assumes all channels are good.
-        features_to_compute (list, optional): List of feature sets to compute. If None, computes all available features.
-            Available options: ['lf', 'csd', 'ap', 'waveforms'].
-        output_dir (Path, optional): Directory to save individual feature sets. If None, features are not saved.
-        scratch_dir (Path, optional): Directory for temporary files (e.g., dartsort scratch files).
-        **kwargs: Additional keyword arguments including:
-            - skip_saved_computation: Skip computation if files already exist
-            - save_waveforms: Save waveform data files
+        raw_ap (np.ndarray, optional): AP voltage array shaped
+            ``(n_channels, n_samples)``. Supply ``None`` to disable AP feature
+            computation.
+        raw_lf (np.ndarray, optional): LF voltage array shaped
+            ``(n_channels, n_samples)``. Supply ``None`` to disable LF/CSD
+            feature computation.
+        fs_ap (float, optional): Sampling frequency (Hz) for the AP stream. Must
+            be positive when ``raw_ap`` is provided.
+        fs_lf (float, optional): Sampling frequency (Hz) for the LF stream. Must
+            be positive when ``raw_lf`` is provided.
+        geometry (dict): Mapping containing at least ``"x"`` and ``"y"`` arrays
+            describing channel coordinates.
+        channel_labels (np.ndarray, optional): Per-channel label array used to
+            mask bad channels during destriping. Defaults to zeros matching the
+            available data.
+        neuropixel_version (int): Neuropixel probe version passed to the
+            destriper.
+        features_to_compute (list, optional): Feature families to evaluate.
+            ``None`` computes all supported families for the given inputs.
+            Supported values are ``["lf", "csd", "ap", "waveforms"]``.
+        output_dir (Path, optional): Directory where individual feature parquet
+            files (and optional waveform artifacts) are written. ``None`` skips
+            writing to disk.
+        scratch_dir (Path, optional): Location for temporary scratch data used
+            by waveform extraction.
+        **kwargs: Extra options controlling the workflow, such as
+            ``skip_saved_computation`` or ``save_waveforms``.
 
     Returns:
-        pd.DataFrame: DataFrame containing all computed features merged by channel.
+        pd.DataFrame: Outer-joined feature table keyed by ``channel``.
 
     Raises:
-        AssertionError: If input arrays are not 2D, channel counts don't match, or sampling frequencies are invalid.
-        ValueError: If invalid feature sets are requested.
+        ValueError: If neither AP nor LF data is supplied, or if an unsupported
+            feature family is requested.
+        AssertionError: If provided arrays are not 2D, geometry dimensions do not
+            align, or sampling frequencies are invalid for the requested streams.
 
     Example:
         >>> import numpy as np
@@ -894,13 +939,14 @@ def compute_features_from_raw(
         ...     geometry=geometry, features_to_compute=['lf', 'ap']
         ... )
 
-    Note:
-        - The function applies destriping to both AP and LF data before feature computation.
-        - Features are computed independently and can be cached/loaded from files.
-        - Waveform features have special handling for spike count data types.
-        - All features are merged on the 'channel' column in the final output.
-        - Package version metadata is added to each feature DataFrame.
-        - The function supports skipping computation for existing files to save time.
+    Notes:
+        - AP and LF streams are destriped before feature computation.
+        - Existing parquet outputs can be reused when
+          ``skip_saved_computation`` is ``True``.
+        - Waveform features emit optional waveform files when
+          ``save_waveforms`` is set.
+        - Each feature DataFrame is annotated with ibleatools and feature module
+          versions for provenance tracking.
     """
 
     if raw_ap is None and raw_lf is None:
@@ -961,7 +1007,7 @@ def compute_features_from_raw(
         des_ap = ibldsp.voltage.destripe(
             raw_ap,
             fs=fs_ap,
-            neuropixel_version=1,
+            neuropixel_version=neuropixel_version,
             channel_labels=channel_labels,
             k_filter=False,
         )

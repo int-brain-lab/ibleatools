@@ -121,7 +121,7 @@ def setup_output_directory(params: Dict[str, Any]) -> tuple[Path, Path]:
     base_dir.mkdir(parents=True, exist_ok=True)
 
     # Create probe level subdirectory (pid or hash of filename)
-    if params["pid"] is not None:
+    if params.get("pid") is not None:
         probe_level_dir = base_dir / params["pid"]
     elif params["filename"] is not None:
         # For file-based processing, create a hash of just the AP filename
@@ -139,7 +139,7 @@ def setup_output_directory(params: Dict[str, Any]) -> tuple[Path, Path]:
     t_start_padded = f"{params['t_start']:08.1f}"  # 8 digits with 1 decimal place
     duration_padded = f"{params['duration']:04.1f}"  # 4 digits with 1 decimal place
     snippet_level_dir = (
-        probe_level_dir / f"probe_{params['pid']}_{t_start_padded}_{duration_padded}"
+        probe_level_dir / f"probe_{params.get('pid','unknown_pid')}_{t_start_padded}_{duration_padded}"
     )
     snippet_level_dir.mkdir(parents=True, exist_ok=True)
 
