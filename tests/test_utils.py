@@ -52,11 +52,11 @@ class TestSetupOutputDirectory(unittest.TestCase):
         self.assertEqual(snippet_level_dir.parent, probe_level_dir)
         self.assertEqual(probe_level_dir.parent, self.base_path)
 
-    def test_setup_output_directory_with_ap_file(self):
+    def test_setup_output_directory_with_filename(self):
         """Test directory setup with AP file parameter."""
         params = {
             "pid": None,
-            "ap_file": "/path/to/test_ap.cbin",
+            "filename": "/path/to/test_ap.cbin",
             "t_start": 100.5,
             "duration": 25.0,
             "output_dir": str(self.base_path),
@@ -159,7 +159,7 @@ class TestSetupOutputDirectory(unittest.TestCase):
         """Test that AP file hashing is consistent."""
         params1 = {
             "pid": None,
-            "ap_file": "/path/to/test_ap.cbin",
+            "filename": "/path/to/test_ap.cbin",
             "t_start": 0.0,
             "duration": 100.0,
             "output_dir": str(self.base_path),
@@ -167,7 +167,7 @@ class TestSetupOutputDirectory(unittest.TestCase):
 
         params2 = {
             "pid": None,
-            "ap_file": "/different/path/to/test_ap.cbin",  # Same filename, different path
+            "filename": "/different/path/to/test_ap.cbin",  # Same filename, different path
             "t_start": 0.0,
             "duration": 100.0,
             "output_dir": str(self.base_path),
@@ -182,7 +182,7 @@ class TestSetupOutputDirectory(unittest.TestCase):
         # Test with different filename
         params3 = {
             "pid": None,
-            "ap_file": "/path/to/different_ap.cbin",
+            "filename": "/path/to/different_ap.cbin",
             "t_start": 0.0,
             "duration": 100.0,
             "output_dir": str(self.base_path),
