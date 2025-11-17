@@ -130,7 +130,7 @@ def add_target_coordinates(pid=None, one=None, channels=None, traj_dict=None):
     channels["z_target"] = xyz_mm[:, 2]
     return channels
 
-
+#TODO - Make this function more modular so that you can get raw_ap, sr_ap and destriped_ap just from specifying the pid
 def online_feature_computation(
     sr_lf = None,
     sr_ap = None,
@@ -215,11 +215,6 @@ def online_feature_computation(
         # Verify channel indices are valid
         n_channels_ap = sr_ap.nc - sr_ap.nsync
 
-        # Validate channel counts
-        if n_channels_ap <= 0:
-            raise ValueError(
-                f"Invalid number of channels: AP={n_channels_ap}"
-            )
 
         # Load AP data, ignoring sync pulse columns
         try:
@@ -250,12 +245,6 @@ def online_feature_computation(
 
         # Verify channel indices are valid
         n_channels_lf = sr_lf.nc - sr_lf.nsync
-
-        # Validate channel counts
-        if n_channels_lf <= 0:
-            raise ValueError(
-                f"Invalid number of channels: LF={n_channels_lf}"
-            )
 
         # Load LF data with latency offset
         try:
