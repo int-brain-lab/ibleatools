@@ -1,6 +1,5 @@
 import numpy as np
 import pandas as pd
-from sklearn.neighbors import KernelDensity
 from scipy import stats
 from scipy.interpolate import interp1d
 from scipy.stats import iqr
@@ -10,6 +9,11 @@ from one.api import ONE
 from brainbox.io.one import SpikeSortingLoader
 from ephysatlas.plots import select_series
 from ephysatlas.anatomy import ClassifierRegions, NEW_VOID
+
+from sklearn.svm import OneClassSVM
+from sklearn.cluster import KMeans
+from scipy.signal import find_peaks
+from sklearn.neighbors import KernelDensity
 
 # from ephys_atlas.plots import BINS
 BINS = 50
@@ -77,6 +81,10 @@ def kde_proba_distribution(
     - x_train: (E, ) numpy array, x values of the histogram formed using training dataset
     - hist_train: (E, ) numpy array, y values of the histogram formed using training dataset
     """
+    # Do this to force the variables to be local to function
+    test_data = test_data.copy()
+    train_data = train_data.copy()
+
     if len(train_data) > n_min_sample_train:
         # Step 0 : Filter the train data to remove large outliers
         train_data = train_data[
@@ -115,7 +123,12 @@ def kde_proba_distribution(
     n_above = 0
     n_below = 0
 
-    # TODO for extremely high value (e.g. >10 IQR), remove them, put outlier score to 1
+    # For extremely high value (e.g. >10 IQR), remove them, put outlier score to 1
+    val_replace = np.mean(train_data)  # Use the mean of the train data so it's well within boundaries
+    idx_replace = np.where( (test_data > np.mean(train_data) + 10 * iqr(train_data)) |
+                            (test_data < np.mean(train_data) - 10 * iqr(train_data))
+                            )[0]
+    test_data[idx_replace] = val_replace
 
     if np.max(test_data) > np.max(x_train):
         # Pad above
@@ -150,11 +163,13 @@ def kde_proba_distribution(
 
     # The outlier probability is the inverse
     outp = 1 - y_test
+    outp[idx_replace] = 1  # Replace extreme outliers that were set to default value to outlier score 1
 
     return outp, x_train, hist_train
 
 
-def kde_proba_1pid(df_base, df_new, features, mapping, p_thresh=0.999999, min_ch=15):
+def kde_proba_1pid(df_base, df_new, features, mapping, p_thresh=0.999999,
+                   min_ch=15, n_pid=3, min_ch_compute=100):
     # Regions
     regions = np.unique(df_new[mapping + "_id"]).astype(int)
     # Store the features that are outlier per brain region in a dict
@@ -170,34 +185,37 @@ def kde_proba_1pid(df_base, df_new, features, mapping, p_thresh=0.999999, min_ch
 
         listout = list()
         for feature in features:
-            print(f"{feature} [{region}]")
+            # print(f"{feature} [{region}]")
             # Load data for that regions
             df_train = select_series(
                 df_base, features=[feature], acronym=None, id=region, mapping=mapping
             )
-
             # Get channel indices that are in region, keeping only feature values
             df_test = select_series(
                 df_new, features=[feature], acronym=None, id=region, mapping=mapping
             )
 
+            df_pid = select_series(
+                df_base, features=['pid'], acronym=None, id=region, mapping=mapping
+            )
+
             # For all channels at once, test if outside the distribution for the given features
             train_data = df_train.to_numpy()
             test_data = df_test.to_numpy()
-            score_out, _, _ = kde_proba_distribution(train_data, test_data)
-            # score_out, _, _ = detect_outlier_histV2(train_data, test_data)
+            # score_out = 0 if N pid or N channel too small in training set
+            if bool((df_pid.nunique().values[0] >= n_pid) & (df_pid.shape[0] >= min_ch_compute)):
+                score_out, _, _ = kde_proba_distribution(train_data, test_data)
+            else:
+                score_out = -1 * np.ones(test_data.shape)  # Assign value -1 when cannot compute
             # Save into new column
             df_new_compute[feature + "_q"] = score_out
             df_new_compute[feature + "_extremes"] = 0
             df_new_compute.loc[
                 df_new_compute[feature + "_q"] > p_thresh, feature + "_extremes"
             ] = 1
-            # A region is assigned as having outliers if more than half its channels are outliers
-            # Condition on N minimum channel.
-            has_outliers = sum(df_new_compute[feature + "_extremes"]) > np.floor(
-                len(test_data) / 2
-            )
-            if len(test_data) >= min_ch and has_outliers:
+            # A region is assigned as having outliers if N minimum channel are outliers.
+            has_outliers = sum(df_new_compute[feature + "_extremes"]) >= min_ch
+            if has_outliers:
                 listout.append(feature)
                 if sum(
                     df_new_compute["has_outliers"] == 0
@@ -289,3 +307,203 @@ def df_add_channel_label(df, pid, one=None):
     # Merge to get the labels column
     df = df.merge(df_label, left_index=True, right_index=True)
     return df
+
+# ===========================================================
+# ====== SVM ================================================
+
+def detect_modality_auto_bandwidth(data, peak_height_frac=0.1, resolution=500):
+    """
+    Detect unimodal or multimodal distribution using KDE with Silverman's bandwidth.
+
+    Parameters
+    ----------
+    data : array-like
+        Raw data points.
+    peak_height_frac : float, optional
+        Fraction of maximum density for minimum peak height.
+    resolution : int, optional
+        Number of points in the KDE evaluation grid.
+
+    Returns
+    -------
+    modality : str
+        "unimodal" or "multimodal"
+    peaks : array
+        Indices of detected peaks in x_grid.
+    x_grid : array
+        Grid of x values for plotting/debugging.
+    density : array
+        KDE density values on x_grid.
+    bandwidth : float
+        Bandwidth used for KDE (Silverman's rule).
+    """
+
+    data = np.asarray(data)
+    n = len(data)
+    sigma = np.std(data)
+
+    # Silverman's rule of thumb
+    bandwidth = 1.06 * sigma * n ** (-1 / 5)
+
+    # KDE fit
+    kde = KernelDensity(kernel='gaussian', bandwidth=bandwidth).fit(data.reshape(-1, 1))
+
+    # Evaluate density
+    x_grid = np.linspace(data.min(), data.max(), resolution)
+    log_dens = kde.score_samples(x_grid[:, None])
+    density = np.exp(log_dens)
+
+    # Peak detection
+    peaks, _ = find_peaks(density, height=max(density) * peak_height_frac)
+
+    modality = "unimodal" if len(peaks) <= 1 else "multimodal"
+    return modality, peaks, x_grid, density, bandwidth
+
+
+def get_gamma_svm(X_train, f=0.4):
+    '''
+    f : how many times larger you want gamma
+    '''
+    modality, peaks, x_grid, density, bandwidth = detect_modality_auto_bandwidth(X_train)
+    num_peaks = len(peaks)
+
+    if num_peaks <= 1 :
+        # Unimodal
+        sigma = ( iqr(X_train) / 1.349 )  # approximate standard deviation assuming normality
+        if sigma == 0.0:  # Fall back in case IQR is 0
+            sigma = np.std(X_train) / 16
+
+        sigma = sigma / np.sqrt(f)
+
+    else:
+        # Multimodal
+        # Suppose you detected k peaks
+        k = num_peaks  # from your detection method
+
+        # Cluster the data into k groups
+        data_reshaped = X_train.reshape(-1, 1)
+        labels = KMeans(n_clusters=k, n_init=10).fit_predict(data_reshaped)
+
+        # Compute per-cluster STD
+        cluster_stds = [np.std(X_train[labels == i]) for i in range(k)]
+
+        # Use average STD for gamma
+        sigma = np.mean(cluster_stds)
+
+    sigma = sigma / np.sqrt(f)
+    gamma = 1 / (2 * sigma ** 2)
+    return gamma
+
+
+def outlier_score_svm(X_train, X_test, nu=0.2, f=0.4, kernel='rbf', output='prediction'):
+    # Step 0 : Filter the train data to remove large outliers
+    X_train = X_train[
+        np.abs(X_train - np.median(X_train)) <= 5 * iqr(X_train)
+        ]
+
+    gamma = get_gamma_svm(X_train, f=f)
+    model = OneClassSVM(kernel=kernel, gamma=gamma, nu=nu)
+    model.fit(X_train.reshape(-1, 1))  # This is slow for high N ; e.g. 29 seconds for 69k samples
+
+    if output == 'prediction':
+        # Let the model decide what is the predicted output, score is set to 0
+        pred_svm = model.predict(X_test.reshape(-1, 1))
+        score_test = np.zeros(np.shape(pred_svm))
+    elif output == 'score':
+        # Outputting a score instead of directly the SVM prediction
+        scores_train = model.decision_function(X_train.reshape(-1, 1))
+        scores_test = model.decision_function(X_test.reshape(-1, 1))
+        threshold = np.percentile(scores_train, 100 * nu)  # nu fraction as outliers
+        pred_svm = np.where(scores_test >= threshold, 1, -1)
+
+    # map the OneClassSVM output from {1, -1} into {0, 1}
+    pred_svm_01 = np.where(pred_svm == -1, 1, 0)
+
+    return pred_svm_01, score_test
+
+
+def generate_testset(X_train):
+    val_iqr = 3 * iqr(X_train)
+    X_test = np.linspace(min(X_train) - val_iqr, max(X_train) + val_iqr, 100).reshape(-1, 1)
+    return X_test
+
+
+def score_svm_1pid(df_base, df_new, features, mapping,
+                   min_ch_outlier=20, n_pid=3, min_ch_compute=100, max_ch_compute = 3000, p_thresh_kde=0.98):
+    # Regions
+    regions = np.unique(df_new[mapping + "_id"]).astype(int)
+    # Store the features that are outlier per brain region in a dict
+    dictout = dict((el, list()) for el in regions.tolist())
+    dictout["mapping"] = mapping
+    dictout["features"] = features
+
+    for count, region in tqdm.tqdm(enumerate(regions), total=len(regions)):
+        # Get channel indices that are in region, but keeping all info besides features
+        idx_reg = np.where(df_new[mapping + "_id"] == region)
+        df_new_compute = df_new.iloc[idx_reg].copy()
+        df_new_compute["has_outliers"] = False
+
+        listout = list()
+        for feature in features:
+            # print(f"{feature} [{region}]")
+            # Load data for that regions
+            df_train = select_series(
+                df_base, features=[feature], acronym=None, id=region, mapping=mapping
+            )
+            # Get channel indices that are in region, keeping only feature values
+            df_test = select_series(
+                df_new, features=[feature], acronym=None, id=region, mapping=mapping
+            )
+
+            df_pid = select_series(
+                df_base, features=['pid'], acronym=None, id=region, mapping=mapping
+            )
+
+            # For all channels at once, test if outside the distribution for the given features
+            train_data = df_train.to_numpy()
+            test_data = df_test.to_numpy()
+
+            # print(f'Train N: {len(train_data)}, Test N: {len(test_data)}')
+
+            # Outlier → 1
+            # Inlier → 0
+
+            # score_out = 0 if N pid or N channel too small in training set
+            if bool((df_pid.nunique().values[0] >= n_pid) & (df_pid.shape[0] >= min_ch_compute)):
+                if len(train_data) > max_ch_compute:  # Apply KDE method as SVM model.fit is too slow for high N
+                    scoreq_out, _, _ = kde_proba_distribution(train_data, test_data)  # This is a score to be thresholded
+                    scoreq_out = scoreq_out.squeeze()  # TODO this should not be necessary, place in kde_proba_distribution
+                    score_out = scoreq_out > p_thresh_kde
+                    score_out = score_out.astype(int)
+
+                else:
+                    pred_svm, _ = outlier_score_svm(train_data, test_data)
+            else:
+                score_out = np.zeros(test_data.shape)
+            # Save into new column
+            df_new_compute[feature + "_extremes"] = score_out
+            # A region is assigned as having outliers if more than N minimum channels are outliers
+            has_outliers = sum(df_new_compute[feature + "_extremes"]) > np.floor(min_ch_outlier)
+            if has_outliers:
+                listout.append(feature)
+                if sum(
+                    df_new_compute["has_outliers"] == 0
+                ):  # Reassign only if entirely False
+                    df_new_compute["has_outliers"] = True
+        # Save appended list of feature in dict
+        dictout[region] = listout
+
+        # Concatenate dataframes
+        if count == 0:
+            df_save = df_new_compute.copy()
+        else:
+            df_save = pd.concat([df_save, df_new_compute])
+
+    if df_save["has_outliers"].sum() > 0:
+        has_outlier = True
+    else:
+        has_outlier = False
+
+    # Resort by channel
+    df_save = df_save.sort_values(by=["channel"])
+    return df_save, dictout, has_outlier
