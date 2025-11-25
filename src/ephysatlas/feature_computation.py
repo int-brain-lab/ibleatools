@@ -608,6 +608,7 @@ def compute_features_from_pid(
         duration (float, optional): Duration in seconds for feature computation. If None, uses the entire available duration.
         one (ONE): ONE client instance. Required for data loading.
         features_to_compute (list, optional): List of feature sets to compute. If None, uses default feature sets.
+          should be a subset of ['lf', 'ap', 'waveforms', 'csd']
         output_dir (Path, optional): Output directory for saving features and metadata. If None, features are not saved.
         recompute_channels (bool, optional): Whether to recompute channel information even if channels.pqt file is present. 
             Defaults to False.
@@ -755,7 +756,7 @@ def compute_features_from_pid(
 
         add_metadata_to_parquet_files(**snippet_attrs)
 
-    return df
+    return df.merge(pd.DataFrame(channels), left_on="channel", right_on="rawInd", how='inner')
 
 
 def compute_features_from_file(
