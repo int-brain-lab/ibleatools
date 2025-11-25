@@ -304,7 +304,9 @@ class AtlasReveal:
         df_pid_merged["confidence"] = np.max(
             df_pid_merged.loc[:, [str(c) for c in rids]], axis=1
         )
-        df_pid_merged["true_label_score"] = df_pid_merged.apply(lambda row: row[str(row['Cosmos_id'])] , axis=1)
+        df_pid_merged["true_label_score"] = df_pid_merged.apply(
+            lambda row: row[str(row["Cosmos_id"])], axis=1
+        )
         df_depths = df_pid_merged.drop("acronym", axis=1).groupby("axial_um").mean()
 
         fig, axs = plt.subplots(
@@ -425,7 +427,7 @@ class AtlasReveal:
         Note:
             The figure shows:
             - Coronal slice (AP view) at median y-coordinate
-            - Sagittal slice (ML view) at median x-coordinate  
+            - Sagittal slice (ML view) at median x-coordinate
             - Horizontal slice (DV view) at median z-coordinate
             - Both planned (target) and aligned (actual) probe trajectories
         """
