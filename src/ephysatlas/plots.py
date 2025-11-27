@@ -80,6 +80,7 @@ import logging
 import numpy as np
 import pandas as pd
 import scipy.stats
+import sklearn
 
 import matplotlib.pyplot as plt
 import matplotlib
@@ -253,8 +254,8 @@ def plot_results(df, predicted_probas, dict_model, regions=None):
         plots for each fold, and entropy analysis. It automatically handles both
         single-fold and multi-fold prediction arrays.
     """
-    features = dict_model["meta"]["FEATURES"][:-4]
-    aids = np.array(dict_model["meta"]["CLASSES"])
+    features = dict_model["FEATURES"][:-4]
+    aids = np.array(dict_model["CLASSES"])
     n_folds, n_channels, n_classes = predicted_probas.shape
     if predicted_probas.ndim == 2:
         predicted_probas = predicted_probas[np.newaxis, ...]
@@ -354,8 +355,8 @@ def get_color_feat(x, cmap_name="viridis", min_val=None, max_val=None):
         values to colors using the specified colormap. Values are clipped to
         the [0, 1] range during normalization.
     """
-    min_val = np.min(x) if min_val is None else min_val
-    max_val = np.max(x) if max_val is None else max_val
+    min_val = np.nanmin(x) if min_val is None else min_val
+    max_val = np.nanmax(x) if max_val is None else max_val
     # Normalise between 0-1
     cmap = matplotlib.colormaps[cmap_name]
     x_norm = (x - min_val) / (max_val - min_val)
@@ -568,22 +569,13 @@ def figure_features_channel_space(
         pid = '0228bcfd-632e-49bd-acd4-c334cf9213e9'
         pid_df = df_voltage[df_voltage.index.get_level_values(0).isin([pid])].copy()
     """
-    if br is None:
-        br = BrainRegions()
     if fig is None or axs is None:
         fig, axs = plt.subplots(1, len(features) + 4, sharey=False, figsize=(9, 5))
     if scaler is not None:
-        pid_df.loc[:, features] = scaler.transform(pid_df.loc[:, features])
+        with sklearn.config_context(assume_finite=True):
+            pid_df.loc[:, features] = scaler.transform(pid_df.loc[:, features])
 
-    brainbox.ephys_plots.plot_brain_regions(
-        pid_df[mapping+"_id"].values,
-        channel_depths=xy[:, 1],
-        brain_regions=br,
-        display=True,
-        ax=axs[0],
-    )
-    axs[0].set_title(mapping, rotation=90)
-
+    # plot all the features
     for i_feat, feature in enumerate(features):
         ax = axs[i_feat + 4]
         feat_arr = pid_df[[feature]].to_numpy()
@@ -595,29 +587,44 @@ def figure_features_channel_space(
         ax.set_xticklabels([])
         ax.set_yticklabels([])
 
-    # Plot brain region in space in unique colors
-    ax = axs[2]
-    d_uni = np.unique(pid_df[mapping + "_id"].to_numpy(), return_inverse=True)[1]
-    d_uni = d_uni.astype(np.float32)
-    color = get_color_feat(d_uni, cmap_name="Blues")
-    plot_probe_rect2(xy, color, ax=axs[2])
-    ax.set_title("unique region", rotation=90)
-    ax.set_xticklabels([])
-    ax.set_yticklabels([])
+    # plot brain regions if available
+    if br is None:
+        axs[0].axis("off")
+        axs[1].axis("off")
+        axs[2].axis("off")
+    else:
+        brainbox.ephys_plots.plot_brain_regions(
+            pid_df[mapping+"_id"].values,
+            channel_depths=xy[:, 1],
+            brain_regions=br,
+            display=True,
+            ax=axs[0],
+        )
+        axs[0].set_title(mapping, rotation=90)
 
-    # Plot brain region along probe depth with color code
-    ax = axs[1]
-    color = get_color_br(pid_df, br, mapping=mapping)
-    plot_probe_rect2(xy, color, ax=ax)
-    ax.set_title(mapping, rotation=90)
-    ax.set_xticklabels([])
-    ax.set_yticklabels([])
+        # Plot brain region along probe depth with color code
+        ax = axs[1]
+        color = get_color_br(pid_df, br, mapping=mapping)
+        plot_probe_rect2(xy, color, ax=ax)
+        ax.set_title(mapping, rotation=90)
+        ax.set_xticklabels([])
+        ax.set_yticklabels([])
+
+        # Plot brain region in space in unique colors
+        ax = axs[2]
+        d_uni = np.unique(pid_df[mapping + "_id"].to_numpy(), return_inverse=True)[1]
+        d_uni = d_uni.astype(np.float32)
+        color = get_color_feat(d_uni, cmap_name="Blues")
+        plot_probe_rect2(xy, color, ax=axs[2])
+        ax.set_title("unique region", rotation=90)
+        ax.set_xticklabels([])
+        ax.set_yticklabels([])
+
 
     axs[3].axis("off")
     # Add pid as suptitle
     # pid = pid_df.index[0][0]
     fig.suptitle(f"PID {pid}", y=0.08, fontweight="bold")
-
     # now adjust the figure
     adjust = 7.5
     # Depending on the location of axis labels leave a bit more space

@@ -1304,12 +1304,14 @@ class EphysTransformer(_EphysTransformerInterface):
 
     def transform(self, X: pd.DataFrame, y=None):
         self.validate_X(X)
-        xt = X.copy()
+        xt = pd.DataFrame()
         for column_name in X.columns:
             if column_name in self.fcn_transform_:
                 xt.loc[:, column_name] = self.fcn_transform_[column_name](
                     X[column_name].to_numpy()
                 )
+            else:
+                xt.loc[:, column_name] = X[column_name]
         return xt
 
 
@@ -1336,14 +1338,14 @@ class EphysDenoiser(_EphysTransformerInterface):
                 feature_name == "channel_labels"
             ):  # we do not want to apply any denoising to this feature
                 continue
-            fval = np.copy(X[feature_name].to_numpy())
+            fval = np.copy(X[feature_name].to_numpy()).astype(float)
             fval[channel_labels != 0] = np.nan
             logger.info(f"Calculation for feature_name = {feature_name}")
             denoised_values = denoise_shank(
                 feature=fval,
                 xy=X[["lateral_um", "axial_um"]].values,
                 fac=self.fac,
-            )
+            )  #.astype(X[feature_name].dtype)
             # Check that the denoised values have the expected length
             if len(denoised_values) != ns:
                 raise ValueError(
@@ -1351,8 +1353,7 @@ class EphysDenoiser(_EphysTransformerInterface):
                     f"denoised values length ({len(denoised_values)}) != "
                     f"DataFrame length ({ns})"
                 )
-            # Let pandas determine the appropriate dtype for the new values
-            X.loc[:, feature_name] = denoised_values
+            X.loc[:, feature_name] = denoised_values.astype(X[feature_name].dtype)
         return X
 
     def fit(self, X: pd.DataFrame = None, y=None):

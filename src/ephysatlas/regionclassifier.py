@@ -208,10 +208,9 @@ def infer_regions(df_inference, path_model, n_folds=5):
     for fold in range(n_folds):
         classifier, model_info = load_model(path_model.joinpath(f"FOLD0{fold}"))
 
-        df_inference["outside"] = 0
         df_inference_denoised = features.denoise_dataframe(df_inference)
 
-        x_test = df_inference_denoised.loc[:, model_info["meta"]["FEATURES"]].values
+        x_test = df_inference_denoised.loc[:, model_info["FEATURES"]].values
         y_pred = classifier.predict(x_test)
         y_probas = classifier.predict_proba(x_test)
 
