@@ -997,6 +997,7 @@ def compute_features_from_raw(
         des_ap = ibldsp.voltage.destripe(
             raw_ap,
             fs=fs_ap,
+            h = geometry,
             neuropixel_version=neuropixel_version,
             channel_labels=channel_labels,
             k_filter=False,
@@ -1007,6 +1008,7 @@ def compute_features_from_raw(
         des_lf = ibldsp.voltage.destripe_lfp(
             raw_lf,
             fs=fs_lf,
+            h = geometry,
             channel_labels=channel_labels,
         )
     else:

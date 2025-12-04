@@ -3,6 +3,25 @@
 This file documents the changes to the features for supported feature versions.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.0]
+
+### Added
+- Added `outlier_treatment` utility function in `ephysatlas.data` module for handling outlier channels in feature dataframes
+- Added `denoise` parameter to `infer_regions` function to optionally apply denoising during inference
+- Added `project` parameter to `atlas_pids` function to allow querying different IBL projects
+
+### Modified
+- Modified `EphysTransformer.transform` to preserve columns that are not in the transformation dictionary
+- Modified `EphysDenoiser.fit_transform` to preserve original feature dtypes after denoising
+- Modified `compute_features_from_pid` to return dataframe merged with channel information
+- Modified `get_aggregated_features_per_pid` and `denoise_raw_features_data` to use centralized `outlier_treatment` function
+- Modified `plot_results` to use updated model structure (accessing `FEATURES` and `CLASSES` directly from model dict)
+- Modified `figure_features_channel_space` to handle cases where brain regions are not available and use sklearn config context for NaN handling
+- Modified `get_color_feat` to use `np.nanmin` and `np.nanmax` instead of `np.min` and `np.max` for better NaN handling
+
+### Fixed
+- Fixed model loading structure in `infer_regions` to correctly unpack classifier and model_info from `load_model`
+
 ## [0.3.0]
 
 ### Added

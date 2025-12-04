@@ -110,6 +110,7 @@ class TestFeatureComputation(unittest.TestCase):
         geometry = {
             "x": np.zeros(n_channels),  # All channels in same column
             "y": np.arange(n_channels) * 20,  # 20 um spacing between channels
+            "sample_shift": np.zeros(n_channels),
         }
 
         # Test with a subset of features to avoid long computation time
@@ -204,6 +205,7 @@ class TestFeatureComputation(unittest.TestCase):
         geometry_ap = {
             "x": np.zeros(n_channels_ap),
             "y": np.arange(n_channels_ap) * 20,
+            "sample_shift": np.zeros(n_channels_ap),
         }
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -234,7 +236,8 @@ class TestFeatureComputation(unittest.TestCase):
             "x": np.zeros(n_channels_lf),
             "y": np.arange(n_channels_lf) * 20,
             "col": np.zeros(n_channels_lf),
-            "row": np.arange(n_channels_lf)
+            "row": np.arange(n_channels_lf),
+            "sample_shift": np.zeros(n_channels_lf),
         }
 
         with tempfile.TemporaryDirectory() as temp_dir:
