@@ -111,12 +111,12 @@ def atlas_pids_autism(one):
     return [item["id"] for item in ins_keep], ins_keep
 
 
-def atlas_pids(one, tracing=False, project='ibl_neuropixel_brainwide_01'):
+def atlas_pids(one, tracing=True, project='ibl_neuropixel_brainwide_01'):
     """Get atlas PIDs from the IBL neuropixel brainwide project.
 
     Args:
         one: ONE client instance for accessing the database.
-        tracing (bool, optional): If True, only return insertions with existing tracing. Defaults to False.
+        tracing (bool, optional): If True, only return insertions with existing tracing. Defaults to True.
 
     Returns:
         tuple: A tuple containing:
@@ -330,6 +330,27 @@ def download_tables(
     return local_path
 
 
+def outlier_treatment(df_features, columns = None, replace_with_nan=False):
+    #TODO can make it more general by allowing for different detection and replacement functions.
+    if columns is None:
+        return df_features
+    bad_index = False
+    for column in columns:
+        #Threshold based on a factor of the median value.
+        bad = df_features[column].values >= (1e3 * np.nanmedian(df_features[column]))
+        bad_index = np.logical_or(bad_index, bad)
+    if np.sum(bad) > 0:
+        _logger.warning(f"Number of bad channels: {np.sum(bad)},"
+                        f" those will be replaced with replace_with_nan = {replace_with_nan} strategy.")
+    for column in columns:
+        if replace_with_nan:
+            df_features.loc[bad_index, column] = np.nan
+        else:
+            df_features.loc[bad_index, column] = np.nanmedian(df_features[column])
+    
+    return df_features
+
+
 def read_features_from_disk(
     path_features: Path,
     brain_atlas: "iblatlas.atlas.BrainAtlas" = None,
@@ -409,17 +430,11 @@ def read_features_from_disk(
     if strict:
         df_features = pd.DataFrame(ephysatlas.features.ModelRawFeatures(df_features))
 
-    ialpha_bad = np.logical_or(
-        df_features['alpha_mean'].values >= (1e3 * np.nanmedian(df_features['alpha_mean'])),
-        df_features['alpha_std'].values >= 1e3 * np.nanmedian(df_features['alpha_std'])
-    )
-    # then we join with the channel information to get coordinates and anatomical information
-    if np.sum(ialpha_bad) > 0:
-        _logger.warning(f"Number of channels with bad alpha: {np.sum(ialpha_bad)},"
-                        f" those will be replaced with median values.")
-        df_features.loc[ialpha_bad, 'alpha_mean'] = np.nanmedian(df_features['alpha_mean'])
-        df_features.loc[ialpha_bad, 'alpha_std'] = np.nanmedian(df_features['alpha_std'])
+    #Do the outlier treatment for the alpha features.
+    df_features = outlier_treatment(df_features, columns = ['alpha_mean','alpha_std'])
+
     return df_features
+
 
 
 def compute_depth_dataframe(df_raw_features, df_clusters, df_channels):

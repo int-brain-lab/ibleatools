@@ -4,6 +4,7 @@ import logging
 import pandas as pd
 from functools import reduce
 from ephysatlas.utils import get_aggregated_snippets_df
+from ephysatlas.data import outlier_treatment
 from ephysatlas.features import ChannelDataFrameSchema, ModelRawFeatures
 from ephysatlas.features import denoise_dataframe
 import tqdm
@@ -320,16 +321,10 @@ def get_aggregated_features_per_pid(snippet_df_per_pid: pd.DataFrame):
     # Reset the index to make pid and channel regular columns
     agg_df_per_pid = agg_df_per_pid.reset_index()
 
-    #Filter out the channels with bad alpha
-    ialpha_bad = np.logical_or(
-        agg_df_per_pid['alpha_mean'].values >= (1e3 * np.nanmedian(agg_df_per_pid['alpha_mean'])),
-        agg_df_per_pid['alpha_std'].values >= 1e3 * np.nanmedian(agg_df_per_pid['alpha_std'])
-    )
-    # then we join with the channel information to get coordinates and anatomical information
-    logger.info(f"Number of channels with bad alpha: {np.sum(ialpha_bad)}")
-    agg_df_per_pid.loc[ialpha_bad, 'alpha_mean'] = np.nan
-    agg_df_per_pid.loc[ialpha_bad, 'alpha_std'] = np.nan
+    agg_df_per_pid = outlier_treatment(agg_df_per_pid, columns = ['alpha_mean','alpha_std'], replace_with_nan=True)
 
+
+    # then we join with the channel information to get coordinates and anatomical information
     # Load channel metadata (axial and lateral positions) from channels.pqt
     # Construct the path to the snippet directory to find its parent
     snippet_level_dir = Path(snippet_df_per_pid["base_level_dir"].iloc[0]) / Path(
@@ -455,6 +450,8 @@ def denoise_raw_features_data(
         df_pids.append(df_denoised.loc[:, original_columns])
     # Concatenate all denoised PID DataFrames
     df_features_denoise = pd.concat(df_pids)
+
+    df_features_denoise = outlier_treatment(df_features_denoise, columns = ['alpha_mean','alpha_std'])
 
     # Optionally save the denoised features to a Parquet file
     if output_dir is not None:

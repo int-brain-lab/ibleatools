@@ -580,7 +580,7 @@ def compute_features(
 
     return df
 
-
+#TODO  - Make the channel target detection as a optional step so that this function is not IBL specific.
 def compute_features_from_pid(
     pid=None,
     eid=None,
