@@ -111,7 +111,7 @@ def atlas_pids_autism(one):
     return [item["id"] for item in ins_keep], ins_keep
 
 
-def atlas_pids(one, tracing=False):
+def atlas_pids(one, tracing=False, project='ibl_neuropixel_brainwide_01'):
     """Get atlas PIDs from the IBL neuropixel brainwide project.
 
     Args:
@@ -124,7 +124,7 @@ def atlas_pids(one, tracing=False):
             - List of full insertion information
     """
     django_strg = [
-        "session__projects__name__icontains,ibl_neuropixel_brainwide_01",
+        f"session__projects__name__icontains,{project}",
         "~json__qc,CRITICAL",
         # 'session__extended_qc__behavior,1',
         "session__json__IS_MOCK,False",
