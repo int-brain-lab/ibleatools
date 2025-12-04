@@ -18,13 +18,15 @@ PROJECT = 'ea_active'
 VINTAGE = '2025_W39'
 LOWQ = ephysatlas.fixtures.misaligned_pids
 
+
 root_path_features = Path(f'/datadisk/Data/paper-ephys-atlas/ephys-atlas-decoding/features')  # ferret
 path_features = root_path_features.joinpath(PROJECT, VINTAGE, 'agg_full')
 
 if not path_features.exists():
     from one.api import ONE
     one = ONE()
-    ephysatlas.data.download_tables(path_features, label=VINTAGE, one=one)
+    ephysatlas.data.list_available_labels(one=one, project=PROJECT)
+    path_features = ephysatlas.data.download_tables(root_path_features, label=VINTAGE, one=one)
 
 brain_atlas = ephysatlas.anatomy.ClassifierAtlas()
 
@@ -55,11 +57,6 @@ x_list = ephysatlas.features.voltage_features_set(FEATURE_SET)
 #  'psd_residual_lfp',
 #  'psd_residual_theta']))
 
-
-# x_list = list(set(x_list) - set(
-#     ['decay_fit_error',
-#  'decay_fit_r_squared'
-#      ]))
 
 
 x_list.append("outside")

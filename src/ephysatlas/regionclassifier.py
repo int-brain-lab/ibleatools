@@ -187,7 +187,7 @@ def viterbi(
     return sequence, sequence_prob
 
 
-def infer_regions(df_inference, path_model, n_folds=5):
+def infer_regions(df_inference, path_model, n_folds=5, denoise=False):
     """Infer brain regions using a trained classifier model across multiple folds.
 
     This function loads a trained model for each fold and performs inference on the input data.
@@ -206,13 +206,12 @@ def infer_regions(df_inference, path_model, n_folds=5):
               predicted region labels for each fold.
     """
     for fold in range(n_folds):
-        dict_model = load_model(path_model.joinpath(f"FOLD0{fold}"))
-        classifier = dict_model["classifier"]
+        classifier, model_info = load_model(path_model.joinpath(f"FOLD0{fold}"))
 
-        df_inference["outside"] = 0
-        df_inference_denoised = features.denoise_dataframe(df_inference)
+        if denoise:
+            df_inference = features.denoise_dataframe(df_inference)
 
-        x_test = df_inference_denoised.loc[:, dict_model["meta"]["FEATURES"]].values
+        x_test = df_inference.loc[:, model_info["FEATURES"]].values
         y_pred = classifier.predict(x_test)
         y_probas = classifier.predict_proba(x_test)
 
