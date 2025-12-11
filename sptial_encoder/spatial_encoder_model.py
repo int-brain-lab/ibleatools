@@ -451,20 +451,3 @@ def evaluate_r2_per_feature(model, test_dl, ephys_mean, ephys_std, device="cuda"
 
 def unstandardize(X: torch.Tensor, mean: torch.Tensor, std: torch.Tensor):
     return X * std + mean
-
-def download_pretrained_model(local_path, model_name, overwrite=True):
-    # Get AWS credentials
-    one = ONE()
-    s3, bucket_name = aws.get_s3_from_alyx(alyx=one.alyx)
-
-    path = f"aggregates/atlas/models/{model_name}"
-
-    local_files = aws.s3_download_folder(
-        path,
-        local_path.joinpath(model_name),
-        s3=s3,
-        bucket_name=bucket_name,
-        overwrite=overwrite,
-    )
-
-    return local_path.joinpath(model_name)

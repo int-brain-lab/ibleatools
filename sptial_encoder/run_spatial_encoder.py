@@ -1,16 +1,19 @@
 import os
+from ephysatlas.regionclassifier import download_model
+from one.api import ONE
 
 from spatial_encoder_model import *
 from spatial_encoder_utils import *
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
-train_model = True
+train_model = False
 
 # 0) Load relevant data from AWS
 # Download pretrained model from aws
 local_path = os.getcwd()
-model_name = 'SE_model'
-path_to_model = download_pretrained_model(local_path, model_name, overwrite=True)
+model_name = '2024_W43_SE_model'
+one = ONE()
+path_to_model = download_model(local_path=Path(local_path), model_name=model_name, one=one)
 
 # 1) Build a context manager - enable drawing the agea & merfish PC vector given xyz coordinates
 print("Generating context grid")
@@ -59,7 +62,7 @@ if(train_model):
     )
     torch.save(model.state_dict(), f'{model_name}/SE_model.pth')
 else:
-    model.load_state_dict(torch.load(path_to_model))
+    model.load_state_dict(torch.load(f'{path_to_model}/SE_model.pth'))
 
 e_mean = model.e_mean
 e_std = model.e_std
