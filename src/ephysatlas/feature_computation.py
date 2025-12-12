@@ -399,7 +399,7 @@ def load_data_from_pid(
         except Exception as e:
             # Handle any other errors during channel loading
             logger.error(f"Failed to load channels: {str(e)}")
-            logger.debug("Exception details:", exc_info=True)
+            logger.error("Exception details:", exc_info=True)
             channels = {}
 
     # Log session information for debugging
@@ -580,6 +580,7 @@ def compute_features(
 
     return df
 
+#TODO - Add the time taken to compute the features using a decorator, and it can be used for each feature computation as well.
 #TODO  - Make the channel target detection as a optional step so that this function is not IBL specific.
 def compute_features_from_pid(
     pid=None,
@@ -705,6 +706,7 @@ def compute_features_from_pid(
     if probe_level_dir is not None and (
         not file_channels.exists() or (recompute_channels)
     ):
+        #TODO - There is something wierd and unexpected with this file locking mechanism (Need to investigate more)
         try:
             # Use file locking to prevent concurrent writes
             lock_file = str(file_channels) + ".lock"
@@ -756,6 +758,7 @@ def compute_features_from_pid(
 
         add_metadata_to_parquet_files(**snippet_attrs)
 
+    #TODO - the rawInd here is not always avaialbe.
     return df.merge(pd.DataFrame(channels), left_on="channel", right_on="rawInd", how='inner')
 
 
@@ -938,7 +941,6 @@ def compute_features_from_raw(
         - Each feature DataFrame is annotated with ibleatools and feature module
           versions for provenance tracking.
     """
-
     if raw_ap is None and raw_lf is None:
         raise ValueError("One of the AP or LF data must be provided")
 
