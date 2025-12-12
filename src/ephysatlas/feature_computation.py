@@ -703,6 +703,10 @@ def compute_features_from_pid(
     # TODO have another condition that checks if the existing channels file has all channels or if it matches the channels dict.
     # TODO Make a module channel computation function that takes probe_level_dir AND pid(because it should work for non pid case as well) as an input.
     # Save channel information to file if it doesn't exist or if recomputation is requested
+    # If I don't go inside this if block, then channel contains "rawInd", and if I go inside this if block,
+    # then "rawInd" gets replaced with "channel". 
+    # This is a problem because depending on if the channel file already exists or if I am creating the channels
+    # dictionary for the first time, the "rawInd" column will be different.
     if probe_level_dir is not None and (
         not file_channels.exists() or (recompute_channels)
     ):
@@ -758,8 +762,10 @@ def compute_features_from_pid(
 
         add_metadata_to_parquet_files(**snippet_attrs)
 
-    #TODO - the rawInd here is not always avaialbe.
-    return df.merge(pd.DataFrame(channels), left_on="channel", right_on="rawInd", how='inner')
+    if "rawInd" in channels:
+        return df.merge(pd.DataFrame(channels), left_on="channel", right_on="rawInd", how='inner')
+    else:
+        return df.merge(pd.DataFrame(channels), left_on="channel", right_on="channel", how='inner') 
 
 
 def compute_features_from_file(
