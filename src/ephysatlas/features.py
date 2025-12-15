@@ -1499,7 +1499,7 @@ class EphysTransformer(_EphysTransformerInterface):
         for feature_name in self._get_feature_names(X):
             if (
                 metadata := raw_features_schema.columns[feature_name].metadata
-            ) is not None:
+            ) is not None and ("transform" in metadata):
                 self.fcn_transform_[feature_name] = metadata["transform"]
 
     def transform(self, X: pd.DataFrame, y=None):
