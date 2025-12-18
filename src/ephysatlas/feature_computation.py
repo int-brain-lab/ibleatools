@@ -403,7 +403,7 @@ def load_data_from_pid(
             channels = {}
 
     # Log session information for debugging
-    logger.info(f"Session path: {ssl.session_path}, probe name: {ssl.pname}")
+    logger.info(f"Session path: {ssl.session_path}, probe name: {ssl.pname}, eid: {ssl.eid}")
     return sr_ap, sr_lf, channels
 
 

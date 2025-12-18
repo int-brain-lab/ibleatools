@@ -453,6 +453,8 @@ def denoise_raw_features_data(
 
     df_features_denoise = outlier_treatment(df_features_denoise, columns = ['alpha_mean','alpha_std'])
 
+    df_features_denoise = replace_nan(df_features_denoise, columns = df_features_denoise.columns)
+
     # Optionally save the denoised features to a Parquet file
     if output_dir is not None:
         # Create the output directory if it doesn't exist
