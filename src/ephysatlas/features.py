@@ -362,58 +362,63 @@ class ModelLfFeatures(BaseChannelFeatures):
             "raw_unit": "dB rel. V**2/Hz"}
     )
     psd_residual_lfp: Optional[Series[float]] = pa.Field(
-        coerce=True,
         description="Power in the band 0 - 90 Hz in decibels relative to V ** 2 / Hz after removing the linear fit of the psd decay in log-log space",
         metadata={
             "raw_unit": "dB rel. V**2/Hz"},
         nullable=True
     )
-    psd_residual_delta: Optional[Series[float]] = pa.Field(coerce=True,
+    psd_residual_delta: Optional[Series[float]] = pa.Field(
         description="Power in the band 0 - 4 Hz in decibels relative to V ** 2 / Hz after removing the linear fit of the psd decay in log-log space",
         metadata={
             "raw_unit": "dB rel. V**2/Hz"},
         nullable=True)
-    psd_residual_theta: Optional[Series[float]] = pa.Field(coerce=True,
+    psd_residual_theta: Optional[Series[float]] = pa.Field(
         description="Power in the band 4 - 10 Hz in decibels relative to V ** 2 / Hz after removing the linear fit of the psd decay in log-log space",
         metadata={
             "raw_unit": "dB rel. V**2/Hz"},
         nullable=True)
-    psd_residual_alpha: Optional[Series[float]] = pa.Field(coerce=True,
+    psd_residual_alpha: Optional[Series[float]] = pa.Field(
         description="Power in the band 8 - 12 Hz in decibels relative to V ** 2 / Hz after removing the linear fit of the psd decay in log-log space",
         metadata={
             "raw_unit": "dB rel. V**2/Hz"},
         nullable=True)
-    psd_residual_beta: Optional[Series[float]] = pa.Field(coerce=True,
+    psd_residual_beta: Optional[Series[float]] = pa.Field(
         description="Power in the band 15 - 30 Hz in decibels relative to V ** 2 / Hz after removing the linear fit of the psd decay in log-log space",
         metadata={
             "raw_unit": "dB rel. V**2/Hz"},
         nullable=True)
-    psd_residual_gamma: Optional[Series[float]] = pa.Field(coerce=True,
+    psd_residual_gamma: Optional[Series[float]] = pa.Field(
         description="Power in the band 30 - 90 Hz in decibels relative to V ** 2 / Hz after removing the linear fit of the psd decay in log-log space",
         metadata={
             "raw_unit": "dB rel. V**2/Hz"},
         nullable=True)
     aperiodic_offset: Optional[Series[float]] = pa.Field(
-        coerce=True, description="Y-intercept for the fit of the psd decay in log-log space",
+        nullable=True,
+        description="Y-intercept for the fit of the psd decay in log-log space",
         metadata={
             "raw_unit": "dB rel. V**2/Hz" }
     )
     aperiodic_exponent: Optional[Series[float]] = pa.Field(
-        coerce=True, description="Slope for the fit of the psd decay in log-log space",
+        nullable=True,
+        description="Slope for the fit of the psd decay in log-log space",
         metadata={
             "raw_unit": "dB rel. V**2/Hz"}
     )
-    decay_fit_error: Optional[Series[float]] = pa.Field(coerce=True, description="RMS error of the fit of the psd decay in log-log space",
+    decay_fit_error: Optional[Series[float]] = pa.Field(
+        nullable=True,
+        description="RMS error of the fit of the psd decay in log-log space",
         metadata={
             "raw_unit": "dB rel. V**2/Hz"}
     )
     decay_fit_r_squared: Optional[Series[float]] = pa.Field(
-        coerce=True, description="R-squared value of the fit of the psd decay in log-log space",
+        nullable=True,
+        description="R-squared value of the fit of the psd decay in log-log space",
         metadata={
             "raw_unit": "dimensionless"}
     )
-    decay_n_peaks: Optional[Series[int]] = pa.Field(
-        coerce=True, description="Number of peaks detected in the residual plot after removing the linear fit of the psd decay in log-log space",
+    decay_n_peaks: Optional[Series[float]] = pa.Field(coerce=True,
+        nullable=True,
+        description="Number of peaks detected in the residual plot after removing the linear fit of the psd decay in log-log space",
         metadata={
             "raw_unit": "count"}
     )
@@ -877,6 +882,18 @@ def get_psd_decay_features(data, fs, fscale, period, bands, nperseg=2048, PSD_ra
 
     # Fit individual PSD over 3-40 Hz range
     for i in range(psd_arr.shape[0]):
+        if np.sum(psd_arr[i,:]) == 0:
+            result_dict = {"aperiodic_offset": np.nan,
+                        "aperiodic_exponent": np.nan,
+                        "decay_fit_error" : np.nan,
+                        "decay_fit_r_squared" : np.nan,
+                        "decay_n_peaks" : np.nan,
+                        }
+            for b in BANDS:
+                result_dict[f"psd_residual_{b}"] = np.nan
+            result_list.append(result_dict)
+            continue
+
         fm.fit(frequencies, psd_arr[i,:], PSD_range)
 
         fit_result = fm.get_results()
@@ -913,7 +930,6 @@ def get_psd_decay_features(data, fs, fscale, period, bands, nperseg=2048, PSD_ra
 
 
     return psd_decay_features
-
 
 
 def lf(data, fs, bands=None):

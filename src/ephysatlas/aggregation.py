@@ -4,7 +4,7 @@ import logging
 import pandas as pd
 from functools import reduce
 from ephysatlas.utils import get_aggregated_snippets_df
-from ephysatlas.data import outlier_treatment
+from ephysatlas.data import outlier_treatment, replace_nan
 from ephysatlas.features import ChannelDataFrameSchema, ModelRawFeatures
 from ephysatlas.features import denoise_dataframe
 import tqdm
