@@ -3,6 +3,23 @@
 This file documents the changes to the features for supported feature versions.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.0]
+
+### Added
+- Added `replace_nan` utility function in `ephysatlas.data` module for replacing NaN values with median in feature dataframes
+- Added `ibl-neuropixel==1.9.1` dependency (pinned to avoid compatibility issues with ibldsp.cazdow filter)
+- Added comprehensive metadata (descriptions, raw units, transformed units) to all schema field definitions in feature models
+
+### Modified
+- Modified `denoise_raw_features_data` to apply `replace_nan` after outlier treatment to handle remaining NaN values
+- Modified `compute_features_from_pid` merge logic to handle both `rawInd` and `channel` column names in channels dictionary (temporary fix)
+
+### Fixed
+- Fixed assert message path in `download_tables` function (changed from `aggregates/atlas/{project}/{label}` to `aggregates/atlas/features/{project}/{label}`)
+- Fixed edge case in `get_psd_decay_features` to handle channels with zero-sum PSD by returning NaN values
+- Fixed edge case in `denoise_shank` to handle cases with no valid data points
+- Fixed `EphysTransformer.transform` to properly check for transform metadata before accessing it
+
 ## [0.4.0]
 
 ### Added
