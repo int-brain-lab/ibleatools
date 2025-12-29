@@ -201,7 +201,11 @@ def get_aggregated_snippets_df(probe_level_dir: Path) -> pd.DataFrame:
 
     for subdir in probe_level_dir.iterdir():
         if subdir.is_dir():
-            data.append(get_metadata_for_snippet(subdir))
+            snip_metadata = get_metadata_for_snippet(subdir)
+            if snip_metadata:
+                data.append(snip_metadata)
+            else:
+                logger.warning(f"No metadata found for {subdir}")
 
     df = pd.DataFrame(data)
     return df

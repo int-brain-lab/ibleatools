@@ -1463,7 +1463,7 @@ def denoise_shank(
         algorithm to smooth the feature values while preserving edges.
     """
     isvalid = ~np.isnan(feature)
-    if np.count_nonzero(isvalid) == 0:
+    if np.count_nonzero(isvalid) < 5: #Grid data interpolation requires at least 5 valid points
         return feature
     xyu = np.unique(xy[:, 0]), np.unique(xy[:, 1])
     x, y = np.meshgrid(*xyu)

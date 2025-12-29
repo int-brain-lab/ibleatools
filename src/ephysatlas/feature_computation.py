@@ -738,6 +738,7 @@ def compute_features_from_pid(
             logger.debug("Exception details:", exc_info=True)
 
     # Compute features using the online feature computation pipeline
+    #TODO I need to add a try except here such that if one of the features fails we still have metadata information
     df = online_feature_computation(
         sr_ap=sr_ap,
         sr_lf=sr_lf,

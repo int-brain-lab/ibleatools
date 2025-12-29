@@ -3,6 +3,7 @@ from typing import List
 import logging
 import pandas as pd
 from functools import reduce
+from joblib import Parallel, delayed
 from ephysatlas.utils import get_aggregated_snippets_df
 from ephysatlas.data import outlier_treatment, replace_nan
 from ephysatlas.features import ChannelDataFrameSchema, ModelRawFeatures
@@ -18,11 +19,11 @@ logger = logging.getLogger(__name__)
 
 # TODO - There can be a better way to specify both of these arguments - maybe only one is needed.
 def aggregate_all_probes(
-    path_list: List[Path], base_level_dir: Path | None | str = None
+    path_list: List[Path], base_level_dir: Path | None | str = None, n_jobs: int = -1, verbose: int = 1
 ):
     """Aggregate snippet-level data from multiple probe directories into a single DataFrame.
 
-    This function iterates over a list of probe directory paths, calling `get_aggregated_snippets_df` on each to extract and concatenate their snippet-level data into a unified DataFrame. Optionally, it can annotate the result with a `base_level_dir` column in case the base_directory is moved.
+    This function processes a list of probe directory paths in parallel using joblib, calling `get_aggregated_snippets_df` on each to extract and concatenate their snippet-level data into a unified DataFrame. Optionally, it can annotate the result with a `base_level_dir` column in case the base_directory is moved.
 
     Args:
         path_list (List[pathlib.Path]): List of Path objects, each pointing to a probe directory containing snippet-level data to aggregate. Each directory must be compatible with `get_aggregated_snippets_df`.
@@ -39,13 +40,18 @@ def aggregate_all_probes(
 
     Note:
         - Each path in `path_list` should point to a directory structure compatible with `get_aggregated_snippets_df`.
+        - The function processes all paths in parallel using all available CPU cores (n_jobs=-1).
         - The function ignores index continuity and resets the index in the returned DataFrame.
         - If `base_level_dir` is provided, it is stored as a string in the 'base_level_dir' column for all rows.
         - This function does not perform validation on the contents of the aggregated DataFrames beyond concatenation.
     """
-    df = pd.DataFrame()
-    for path in path_list:
-        df = pd.concat([df, get_aggregated_snippets_df(path)], ignore_index=True)
+    # Process all paths in parallel using joblib
+    dfs = Parallel(n_jobs=n_jobs, verbose=verbose)(
+        delayed(get_aggregated_snippets_df)(path) for path in path_list
+    )
+    
+    # Concatenate all results into a single DataFrame
+    df = pd.concat(dfs, ignore_index=True)
 
     if base_level_dir is not None:
         df["base_level_dir"] = Path(base_level_dir).as_posix()
@@ -346,12 +352,12 @@ def get_aggregated_features_per_pid(snippet_df_per_pid: pd.DataFrame):
 
 
 def get_aggregated_raw_features(
-    snippet_df: pd.DataFrame, output_dir: Path | None = None
+    snippet_df: pd.DataFrame, output_dir: Path | None = None, n_jobs: int = -1, verbose: int = 1
 ):
     """Process and aggregate raw features for multiple probe IDs (PIDs) across all their snippets.
 
     This function takes a DataFrame containing snippet information for multiple PIDs, processes each PID
-    individually using `get_aggregated_features_per_pid`, and combines all results into a single DataFrame.
+    individually in parallel using `get_aggregated_features_per_pid`, and combines all results into a single DataFrame.
     The final result is indexed by ('pid', 'channel') and optionally saved to a Parquet file.
 
     Args:
@@ -361,6 +367,8 @@ def get_aggregated_raw_features(
             - 'snippet_level_dir': Relative path to the snippet directory
         output_dir (Path or None, optional): If provided, the aggregated DataFrame is saved as 'raw_ephys_features.pqt' in this directory.
             The directory is created if it does not exist. Default is None (no file is written).
+        n_jobs (int, optional): Number of parallel jobs to run. -1 means using all processors. Default is -1.
+        verbose (int, optional): Verbosity level for joblib.Parallel. 0 means no messages, 1 means progress messages, >1 means more detailed messages. Default is 1.
 
     Returns:
         pandas.DataFrame: A DataFrame indexed by ('pid', 'channel') containing aggregated raw electrophysiological features
@@ -379,18 +387,20 @@ def get_aggregated_raw_features(
 
     Note:
         - Each PID is processed independently using `get_aggregated_features_per_pid`.
-        - The function groups the input DataFrame by 'pid' and processes each group separately.
+        - The function groups the input DataFrame by 'pid' and processes each group in parallel using joblib.
         - If `output_dir` is provided, the result is saved as 'raw_ephys_features.pqt'.
         - The function handles multiple PIDs efficiently by aggregating the features for a PID before concatting across multiple pids.
     """
-    # Initialize an empty DataFrame to store results from all PIDs
-    agg_df = pd.DataFrame()
-    # Process each PID separately
-    for idx, pid_df in snippet_df.groupby("pid"):
-        # Get aggregated features for this specific PID
-        agg_df_per_pid = get_aggregated_features_per_pid(pid_df)
-        # Concatenate with the accumulated results
-        agg_df = pd.concat([agg_df, agg_df_per_pid], ignore_index=True)
+    # Collect all PID groups
+    pid_groups = [pid_df for _, pid_df in snippet_df.groupby("pid")]
+    
+    # Process all PIDs in parallel using joblib
+    agg_dfs = Parallel(n_jobs=n_jobs, verbose=verbose)(
+        delayed(get_aggregated_features_per_pid)(pid_df) for pid_df in pid_groups
+    )
+    
+    # Concatenate all results into a single DataFrame
+    agg_df = pd.concat(agg_dfs, ignore_index=True)
     # Set the multi-index to (pid, channel)
     agg_df = agg_df.set_index(["pid", "channel"])
 
@@ -405,12 +415,12 @@ def get_aggregated_raw_features(
 
 
 def denoise_raw_features_data(
-    agg_raw_ephys_features: pd.DataFrame, output_dir: Path | None = None
+    agg_raw_ephys_features: pd.DataFrame, output_dir: Path | None = None, n_jobs: int = -1, verbose: int = 1
 ):
     """Apply denoising to aggregated raw electrophysiological features for each probe ID (PID).
 
     This function takes aggregated raw features and applies denoising algorithms to reduce noise
-    and improve signal quality. The denoising is performed PID-by-PID using the `denoise_dataframe`
+    and improve signal quality. The denoising is performed PID-by-PID in parallel using the `denoise_dataframe`
     function, which requires channel labels for each PID. The process preserves the original column
     structure while handling nan and noisy results.
 
@@ -419,6 +429,8 @@ def denoise_raw_features_data(
             ('pid', 'channel'). Must contain a 'channel_labels' column for each PID.
         output_dir (Path or None, optional): If provided, the denoised DataFrame is saved as 'raw_ephys_features_denoised.pqt' in this directory.
             The directory is created if it does not exist. Default is None (no file is written).
+        n_jobs (int, optional): Number of parallel jobs to run. -1 means using all processors. Default is -1.
+        verbose (int, optional): Verbosity level for joblib.Parallel. 0 means no messages, 1 means progress messages, >1 means more detailed messages. Default is 1.
 
     Returns:
         pandas.DataFrame: A DataFrame with the same structure as the input but with denoised feature values.
@@ -431,23 +443,32 @@ def denoise_raw_features_data(
         >>> print(denoised_df.head())
 
     Note:
-        - The function processes each PID separately to apply PID-specific denoising.
+        - The function processes each PID separately in parallel to apply PID-specific denoising.
         - Denoising requires channel labels, which must be present in the 'channel_labels' column.
         - The denoising factor (fac) is set to 1, which can be adjusted in the denoise_dataframe function.
         - If `output_dir` is provided, the result is saved as 'raw_ephys_features_denoised.pqt'.
     """
     # Store the original column names to preserve structure
     original_columns = agg_raw_ephys_features.columns.tolist()
-    # Initialize list to store denoised DataFrames for each PID
-    df_pids = []
-    # Process each PID separately for denoising
-    for pid, df_pid in tqdm.tqdm(agg_raw_ephys_features.groupby("pid")):
-        # Apply denoising to the features for this PID
+    
+    # Helper function to process a single PID group
+    def denoise_pid(pid_df_tuple):
+        pid, df_pid = pid_df_tuple
+        logger.info(f"Denoising for PID: {pid}")
         df_denoised = denoise_dataframe(
             df_pid, fac=1, channel_labels=df_pid["channel_labels"].to_numpy()
         )
         # Keep only the original columns to maintain structure
-        df_pids.append(df_denoised.loc[:, original_columns])
+        return df_denoised.loc[:, original_columns]
+    
+    # Collect all PID groups
+    pid_groups = list(agg_raw_ephys_features.groupby("pid"))
+    
+    # Process all PIDs in parallel using joblib
+    df_pids = Parallel(n_jobs=n_jobs, verbose=verbose)(
+        delayed(denoise_pid)(pid_group) for pid_group in pid_groups
+    )
+    
     # Concatenate all denoised PID DataFrames
     df_features_denoise = pd.concat(df_pids)
 
