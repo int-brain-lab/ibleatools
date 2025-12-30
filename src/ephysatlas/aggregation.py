@@ -8,7 +8,6 @@ from ephysatlas.utils import get_aggregated_snippets_df
 from ephysatlas.data import outlier_treatment, replace_nan
 from ephysatlas.features import ChannelDataFrameSchema, ModelRawFeatures
 from ephysatlas.features import denoise_dataframe
-import tqdm
 import numpy as np
 
 # Set up logger
