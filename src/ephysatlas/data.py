@@ -326,7 +326,7 @@ def download_tables(
             overwrite=overwrite,
         )
     
-    assert len(local_files), f"aggregates/atlas/{project}/{label} not found on AWS"
+    assert len(local_files), f"aggregates/atlas/features/{project}/{label} not found on AWS"
     return local_path
 
 
@@ -350,6 +350,17 @@ def outlier_treatment(df_features, columns = None, replace_with_nan=False):
     
     return df_features
 
+
+def replace_nan(df_features, columns = None):
+    if columns is None:
+        return df_features
+    for column in columns:
+        if np.isnan(df_features[column]).sum() > 0:
+            _logger.warning(f"Number of nan values in column {column}: {np.isnan(df_features[column]).sum()}")
+            df_features.loc[np.isnan(df_features[column]), column] = np.nanmedian(df_features[column])
+        else:
+            _logger.info(f"No nan values in column {column}")
+    return df_features
 
 def read_features_from_disk(
     path_features: Path,

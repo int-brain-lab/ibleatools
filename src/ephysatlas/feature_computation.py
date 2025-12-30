@@ -399,11 +399,11 @@ def load_data_from_pid(
         except Exception as e:
             # Handle any other errors during channel loading
             logger.error(f"Failed to load channels: {str(e)}")
-            logger.debug("Exception details:", exc_info=True)
+            logger.error("Exception details:", exc_info=True)
             channels = {}
 
     # Log session information for debugging
-    logger.info(f"Session path: {ssl.session_path}, probe name: {ssl.pname}")
+    logger.info(f"Session path: {ssl.session_path}, probe name: {ssl.pname}, eid: {ssl.eid}")
     return sr_ap, sr_lf, channels
 
 
@@ -580,6 +580,7 @@ def compute_features(
 
     return df
 
+#TODO - Add the time taken to compute the features using a decorator, and it can be used for each feature computation as well.
 #TODO  - Make the channel target detection as a optional step so that this function is not IBL specific.
 def compute_features_from_pid(
     pid=None,
@@ -702,9 +703,14 @@ def compute_features_from_pid(
     # TODO have another condition that checks if the existing channels file has all channels or if it matches the channels dict.
     # TODO Make a module channel computation function that takes probe_level_dir AND pid(because it should work for non pid case as well) as an input.
     # Save channel information to file if it doesn't exist or if recomputation is requested
+    # If I don't go inside this if block, then channel contains "rawInd", and if I go inside this if block,
+    # then "rawInd" gets replaced with "channel". 
+    # This is a problem because depending on if the channel file already exists or if I am creating the channels
+    # dictionary for the first time, the "rawInd" column will be different.
     if probe_level_dir is not None and (
         not file_channels.exists() or (recompute_channels)
     ):
+        #TODO - There is something wierd and unexpected with this file locking mechanism (Need to investigate more)
         try:
             # Use file locking to prevent concurrent writes
             lock_file = str(file_channels) + ".lock"
@@ -732,6 +738,7 @@ def compute_features_from_pid(
             logger.debug("Exception details:", exc_info=True)
 
     # Compute features using the online feature computation pipeline
+    #TODO I need to add a try except here such that if one of the features fails we still have metadata information
     df = online_feature_computation(
         sr_ap=sr_ap,
         sr_lf=sr_lf,
@@ -756,7 +763,10 @@ def compute_features_from_pid(
 
         add_metadata_to_parquet_files(**snippet_attrs)
 
-    return df.merge(pd.DataFrame(channels), left_on="channel", right_on="rawInd", how='inner')
+    if "rawInd" in channels:
+        return df.merge(pd.DataFrame(channels), left_on="channel", right_on="rawInd", how='inner')
+    else:
+        return df.merge(pd.DataFrame(channels), left_on="channel", right_on="channel", how='inner') 
 
 
 def compute_features_from_file(
@@ -938,7 +948,6 @@ def compute_features_from_raw(
         - Each feature DataFrame is annotated with ibleatools and feature module
           versions for provenance tracking.
     """
-
     if raw_ap is None and raw_lf is None:
         raise ValueError("One of the AP or LF data must be provided")
 

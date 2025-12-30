@@ -6,6 +6,14 @@ The features are released when necessary with the following tag: yyyy_Www
 This file documents the changes to the features for supported feature versions.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2025_W51] (to be updated with actual week number)
+
+### Modified
+- Modified aggregation pipeline to replace NaN values with median after outlier treatment in `denoise_raw_features_data`
+
+### Fixed
+- Fixed spectral parameterization feature computation to handle edge cases where PSD sum is zero by returning NaN values for aperiodic and residual features
+
 ## [2025_W43]
   - Added bad alpha filtering in aggregation pipeline to improve data quality
 
