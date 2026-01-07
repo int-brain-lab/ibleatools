@@ -133,7 +133,7 @@ import ibldsp.voltage
 logger = logging.getLogger(__name__)
 
 __features_version__ = (
-    "2025.10.24"  # this is the version of this feature extractor code
+    "2025.12.18"  # this is the version of this feature extractor code
 )
 
 
@@ -242,15 +242,58 @@ class ChannelDataFrameSchema(pa.DataFrameModel):
         acronym (Series[str]): Brain region acronym.
         atlas_id (Series[int]): Atlas region identifier.
     """
-    pid: Series[str] = pa.Field()
-    channel: Series[int] = pa.Field()
-    x: Series[float] = pa.Field()
-    y: Series[float] = pa.Field()
-    z: Series[float] = pa.Field()
-    axial_um: Series[float] = pa.Field(coerce=True)
-    lateral_um: Series[float] = pa.Field(coerce=True)
-    acronym: Series[str] = pa.Field()
-    atlas_id: Series[int] = pa.Field()
+    pid: Series[str] = pa.Field(
+        coerce=True,
+        description="Probe insertion ID",
+        metadata={
+            "raw_unit": "N/A"}
+    )
+    channel: Series[int] = pa.Field(
+        coerce=True,
+        description="Channel index",
+        metadata={
+            "raw_unit": "index"}
+    )
+    x: Series[float] = pa.Field(
+        coerce=True,
+        description="X-coordinate in micrometers",
+        metadata={
+            "raw_unit": "um"}
+    )
+    y: Series[float] = pa.Field(
+        coerce=True,
+        description="Y-coordinate in micrometers",
+        metadata={
+            "raw_unit": "um"}
+    )
+    z: Series[float] = pa.Field(
+        coerce=True,
+        description="Z-coordinate in micrometers",
+        metadata={
+            "raw_unit": "um"}
+    )
+    axial_um: Series[float] = pa.Field(
+        coerce=True,
+        description="Distance along the probe length (depth)",
+        metadata={
+            "raw_unit": "um"}
+    )
+    lateral_um: Series[float] = pa.Field(
+        coerce=True,
+        description="Distance along the probe width",
+        metadata={
+            "raw_unit": "um"}
+    )
+    acronym: Series[str] = pa.Field(
+        description="Brain region acronym in the Allen mapping",
+        metadata={
+            "raw_unit": "N/A"}
+    )
+    atlas_id: Series[int] = pa.Field(
+        description="Atlas region identifier in Allen mapping",
+        metadata={
+            "raw_unit": "N/A"}
+    )
 
 
 class BaseChannelFeatures(pa.DataFrameModel):
@@ -282,25 +325,103 @@ class ModelLfFeatures(BaseChannelFeatures):
         psd_lfp (Series[float]): Power spectral density in full LFP band (0-90 Hz).
     """
     rms_lf: Series[float] = pa.Field(
-        coerce=True, metadata={"transform": lambda x: 20 * np.log10(x)}
+        coerce=True, description="Root mean square of LFP signal in V. The value is transformed to dB using 20 * np.log10(x)",
+        metadata={
+            "raw_unit": "V",
+            "transformed_unit": "dB rel. V",
+            "transform": lambda x: 20 * np.log10(x)}
     )
-    psd_lfp: Series[float] = pa.Field(coerce=True)
-    psd_delta: Series[float] = pa.Field(coerce=True)
-    psd_theta: Series[float] = pa.Field(coerce=True)
-    psd_alpha: Series[float] = pa.Field(coerce=True)
-    psd_beta: Series[float] = pa.Field(coerce=True)
-    psd_gamma: Series[float] = pa.Field(coerce=True)
-    psd_residual_lfp: Optional[Series[float]] = pa.Field(coerce=True, nullable=True)
-    psd_residual_delta: Optional[Series[float]] = pa.Field(coerce=True, nullable=True)
-    psd_residual_theta: Optional[Series[float]] = pa.Field(coerce=True, nullable=True)
-    psd_residual_alpha: Optional[Series[float]] = pa.Field(coerce=True, nullable=True)
-    psd_residual_beta: Optional[Series[float]] = pa.Field(coerce=True, nullable=True)
-    psd_residual_gamma: Optional[Series[float]] = pa.Field(coerce=True, nullable=True)
-    aperiodic_offset: Optional[Series[float]] = pa.Field(coerce=True)
-    aperiodic_exponent: Optional[Series[float]] = pa.Field(coerce=True)
-    decay_fit_error: Optional[Series[float]] = pa.Field(coerce=True)
-    decay_fit_r_squared: Optional[Series[float]] = pa.Field(coerce=True)
-    decay_n_peaks: Optional[Series[int]] = pa.Field(coerce=True)
+    psd_lfp: Series[float] = pa.Field(
+        coerce=True, description="Power in the band 0 - 90 Hz in decibels relative to V ** 2 / Hz",
+        metadata={
+            "raw_unit": "dB rel. V**2/Hz"}
+    )
+    psd_delta: Series[float] = pa.Field(
+        coerce=True, description="Power in the band 0 - 4 Hz in decibels relative to V ** 2 / Hz",
+        metadata={
+            "raw_unit": "dB rel. V**2/Hz"}
+    )
+    psd_theta: Series[float] = pa.Field(
+        coerce=True, description="Power in the band 4 - 10 Hz in decibels relative to V ** 2 / Hz",
+        metadata={
+            "raw_unit": "dB rel. V**2/Hz"}
+    )
+    psd_alpha: Series[float] = pa.Field(
+        coerce=True, description="Power in the band 8 - 12 Hz in decibels relative to V ** 2 / Hz",
+        metadata={
+            "raw_unit": "dB rel. V**2/Hz"}
+    )
+    psd_beta: Series[float] = pa.Field(
+        coerce=True, description="Power in the band 15 - 30 Hz in decibels relative to V ** 2 / Hz",
+        metadata={
+            "raw_unit": "dB rel. V**2/Hz"}
+    )
+    psd_gamma: Series[float] = pa.Field(
+        coerce=True, description="Power in the band 30 - 90 Hz in decibels relative to V ** 2 / Hz",
+        metadata={
+            "raw_unit": "dB rel. V**2/Hz"}
+    )
+    psd_residual_lfp: Optional[Series[float]] = pa.Field(
+        description="Power in the band 0 - 90 Hz in decibels relative to V ** 2 / Hz after removing the linear fit of the psd decay in log-log space",
+        metadata={
+            "raw_unit": "dB rel. V**2/Hz"},
+        nullable=True
+    )
+    psd_residual_delta: Optional[Series[float]] = pa.Field(
+        description="Power in the band 0 - 4 Hz in decibels relative to V ** 2 / Hz after removing the linear fit of the psd decay in log-log space",
+        metadata={
+            "raw_unit": "dB rel. V**2/Hz"},
+        nullable=True)
+    psd_residual_theta: Optional[Series[float]] = pa.Field(
+        description="Power in the band 4 - 10 Hz in decibels relative to V ** 2 / Hz after removing the linear fit of the psd decay in log-log space",
+        metadata={
+            "raw_unit": "dB rel. V**2/Hz"},
+        nullable=True)
+    psd_residual_alpha: Optional[Series[float]] = pa.Field(
+        description="Power in the band 8 - 12 Hz in decibels relative to V ** 2 / Hz after removing the linear fit of the psd decay in log-log space",
+        metadata={
+            "raw_unit": "dB rel. V**2/Hz"},
+        nullable=True)
+    psd_residual_beta: Optional[Series[float]] = pa.Field(
+        description="Power in the band 15 - 30 Hz in decibels relative to V ** 2 / Hz after removing the linear fit of the psd decay in log-log space",
+        metadata={
+            "raw_unit": "dB rel. V**2/Hz"},
+        nullable=True)
+    psd_residual_gamma: Optional[Series[float]] = pa.Field(
+        description="Power in the band 30 - 90 Hz in decibels relative to V ** 2 / Hz after removing the linear fit of the psd decay in log-log space",
+        metadata={
+            "raw_unit": "dB rel. V**2/Hz"},
+        nullable=True)
+    aperiodic_offset: Optional[Series[float]] = pa.Field(
+        nullable=True,
+        description="Y-intercept for the fit of the psd decay in log-log space",
+        metadata={
+            "raw_unit": "dB rel. V**2/Hz" }
+    )
+    aperiodic_exponent: Optional[Series[float]] = pa.Field(
+        nullable=True,
+        description="Slope for the fit of the psd decay in log-log space",
+        metadata={
+            "raw_unit": "dB rel. V**2/Hz"}
+    )
+    decay_fit_error: Optional[Series[float]] = pa.Field(
+        nullable=True,
+        description="RMS error of the fit of the psd decay in log-log space",
+        metadata={
+            "raw_unit": "dB rel. V**2/Hz"}
+    )
+    decay_fit_r_squared: Optional[Series[float]] = pa.Field(
+        nullable=True,
+        description="R-squared value of the fit of the psd decay in log-log space",
+        metadata={
+            "raw_unit": "dimensionless"}
+    )
+    decay_n_peaks: Optional[Series[float]] = pa.Field(coerce=True,
+        nullable=True,
+        description="Number of peaks detected in the residual plot after removing the linear fit of the psd decay in log-log space",
+        metadata={
+            "raw_unit": "count"}
+    )
 
 class ModelCsdFeatures(BaseChannelFeatures):
     """Schema for current source density features.
@@ -319,14 +440,42 @@ class ModelCsdFeatures(BaseChannelFeatures):
         psd_lfp_csd (Series[float]): CSD power spectral density in full LFP band (0-90 Hz).
     """
     rms_lf_csd: Series[float] = pa.Field(
-        coerce=True, metadata={"transform": lambda x: 20 * np.log10(x)}
+        coerce=True, description="Root mean square of CSD signal in V. The value is transformed to dB using 20 * np.log10(x)",
+        metadata={
+            "raw_unit": "V",
+            "transformed_unit": "dB rel. V",
+            "transform": lambda x: 20 * np.log10(x)}
     )
-    psd_delta_csd: Series[float] = pa.Field(coerce=True)
-    psd_theta_csd: Series[float] = pa.Field(coerce=True)
-    psd_alpha_csd: Series[float] = pa.Field(coerce=True)
-    psd_beta_csd: Series[float] = pa.Field(coerce=True)
-    psd_gamma_csd: Series[float] = pa.Field(coerce=True)
-    psd_lfp_csd: Series[float] = pa.Field(coerce=True)
+    psd_delta_csd: Series[float] = pa.Field(
+        coerce=True, description="Power in the band 0 - 4 Hz after current source density estimation in decibels relative to V ** 2 / Hz",
+        metadata={
+            "raw_unit": "dB rel. V**2/Hz"}
+    )
+    psd_theta_csd: Series[float] = pa.Field(
+        coerce=True, description="Power in the band 4 - 10 Hz after current source density estimation in decibels relative to V ** 2 / Hz",
+        metadata={
+            "raw_unit": "dB rel. V**2/Hz"}
+    )
+    psd_alpha_csd: Series[float] = pa.Field(
+        coerce=True, description="Power in the band 8 - 12 Hz after current source density estimation in decibels relative to V ** 2 / Hz",
+        metadata={
+            "raw_unit": "dB rel. V**2/Hz"}
+    )
+    psd_beta_csd: Series[float] = pa.Field(
+        coerce=True, description="Power in the band 15 - 30 Hz after current source density estimation in decibels relative to V ** 2 / Hz",
+        metadata={
+            "raw_unit": "dB rel. V**2/Hz"}
+    )
+    psd_gamma_csd: Series[float] = pa.Field(
+        coerce=True, description="Power in the band 30 - 90 Hz after current source density estimation in decibels relative to V ** 2 / Hz",
+        metadata={
+            "raw_unit": "dB rel. V**2/Hz"}
+    )
+    psd_lfp_csd: Series[float] = pa.Field(
+        coerce=True, description="Power in the band 0 - 90 Hz after current source density estimation in decibels relative to V ** 2 / Hz",
+        metadata={
+            "raw_unit": "dB rel. V**2/Hz"}
+    )
 
 
 class ModelApFeatures(BaseChannelFeatures):
@@ -341,10 +490,29 @@ class ModelApFeatures(BaseChannelFeatures):
         channel_labels (Series[int]): Quality labels for channels.
     """
     rms_ap: Series[float] = pa.Field(
-        coerce=True, metadata={"transform": lambda x: 20 * np.log10(x)}
+        coerce=True, description="Root mean square of AP signal in V. The value is transformed to dB using 20 * np.log10(x)",
+        metadata={
+            "raw_unit": "V",
+            "transformed_unit": "dB rel. V",
+            "transform": lambda x: 20 * np.log10(x)}
     )
-    cor_ratio: Series[float] = pa.Field(coerce=True)
-    channel_labels: Series[int] = pa.Field(coerce=True)
+    cor_ratio: Series[float] = pa.Field(
+        coerce=True, 
+        description="Ratio of the median of zero-lag cross-correlations with neighbouring channels over zero-lag autocorrelation",
+        metadata={
+            "raw_unit": "dimensionless"}
+    )
+    channel_labels: Series[int] = pa.Field(
+        coerce=True, 
+        description=(
+            "Quality labels for channels. 0 means a good channel, values higher than 0 means a bad channel. "
+            "1: dead low coherence / amplitude, "
+            "2: noisy, "
+            "3: outside of the brain"
+        ),
+        metadata={
+            "raw_unit": ""}
+    )
 
 
 class ModelSpikeFeatures(BaseChannelFeatures):
@@ -369,18 +537,36 @@ class ModelSpikeFeatures(BaseChannelFeatures):
         trough_time_secs (Series[float]): Time to trough in seconds.
         trough_val (Series[float]): Trough amplitude value.
     """
-    alpha_mean: Series[float] = pa.Field(coerce=True)
-    alpha_std: Series[float] = pa.Field(coerce=True)
+    alpha_mean: Series[float] = pa.Field(
+        coerce=True,
+        description="Average brightness of the spike (output of the spike localisation code)",
+        metadata={
+            "raw_unit": "N/A"}
+    )
+    alpha_std: Series[float] = pa.Field(
+        coerce=True,
+        description="Standard deviation of the brightness of the spike (output of the spike localisation code)",
+        metadata={
+            "raw_unit": "N/A"}
+    )
     depolarisation_slope: Series[float] = pa.Field(coerce=True)
     peak_time_secs: Series[float] = pa.Field(coerce=True)
     peak_val: Series[float] = pa.Field(coerce=True)
-    polarity: Series[float] = pa.Field(coerce=True)
+    polarity: Series[float] = pa.Field(
+        coerce=True,
+        description="Sum of each spike polarity divided by the total number of spikes",
+        metadata={
+            "raw_unit": "dimensionless"}
+    )
     recovery_slope: Series[float] = pa.Field(coerce=True)
     recovery_time_secs: Series[float] = pa.Field(coerce=True)
     repolarisation_slope: Series[float] = pa.Field(coerce=True)
     spike_count: float = pa.Field(
         coerce=True,
+        description="log2 transformed value of mean spike counts (where the mean is calculated across the snippets by replacing the null values with 0)",
         metadata={
+            "raw_unit": "count",
+            "transformed_unit": "log2 count",
             "transform": lambda x: np.where(x == 0, np.nan, np.log2(x.astype(float)))
         },
     )
@@ -400,8 +586,16 @@ class ModelChannelLayout(BaseChannelFeatures):
         axial_um (Series[float]): Axial distance in micrometers.
         lateral_um (Series[float]): Lateral distance in micrometers.
     """
-    axial_um: Series[float] = pa.Field(coerce=True)
-    lateral_um: Series[float] = pa.Field(coerce=True)
+    axial_um: Series[float] = pa.Field(
+        coerce=True, 
+        description="Distance along the probe length (depth)",
+        metadata={"raw_unit": "um"}
+    )
+    lateral_um: Series[float] = pa.Field(
+        coerce=True, 
+        description="Distance along the probe width",
+        metadata={"raw_unit": "um"}
+    )
 
 
 class ModelHistologyPlanned(BaseChannelFeatures):
@@ -415,9 +609,21 @@ class ModelHistologyPlanned(BaseChannelFeatures):
         y_target (Series[float]): Target Y-coordinate in micrometers.
         z_target (Series[float]): Target Z-coordinate in micrometers.
     """
-    x_target: Series[float] = pa.Field(coerce=True)
-    y_target: Series[float] = pa.Field(coerce=True)
-    z_target: Series[float] = pa.Field(coerce=True)
+    x_target: Series[float] = pa.Field(
+        coerce=True, description="Target X-coordinate in micrometers using the micro-manipulator trajectory",
+        metadata={
+            "raw_unit": "um"}
+    )
+    y_target: Series[float] = pa.Field(
+        coerce=True, description="Target Y-coordinate in micrometers using the micro-manipulator trajectory",
+        metadata={
+            "raw_unit": "um"}
+    )
+    z_target: Series[float] = pa.Field(
+        coerce=True, description="Target Z-coordinate in micrometers using the micro-manipulator trajectory",
+        metadata={
+            "raw_unit": "um"}
+    )
 
 
 class ModelHistologyResolved(BaseChannelFeatures):
@@ -433,11 +639,34 @@ class ModelHistologyResolved(BaseChannelFeatures):
         atlas_id (Series[int]): Atlas region identifier.
         acronym (Series[str]): Brain region acronym.
     """
-    x: Series[float] = pa.Field(coerce=True)
-    y: Series[float] = pa.Field(coerce=True)
-    z: Series[float] = pa.Field(coerce=True)
-    atlas_id: Series[int] = pa.Field(coerce=True)
-    acronym: Series[str] = pa.Field(coerce=True)
+    x: Series[float] = pa.Field(
+        coerce=True,
+        description=" x-position in um from Bregma (in IBL coordinates space). Coordinates at the most recent histology step",
+        metadata={
+            "raw_unit": "um"}
+
+    )
+    y: Series[float] = pa.Field(coerce=True,
+        description=" y-position in um from Bregma (in IBL coordinates space). Coordinates at the most recent histology step",
+        metadata={
+            "raw_unit": "um"}
+    )
+    z: Series[float] = pa.Field(coerce=True,
+        description=" z-position in um from Bregma (in IBL coordinates space). Coordinates at the most recent histology step",
+        metadata={
+            "raw_unit": "um"}
+    )
+    atlas_id: Series[int] = pa.Field(
+        coerce=True,
+        description="Atlas region identifier in Allen mapping",
+        metadata={
+            "raw_unit": "N/A"}
+    )
+    acronym: Series[str] = pa.Field(coerce=True,
+        description="Brain region acronym in the Allen mapping",
+        metadata={
+            "raw_unit": "N/A"}
+    )
 
 
 class ModelRawFeatures(
@@ -653,6 +882,18 @@ def get_psd_decay_features(data, fs, fscale, period, bands, nperseg=2048, PSD_ra
 
     # Fit individual PSD over 3-40 Hz range
     for i in range(psd_arr.shape[0]):
+        if np.sum(psd_arr[i,:]) == 0:
+            result_dict = {"aperiodic_offset": np.nan,
+                        "aperiodic_exponent": np.nan,
+                        "decay_fit_error" : np.nan,
+                        "decay_fit_r_squared" : np.nan,
+                        "decay_n_peaks" : np.nan,
+                        }
+            for b in BANDS:
+                result_dict[f"psd_residual_{b}"] = np.nan
+            result_list.append(result_dict)
+            continue
+
         fm.fit(frequencies, psd_arr[i,:], PSD_range)
 
         fit_result = fm.get_results()
@@ -689,7 +930,6 @@ def get_psd_decay_features(data, fs, fscale, period, bands, nperseg=2048, PSD_ra
 
 
     return psd_decay_features
-
 
 
 def lf(data, fs, bands=None):
@@ -1223,6 +1463,8 @@ def denoise_shank(
         algorithm to smooth the feature values while preserving edges.
     """
     isvalid = ~np.isnan(feature)
+    if np.count_nonzero(isvalid) < 5: #Grid data interpolation requires at least 5 valid points
+        return feature
     xyu = np.unique(xy[:, 0]), np.unique(xy[:, 1])
     x, y = np.meshgrid(*xyu)
     xyi = np.c_[x.flatten(), y.flatten()]
@@ -1299,7 +1541,7 @@ class EphysTransformer(_EphysTransformerInterface):
         for feature_name in self._get_feature_names(X):
             if (
                 metadata := raw_features_schema.columns[feature_name].metadata
-            ) is not None:
+            ) is not None and ("transform" in metadata):
                 self.fcn_transform_[feature_name] = metadata["transform"]
 
     def transform(self, X: pd.DataFrame, y=None):
