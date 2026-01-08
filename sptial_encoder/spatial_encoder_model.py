@@ -9,9 +9,6 @@ import numpy as np
 from tqdm import tqdm
 from typing import Optional
 
-from one.api import ONE
-from one.remote import aws
-
 def mlp(d_in, d_hidden, d_out, n_layers=2, drop=0.0):
     layers = [nn.Linear(d_in, d_hidden), nn.GELU()]
     for _ in range(n_layers - 1):
@@ -245,7 +242,7 @@ def get_query_repr_and_pred(model, ctx_q, reg_q, p_q, e_n, reg_n, p_n, mask_nei)
     return h_q.squeeze(1), mu, logvar
 
 def train_hybrid(
-    model, train_dl, val_dl, optimizer, epochs=10, device="cuda",
+    model, train_dl, val_dl, optimizer, epochs=10, device=torch.device("cuda"),
     lambda_sup=1.0, lambda_ctr=0.2, tau=0.2, pos_radius_um=600.0,
     heteroscedastic=True, grad_clip=1.0, log_every=50,
     *,
@@ -268,10 +265,12 @@ def train_hybrid(
         best_epoch: epoch index (1-based) with best monitored metric
         best_value: best monitored metric value
     """
+    device_type = device.type
     model.to(device)
     pos_radius_m = pos_radius_um * 1e-6
     meters = {"train/sup":[], "train/ctr":[], "train/total":[], "val/sup":[], "val/corr":[]}
-    scaler = torch.cuda.amp.GradScaler(enabled=(device=="cuda"))
+    use_grad_scaler = device_type in ['cuda', 'mps']
+    scaler = torch.amp.GradScaler(device_type, enabled=use_grad_scaler)
 
     # Early stopping state
     if mode not in ("min", "max"):
@@ -297,7 +296,7 @@ def train_hybrid(
                 x.to(device) if torch.is_tensor(x) else x for x in batch
             ]
             optimizer.zero_grad(set_to_none=True)
-            with torch.amp.autocast('cuda'):
+            with torch.amp.autocast(device_type=device_type, enabled=use_grad_scaler):
                 mask_dropped = mask.clone()
                 mask_dropped[np.random.permutation(np.arange(mask.shape[0]))[:int(ephys_drop * len(mask))]] = False
                 h_q, mu, logvar = get_query_repr_and_pred(model, ctx_q, reg_q, p_q, e_n, reg_n, p_n, mask_dropped)
@@ -338,7 +337,7 @@ def train_hybrid(
             model.eval()
             vs = vc = 0.0
             m = 0
-            with torch.no_grad(), torch.amp.autocast('cuda'):
+            with torch.no_grad(), torch.amp.autocast(device_type=device_type, enabled=use_grad_scaler):
                 for batch in val_dl:
                     (ctx_q, reg_q, p_q, e_n, reg_n, p_n, mask, has_ephys, y_e, vox_count, *_) = [
                         x.to(device) if torch.is_tensor(x) else x for x in batch
@@ -409,15 +408,17 @@ def train_hybrid(
 
 # ---------- R^2 (per feature) on test ----------
 @torch.no_grad()
-def evaluate_r2_per_feature(model, test_dl, ephys_mean, ephys_std, device="cuda"):
+def evaluate_r2_per_feature(model, test_dl, ephys_mean, ephys_std, device=torch.device("cuda")):
     print("Evaluating R2 for each feature")
+    device_type = device.type
+    use_autocast = device_type in ['cuda', 'mps']
     model.eval()
     F = ephys_mean.numel()
     # accumulate in ORIGINAL scale
     ss_res = torch.zeros(F, device=device)
     sum_y  = torch.zeros(F, device=device)
     n_obs  = 0
-    with torch.cuda.amp.autocast(enabled=(device=="cuda")):
+    with torch.amp.autocast(device_type=device_type, enabled=use_autocast):
         for batch in tqdm(test_dl):
             (ctx_q, reg_q, p_q, e_n, reg_n, p_n, mask, has_ephys, y, vox_count, *_) = [
                 x.to(device) if torch.is_tensor(x) else x for x in batch
@@ -438,7 +439,7 @@ def evaluate_r2_per_feature(model, test_dl, ephys_mean, ephys_std, device="cuda"
     ybar = sum_y / n_obs
     # need one more pass for ss_tot (or store sumsq). Let's store sumsq:
     ss_tot = torch.zeros(F, device=device)
-    with torch.cuda.amp.autocast(enabled=(device=="cuda")):
+    with torch.amp.autocast(device_type=device_type, enabled=use_autocast):
         for batch in test_dl:
             (ctx_q, reg_q, p_q, e_n, reg_n, p_n, mask, has_ephys, y, vox_count, *_) = [
                 x.to(device) if torch.is_tensor(x) else x for x in batch

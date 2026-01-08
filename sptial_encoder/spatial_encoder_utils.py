@@ -1,4 +1,6 @@
 import pandas as pd
+import numpy as np
+import torch
 
 import ephysatlas.fixtures
 from ephysatlas.data import download_tables, read_features_from_disk
@@ -14,10 +16,9 @@ from sklearn.preprocessing import StandardScaler
 
 from typing import Tuple
 from dataclasses import dataclass
-from collections import defaultdict, Counter
+from collections import Counter
 from torch.utils.data import DataLoader, ConcatDataset, Dataset
 
-from spatial_encoder_model import *
 
 FEATURE_LIST = [
     'rms_lf', 'psd_lfp', 'psd_alpha', 'psd_beta', 'psd_gamma', 'psd_delta', 'psd_theta',
