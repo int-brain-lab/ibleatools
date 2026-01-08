@@ -170,18 +170,22 @@ def gaussian_nll(mu_std: torch.Tensor, logvar: Optional[torch.Tensor], y_std: to
     return nll.mean()
 
 def masked_mse(mu, y, mask):
-    if mask.sum() == 0: return mu.new_tensor(0.0)
+    if mask.sum() == 0: 
+        return mu.new_tensor(0.0)
     d = (mu - y)[mask]
     return (d*d).mean()
 
 @torch.no_grad()
 def mean_feature_corr(mu, y, mask=None):
     if mask is not None:
-        mu = mu[mask]; y = y[mask]
-    if mu.numel()==0: return mu.new_tensor(float('nan'))
+        mu = mu[mask]
+        y = y[mask]
+    if mu.numel()==0:
+        return mu.new_tensor(float('nan'))
     mu = mu - mu.mean(dim=1, keepdim=True)
     y  = y  - y.mean(dim=1, keepdim=True)
-    mu = F.normalize(mu, dim=1); y = F.normalize(y, dim=1)
+    mu = F.normalize(mu, dim=1)
+    y = F.normalize(y, dim=1)
     return (mu*y).sum(dim=1).mean()
 
 def info_nce_multi_positive(z, xyz, pos_radius_m: float, tau: float = 0.2):
@@ -310,7 +314,8 @@ def train_hybrid(
                 # contrastive
                 ctr = torch.tensor(0.0, device=device)
                 if (~has_ephys).sum() >= 2:
-                    z = h_q[~has_ephys]; xyz = p_q[~has_ephys]
+                    z = h_q[~has_ephys]
+                    xyz = p_q[~has_ephys]
                     ctr, _ = info_nce_multi_positive(z, xyz, pos_radius_m, tau=tau)
 
                 loss = lambda_sup * sup + lambda_ctr * ctr
@@ -322,7 +327,9 @@ def train_hybrid(
             scaler.step(optimizer)
             scaler.update()
 
-            r_sup += sup.item(); r_ctr += ctr.item(); r_tot += loss.item()
+            r_sup += sup.item()
+            r_ctr += ctr.item()
+            r_tot += loss.item()
             n_steps += 1
             if (step % log_every) == 0:
                 print(f"[ep {ep} step {step}] sup={r_sup/n_steps:.4f} ctr={r_ctr/n_steps:.4f} tot={r_tot/n_steps:.4f}")

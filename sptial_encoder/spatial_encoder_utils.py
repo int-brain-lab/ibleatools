@@ -300,7 +300,9 @@ def build_channels_plus_emptyvoxels_with_neighbors(
     ys = np.arange(0, Yh, dtype=int)
     zs = np.arange(0, Zh, dtype=int)
     XX, ZZ, YY = np.meshgrid(xs, zs, ys, indexing='ij')
-    xi = XX.reshape(-1); zi = ZZ.reshape(-1); yi = YY.reshape(-1)
+    xi = XX.reshape(-1)
+    zi = ZZ.reshape(-1)
+    yi = YY.reshape(-1)
     N  = xi.size
 
     ijk   = np.stack([xi, yi, zi], axis=1)
@@ -319,7 +321,7 @@ def build_channels_plus_emptyvoxels_with_neighbors(
 
     ctx_all   = np.asarray(ctx_all, dtype=np.float32)   # [N, F_ctx]
     allen_all = np.asarray(allen_all, dtype=np.int64)
-    F_ctx     = int(ctx_all.shape[1])
+    # F_ctx     = int(ctx_all.shape[1])
     F_e       = int(ephys.shape[-1])
 
     # --- mark voxels that have any ephys channels, to keep only "empty" ones for grid_ds ---
@@ -500,7 +502,6 @@ def downsample_keys_from_xyz(ctx_manager, xyz_m, ds_rate=8):
     return xi, zi, yi
 
 def compute_voxel_with_ephys(ctx_manager, probe_positions, xi, yi, zi):
-    from collections import defaultdict
     N = xi.size
 
     ch_xyz = probe_positions if len(probe_positions.shape) == 2 else probe_positions.reshape(-1, 3)
@@ -536,13 +537,15 @@ class ChannelNN:
         out = []
         X = self.X
         for q in q_xyz_m:
-            if X.shape[0]==0: out.append(np.array([], dtype=int)); continue
+            if X.shape[0]==0:
+                out.append(np.array([], dtype=int))
+                continue
             d2 = np.sum((X - q[None,:])**2, axis=1)
-            I = np.where(d2 <= (r_m**2))[0]
-            if I.size > 8:
-                J = np.argpartition(d2[I], 8)[:8]
-                I = I[J]
-            out.append(I)
+            filtered_indices = np.where(d2 <= (r_m**2))[0]
+            if filtered_indices.size > 8:
+                J = np.argpartition(d2[filtered_indices], 8)[:8]
+                filtered_indices = filtered_indices[J]
+            out.append(filtered_indices)
         return out
 
 # ---------- collate that injects neighbors ----------
@@ -597,11 +600,11 @@ class NeighborCollate:
         neigh_lists = self.nn.query_radius(p_q.numpy(), r_m=self.r_m, k_cap=8*self.M)
 
         for b in range(B):
-            key = (xi[b], zi[b], yi[b])
+            _ = (xi[b], zi[b], yi[b])
 
             # Exclude same-probe neighbors for recorded voxels
             exclude_pids = set()
-            if has_ephys[b] and self.allow_same_probe == False:
+            if has_ephys[b] and not self.allow_same_probe:
                 exclude_pids = {pids[b].item()}
 
             # build neighbor set
