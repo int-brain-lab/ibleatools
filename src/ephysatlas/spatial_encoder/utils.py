@@ -45,7 +45,7 @@ class ContextAtlasManager:
     Handles loading raw atlases, computing PCs, caching transforms, sampling,
     and now: saving/loading precomputed context to/from disk.
     """
-    def __init__(self, cfg: AtlasPCAConfig, model_name: str, regenerate_context: bool = False):
+    def __init__(self, cfg: AtlasPCAConfig, model_name: str, regenerate_context: bool = False, output_dir: Path = Path('.')):
         brain_atlas = AllenAtlas()
         self.bc = brain_atlas.bc
         self.cfg = cfg
@@ -89,11 +89,11 @@ class ContextAtlasManager:
             cell_type_vol[:, zero_ind[0], zero_ind[1], zero_ind[2]] = 0
             gene_exp_vol[:,  zero_ind[0], zero_ind[1], zero_ind[2]] = 0
 
-            np.save(f'{model_name}/agea_vol_pca', gene_exp_vol)
-            np.save(f'{model_name}/merfish_vol_pca', cell_type_vol)
+            np.save(output_dir / f'{model_name}/agea_vol_pca', gene_exp_vol)
+            np.save(output_dir / f'{model_name}/merfish_vol_pca', cell_type_vol)
         else:
-            gene_exp_vol = np.load(f'{model_name}/agea_vol_pca.npy')
-            cell_type_vol = np.load(f'{model_name}/merfish_vol_pca.npy')
+            gene_exp_vol = np.load(output_dir / f'{model_name}/agea_vol_pca.npy')
+            cell_type_vol = np.load(output_dir / f'{model_name}/merfish_vol_pca.npy')
 
         self.cell_pca = cell_type_vol                  # [P_cell, Xh, Zh, Yh]
         self.gene_pca = gene_exp_vol                   # [P_gene, Xh, Zh, Yh]
@@ -141,10 +141,11 @@ class ContextAtlasManager:
 # Ephys Atlas
 # ===========================
 def LoadInsertionData(
-    raw_date: bool = False,
+    raw_data: bool = False,
     project: str = 'ea_active',
     agg: str = 'agg_full',
     VINTAGE: str = '2025_W43',
+    path_data: Path = Path('.')
 ):
     """
     Loads table-based ephys features and concatenates per-channel averaged waveform latents
@@ -156,12 +157,12 @@ def LoadInsertionData(
     """
 
     print("Loading ephys features")
-    if raw_date:
-        df_features = pd.read_parquet('../ephys-atlas-decoding/features/2025_W27/raw_ephys_features.pqt')
-        channels = pd.read_parquet('../ephys-atlas-decoding/features/2025_W27/channels.pqt')
+    if raw_data:
+        df_features = pd.read_parquet(path_data / f'{project}/{VINTAGE}/{agg}/raw_ephys_features_denoised.pqt')
+        channels = pd.read_parquet(path_data / f'{project}/{VINTAGE}/{agg}/channels.pqt')
     else:
         one = ONE(base_url='https://alyx.internationalbrainlab.org')
-        path_data = Path('../ephys-atlas-decoding/features')
+        # path_data = Path('../ephys-atlas-decoding/features')
         path_data = download_tables(path_data, label=VINTAGE, project=project, one=one, agg_level=agg)
         df_features = read_features_from_disk(path_data, strict=False)
 
@@ -175,7 +176,7 @@ def LoadInsertionData(
         xyz = np.zeros((384, 3), dtype=np.float32)
         xyz_planned = np.zeros((384, 3), dtype=np.float32)
 
-        if raw_date:
+        if raw_data:
             channel_indices = channels.loc[pid].index.get_level_values('channel').to_numpy()
             xyz_values = channels.loc[pid][['x', 'y', 'z']].values
             xyz_planned_values = channels.loc[pid][['x_target', 'y_target', 'z_target']].values

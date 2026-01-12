@@ -1,15 +1,14 @@
 import torch
-import os
 from ephysatlas.regionclassifier import download_model
 from one.api import ONE
 
 from pathlib import Path
-from spatial_encoder_model import (
+from ephysatlas.spatial_encoder.model import (
     NeighborInpaintingModel,
     train_hybrid,
     evaluate_r2_per_feature
 )
-from spatial_encoder_utils import (
+from ephysatlas.spatial_encoder.utils import (
     AtlasPCAConfig,
     ContextAtlasManager,
     LoadInsertionData,
@@ -33,7 +32,7 @@ def main():
 
     # 0) Load relevant data from AWS
     # Download pretrained model from aws
-    local_path = os.getcwd()
+    local_path = Path("spatial_encoding_temp_data")
     model_name = '2024_W43_SE_model'
     one = ONE()
     path_to_model = download_model(local_path=Path(local_path), model_name=model_name, one=one)
@@ -41,11 +40,11 @@ def main():
     # 1) Build a context manager - enable drawing the agea & merfish PC vector given xyz coordinates
     print("Generating context grid")
     cfg = AtlasPCAConfig()
-    ctx_manager = ContextAtlasManager(cfg, model_name, regenerate_context=False)
+    ctx_manager = ContextAtlasManager(cfg, model_name, regenerate_context=False, output_dir = local_path)
 
     # 2) Load the ephys atlas probes - excluding the misaligned probes
     print("Loading insertion data")
-    pid_str, ephys, probe_positions, probe_planned_positions = LoadInsertionData()
+    pid_str, ephys, probe_positions, probe_planned_positions = LoadInsertionData(path_data=local_path)
 
     # 3) Build data loaders for model training. The loaders have a special collate function that
     #    samples the nearest neighbors from the training data
