@@ -176,7 +176,7 @@ def _get_immediate_children(bucket, prefix=None, delimiter='/'):
             # Optional: include or ignore
             pass
 
-    return list(immediate_children)
+    return sorted(list(immediate_children))
 
 
 def get_immediate_labels(bucket, prefix=None, delimiter='/', limit=None):
@@ -203,6 +203,37 @@ def get_immediate_labels(bucket, prefix=None, delimiter='/', limit=None):
             # print(f"Skipping {child_prefix} as it does not match the expected format")
     
     return sorted(filtered_children, reverse=True)[:limit]
+
+
+def list_available_models(one=None):
+    """Get the list of available models."""
+    assert one is not None, "ONE client instance is required"
+    _logger.info("Listing available models.")
+    s3, bucket_name = aws.get_s3_from_alyx(alyx=one.alyx)
+    bucket = s3.Bucket(bucket_name)
+    return _get_immediate_children(bucket, prefix="aggregates/atlas/models/", delimiter='/')
+
+def download_model(local_path: Path, one, model_name: str, overwrite: bool = False):
+    s3, bucket_name = aws.get_s3_from_alyx(alyx=one.alyx)
+    local_files = aws.s3_download_folder(
+        "aggregates/atlas/models/" + model_name,
+        local_path,
+        s3=s3,
+        bucket_name=bucket_name,
+        overwrite=overwrite,
+    )
+    return local_files
+
+def download_model(local_path: Path, one, model_name: str, overwrite: bool = False):
+    s3, bucket_name = aws.get_s3_from_alyx(alyx=one.alyx)
+    local_files = aws.s3_download_folder(
+        "aggregates/atlas/models/" + model_name,
+        local_path,
+        s3=s3,
+        bucket_name=bucket_name,
+        overwrite=overwrite,
+    )
+    return local_files
 
 
 def list_available_projects(one=None):
