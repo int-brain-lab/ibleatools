@@ -998,7 +998,7 @@ def csd(data, fs, geometry, bands=None, decimate=10):
     """
     data_rs = scipy.signal.decimate(data, decimate, axis=1, ftype="fir")
     data_rs = ibldsp.cadzow.cadzow_np1(data_rs, rank=2, fs=fs, niter=1, fmax=90)
-    data_rs = ibldsp.voltage.current_source_density(data_rs, h=geometry)
+    data_rs = ibldsp.voltage.current_source_density(data_rs, h=geometry, n=1)
     df_csd = lf(data_rs, fs, bands=bands)
     df_csd = df_csd.rename(
         columns={c: f"{c}_csd" for c in df_csd.columns if c not in ["channel"]}
