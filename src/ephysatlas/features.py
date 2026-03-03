@@ -137,6 +137,7 @@ __features_version__ = (
 )
 
 
+
 # TODO - Scratch_dir path is not working as expected. Even if I pass the scratch_dir argument in the main compute_features function, here I am gettig log from Path("/scratch/dartsort/")
 def _setup_scratch_directory(scratch_dir=None):
     """Set up scratch directory with fallback logic.
@@ -473,6 +474,50 @@ class ModelCsdFeatures(BaseChannelFeatures):
     )
     psd_lfp_csd: Series[float] = pa.Field(
         coerce=True, description="Power in the band 0 - 90 Hz after current source density estimation in decibels relative to V ** 2 / Hz",
+        metadata={
+            "raw_unit": "dB rel. V**2/Hz"}
+    )
+
+    rms_lf_csd_diff1: Series[float] = pa.Field(
+        coerce=True, description="Root mean square of Diff1 CSD signal in V. The value is transformed to dB using 20 * np.log10(x)",
+        metadata={
+            "raw_unit": "V",
+            "transformed_unit": "dB rel. V",
+            "transform": lambda x: 20 * np.log10(x)}
+    )
+    
+    psd_delta_csd_diff1: Series[float] = pa.Field(
+        coerce=True, description="Power in the band 0 - 4 Hz after Diff1 current source density estimation in decibels relative to V ** 2 / Hz",
+        metadata={
+            "raw_unit": "dB rel. V**2/Hz"}
+    )
+
+    psd_theta_csd_diff1: Series[float] = pa.Field(
+        coerce=True, description="Power in the band 4 - 10 Hz after Diff1 current source density estimation in decibels relative to V ** 2 / Hz",
+        metadata={
+            "raw_unit": "dB rel. V**2/Hz"}
+    )
+
+    psd_alpha_csd_diff1: Series[float] = pa.Field(
+        coerce=True, description="Power in the band 8 - 12 Hz after Diff1 current source density estimation in decibels relative to V ** 2 / Hz",
+        metadata={
+            "raw_unit": "dB rel. V**2/Hz"}
+    )
+
+    psd_beta_csd_diff1: Series[float] = pa.Field(
+        coerce=True, description="Power in the band 15 - 30 Hz after Diff1 current source density estimation in decibels relative to V ** 2 / Hz",
+        metadata={
+            "raw_unit": "dB rel. V**2/Hz"}
+    )
+
+    psd_gamma_csd_diff1: Series[float] = pa.Field(
+        coerce=True, description="Power in the band 30 - 90 Hz after Diff1 current source density estimation in decibels relative to V ** 2 / Hz",
+        metadata={
+            "raw_unit": "dB rel. V**2/Hz"}
+    )
+
+    psd_lfp_csd_diff1: Series[float] = pa.Field(
+        coerce=True, description="Power in the band 0 - 90 Hz after Diff1 current source density estimation in decibels relative to V ** 2 / Hz",
         metadata={
             "raw_unit": "dB rel. V**2/Hz"}
     )
@@ -932,7 +977,7 @@ def get_psd_decay_features(data, fs, fscale, period, bands, nperseg=2048, PSD_ra
     return psd_decay_features
 
 
-def lf(data, fs, bands=None):
+def lf(data, fs, bands=None, decay_features=True):
     """Compute LF features from a numpy array.
     
     Computes the local field potential (LF) features from electrophysiological data
@@ -961,12 +1006,13 @@ def lf(data, fs, bands=None):
     for b in BANDS:
         df_lf[f"psd_{b}"] = _get_power_in_band(fscale, period, bands[b])
     
-    # Caluclate the Aperiodic and Periodic features
-    logger.info("Calculating Aperiodic and Periodic features")
-    df_decay = get_psd_decay_features(data, fs, fscale, period, bands)
-    assert df_decay.shape[0] == df_lf.shape[0]
-    assert len(set(df_decay.columns) & set(df_lf.columns)) == 0
-    df_lf = pd.concat([df_lf, df_decay], axis=1)
+    if decay_features:
+        # Caluclate the Aperiodic and Periodic features
+        logger.info("Calculating Aperiodic and Periodic features")
+        df_decay = get_psd_decay_features(data, fs, fscale, period, bands)
+        assert df_decay.shape[0] == df_lf.shape[0]
+        assert len(set(df_decay.columns) & set(df_lf.columns)) == 0
+        df_lf = pd.concat([df_lf, df_decay], axis=1)
     
     
     ModelLfFeatures.validate(df_lf)
@@ -998,11 +1044,22 @@ def csd(data, fs, geometry, bands=None, decimate=10):
     """
     data_rs = scipy.signal.decimate(data, decimate, axis=1, ftype="fir")
     data_rs = ibldsp.cadzow.cadzow_np1(data_rs, rank=2, fs=fs, niter=1, fmax=90)
+    # Calculate the CSD features
     data_rs = ibldsp.voltage.current_source_density(data_rs, h=geometry)
-    df_csd = lf(data_rs, fs, bands=bands)
+    df_csd = lf(data_rs, fs, bands=bands, decay_features=False)
     df_csd = df_csd.rename(
         columns={c: f"{c}_csd" for c in df_csd.columns if c not in ["channel"]}
     )
+
+    # Calculate the Diff1 CSD features.
+    data_rs_diff1 = ibldsp.voltage.current_source_density(data_rs, h=geometry, n=1)
+    df_csd_diff1 = lf(data_rs_diff1, fs, bands=bands, decay_features=False)
+    df_csd_diff1 = df_csd_diff1.rename(
+        columns={c: f"{c}_csd_diff1" for c in df_csd_diff1.columns if c not in ["channel"]}
+    )
+    assert df_csd_diff1['channel'].equals(df_csd['channel']), "Channels are not perfectly aligned!"
+
+    df_csd = pd.concat([df_csd, df_csd_diff1.drop(columns=['channel'])], axis=1)
     ModelCsdFeatures.validate(df_csd)
     return df_csd
 

@@ -137,10 +137,13 @@ def setup_output_directory(params: Dict[str, Any]) -> tuple[Path, Path]:
     # Create Snippet level subdirectory
     # Pad t_start and duration
     t_start_padded = f"{params['t_start']:08.1f}"  # 8 digits with 1 decimal place
-    duration_padded = f"{params['duration']:04.1f}"  # 4 digits with 1 decimal place
+    duration_ap = params.get("duration_ap", 0)
+    duration_lf = params.get("duration_lf", 0)
+    duration_ap_padded = f"{duration_ap:04.1f}"  # 4 digits with 1 decimal place
+    duration_lf_padded = f"{duration_lf:04.1f}"  # 4 digits with 1 decimal place
     #TODO - Handle the case where pid is not provided properly.
     snippet_level_dir = (
-        probe_level_dir / f"probe_{params.get('pid','unknown_pid')}_{t_start_padded}_{duration_padded}"
+        probe_level_dir / f"probe_{params.get('pid','unknown_pid')}_{t_start_padded}_{duration_ap_padded}_{duration_lf_padded}"
     )
     snippet_level_dir.mkdir(parents=True, exist_ok=True)
 

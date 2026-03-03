@@ -206,6 +206,7 @@ class TestFeatureComputation(unittest.TestCase):
             "x": np.zeros(n_channels_ap),
             "y": np.arange(n_channels_ap) * 20,
             "sample_shift": np.zeros(n_channels_ap),
+            "shank": np.zeros(n_channels_ap),  # Assuming all channels are on the same shank for testing
         }
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -238,6 +239,7 @@ class TestFeatureComputation(unittest.TestCase):
             "col": np.zeros(n_channels_lf),
             "row": np.arange(n_channels_lf),
             "sample_shift": np.zeros(n_channels_lf),
+            "shank": np.zeros(n_channels_lf),  # Assuming all channels are on the same shank for testing
         }
 
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -135,7 +135,8 @@ def online_feature_computation(
     sr_lf = None,
     sr_ap = None,
     t0 = 0.0,
-    duration = 5.0,
+    duration_ap = 5.0,
+    duration_lf = 25.0,
     channels=None,
     features_to_compute=None,
     output_dir=Path("."),
@@ -201,12 +202,12 @@ def online_feature_computation(
         raise ValueError(f"Start time t0 ({t0}) cannot be negative")    
     if sr_ap is not None:
         # Calculate the next fast length for the AP data to optimize FFT operations
-        ns_ap = scipy.fft.next_fast_len(int(sr_ap.fs * duration), real=True)
+        ns_ap = scipy.fft.next_fast_len(int(sr_ap.fs * duration_ap), real=True)
         max_time_ap = sr_ap.ns / sr_ap.fs
         # Validate AP data duration
-        if t0 + duration > max_time_ap:
+        if t0 + duration_ap > max_time_ap:
             raise ValueError(
-                f"Requested time range ({t0} to {t0 + duration}) exceeds AP data duration ({max_time_ap})"
+                f"Requested time range ({t0} to {t0 + duration_ap}) exceeds AP data duration ({max_time_ap})"
             )
         
         # Calculate start indices for data access
@@ -229,14 +230,14 @@ def online_feature_computation(
     
     if sr_lf is not None:
         # Calculate the next fast length for the LF data to optimize FFT operations
-        ns_lf = scipy.fft.next_fast_len(int(sr_lf.fs * duration), real=True)
+        ns_lf = scipy.fft.next_fast_len(int(sr_lf.fs * duration_lf), real=True)
         max_time_lf = sr_lf.ns / sr_lf.fs
         # Validate AP data duration
 
         # Validate LF data duration
-        if t0 + duration > max_time_lf:
+        if t0 + duration_lf > max_time_lf:
             raise ValueError(
-                f"Requested time range ({t0} to {t0 + duration}) exceeds LF data duration ({max_time_lf})"
+                f"Requested time range ({t0} to {t0 + duration_lf}) exceeds LF data duration ({max_time_lf})"
             )
         
 
@@ -588,6 +589,8 @@ def compute_features_from_pid(
     probe_name=None,
     t_start=None,
     duration=None,
+    duration_ap = 5,
+    duration_lf = 25,
     one=None,
     features_to_compute=None,
     output_dir=None,
@@ -643,10 +646,20 @@ def compute_features_from_pid(
         - The function uses file locking to prevent concurrent writes to channel files.
     """
     # Create a dictionary with all the function arguments for setup_output_directory
+
+
+    if duration is not None:
+        logger.warning(
+            "The 'duration' parameter is deprecated and will be removed in future versions. "
+            "Please use 'duration_ap' and 'duration_lf' instead."
+        )
+        duration_ap = duration_lf = duration
+
     params = {
         "pid": pid,
         "t_start": t_start,
-        "duration": duration,
+        "duration_ap": duration_ap,
+        "duration_lf": duration_lf,
         "output_dir": output_dir,
     }
 
@@ -674,12 +687,15 @@ def compute_features_from_pid(
     t_start = float(t_start) if t_start is not None else 0.0
 
     # If duration is None, calculate the maximum available duration from both AP and LF data
-    if duration is None:
+    if duration_ap is None:
         max_time_ap = sr_ap.ns / sr_ap.fs
+        duration_ap = max_time_ap - t_start
+    if duration_lf is None:
         max_time_lf = sr_lf.ns / sr_lf.fs
-        duration = min(max_time_ap, max_time_lf) - t_start
+        duration_lf = min(max_time_ap, max_time_lf) - t_start
     else:
-        duration = float(duration)
+        duration_ap = float(duration_ap)
+        duration_lf = float(duration_lf)
 
     # Add target coordinates to channel information if not already present
     # Check if the target information is already present in the channels dataset, if yes then skip it.
@@ -688,6 +704,7 @@ def compute_features_from_pid(
         or "y_target" not in channels.keys()
         or "z_target" not in channels.keys()
     ):
+        logger.info(f"channels.keys():  {channels.keys()}")
         channels = add_target_coordinates(pid=pid, one=one, channels=channels)
 
     # Ensure channel indexing is present (default to 384 channels if not specified)
@@ -743,7 +760,8 @@ def compute_features_from_pid(
         sr_ap=sr_ap,
         sr_lf=sr_lf,
         t0=t_start,
-        duration=duration,
+        duration_ap=duration_ap,
+        duration_lf=duration_lf,
         channels=channels,
         features_to_compute=features_to_compute,
         output_dir=snippet_level_dir,
@@ -756,7 +774,8 @@ def compute_features_from_pid(
         snippet_attrs = {
             "pid": pid,
             "t_start": t_start,
-            "duration": duration,
+            "duration_ap": duration_ap,
+            "duration_lf": duration_lf, 
             "base_level_dir": output_dir.as_posix(),
             "snippet_level_dir": snippet_level_dir.relative_to(output_dir).as_posix(),
         }
@@ -1018,6 +1037,7 @@ def compute_features_from_raw(
             raw_lf,
             fs=fs_lf,
             h = geometry,
+            neuropixel_version=neuropixel_version,
             channel_labels=channel_labels,
         )
     else:
