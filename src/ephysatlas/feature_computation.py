@@ -590,7 +590,7 @@ def compute_features_from_pid(
     t_start=None,
     duration=None,
     duration_ap = 5,
-    duration_lf = 25,
+    duration_lf = 5,
     one=None,
     features_to_compute=None,
     output_dir=None,

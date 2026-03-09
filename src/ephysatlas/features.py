@@ -478,7 +478,7 @@ class ModelCsdFeatures(BaseChannelFeatures):
             "raw_unit": "dB rel. V**2/Hz"}
     )
 
-    rms_lf_csd_diff1: Series[float] = pa.Field(
+    rms_lf_csd_diff1: Optional[Series[float]] = pa.Field(
         coerce=True, description="Root mean square of Diff1 CSD signal in V. The value is transformed to dB using 20 * np.log10(x)",
         metadata={
             "raw_unit": "V",
@@ -486,37 +486,37 @@ class ModelCsdFeatures(BaseChannelFeatures):
             "transform": lambda x: 20 * np.log10(x)}
     )
     
-    psd_delta_csd_diff1: Series[float] = pa.Field(
+    psd_delta_csd_diff1: Optional[Series[float]] = pa.Field(
         coerce=True, description="Power in the band 0 - 4 Hz after Diff1 current source density estimation in decibels relative to V ** 2 / Hz",
         metadata={
             "raw_unit": "dB rel. V**2/Hz"}
     )
 
-    psd_theta_csd_diff1: Series[float] = pa.Field(
+    psd_theta_csd_diff1: Optional[Series[float]] = pa.Field(
         coerce=True, description="Power in the band 4 - 10 Hz after Diff1 current source density estimation in decibels relative to V ** 2 / Hz",
         metadata={
             "raw_unit": "dB rel. V**2/Hz"}
     )
 
-    psd_alpha_csd_diff1: Series[float] = pa.Field(
+    psd_alpha_csd_diff1: Optional[Series[float]] = pa.Field(
         coerce=True, description="Power in the band 8 - 12 Hz after Diff1 current source density estimation in decibels relative to V ** 2 / Hz",
         metadata={
             "raw_unit": "dB rel. V**2/Hz"}
     )
 
-    psd_beta_csd_diff1: Series[float] = pa.Field(
+    psd_beta_csd_diff1: Optional[Series[float]] = pa.Field(
         coerce=True, description="Power in the band 15 - 30 Hz after Diff1 current source density estimation in decibels relative to V ** 2 / Hz",
         metadata={
             "raw_unit": "dB rel. V**2/Hz"}
     )
 
-    psd_gamma_csd_diff1: Series[float] = pa.Field(
+    psd_gamma_csd_diff1: Optional[Series[float]] = pa.Field(
         coerce=True, description="Power in the band 30 - 90 Hz after Diff1 current source density estimation in decibels relative to V ** 2 / Hz",
         metadata={
             "raw_unit": "dB rel. V**2/Hz"}
     )
 
-    psd_lfp_csd_diff1: Series[float] = pa.Field(
+    psd_lfp_csd_diff1: Optional[Series[float]] = pa.Field(
         coerce=True, description="Power in the band 0 - 90 Hz after Diff1 current source density estimation in decibels relative to V ** 2 / Hz",
         metadata={
             "raw_unit": "dB rel. V**2/Hz"}
@@ -1043,11 +1043,10 @@ def csd(data, fs, geometry, bands=None, decimate=10):
         before computing the spectral features.
     """
     data_rs = scipy.signal.decimate(data, decimate, axis=1, ftype="fir")
-    #TODO Change this to include the NP2 geometry as well, and pass it a h parameter.
-    data_rs = ibldsp.cadzow.cadzow_np1(data_rs, rank=2, fs=fs, niter=1, fmax=90)
+    data_rs = ibldsp.cadzow.cadzow_np1(data_rs, rank=2, fs=fs, niter=1, fmax=90, h=geometry)
     # Calculate the CSD features
-    data_rs = ibldsp.voltage.current_source_density(data_rs, h=geometry)
-    df_csd = lf(data_rs, fs, bands=bands, decay_features=False)
+    data_rs_diff2 = ibldsp.voltage.current_source_density(data_rs, h=geometry, n=2)
+    df_csd = lf(data_rs_diff2, fs, bands=bands, decay_features=False)
     df_csd = df_csd.rename(
         columns={c: f"{c}_csd" for c in df_csd.columns if c not in ["channel"]}
     )
