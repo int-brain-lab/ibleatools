@@ -17,6 +17,9 @@ TEMPLATE_RUNPROGRAM_PATH = Path(__file__).parent / "Runprogram_template.sh"
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+#TODO: Generate Task files with ap duration and duration lf, and fix the pids for each task file such that I do not run into assertion, and chnnels not found error.
+
+# TODO: Need to design a function which takes in command and a dataframe, and then generates a task file based on column name and values of the task.
 
 class GetPidList(luigi.Task):
     """Task to get list of pids, eids and probe_names and save as CSV."""

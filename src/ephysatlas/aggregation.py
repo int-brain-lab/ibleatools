@@ -486,6 +486,7 @@ def denoise_raw_features_data(
 
 
 #  TODO: Information in input_dir, can be compiled in the snippet_df
+# TODO: can features spread across different snippets but with same ap duration be used to aggregated just the ap and waveforms features (and similarly for the lf features.)
 def produce_output_dataframes(
     snippets_df: pd.DataFrame, input_dir: Path, output_dir: Path | None = None
 ):
