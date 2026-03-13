@@ -303,6 +303,22 @@ def create_task_file(inp_file, outp_file, run_program_path="Runprogram.sh"):
     
     print(f"Task file created at: {task_file_path}")
 
+def create_generic_task_file(command, df, outp_file):
+    """
+    Create a generic task file based on a command template and a dataframe.
+    The number of rows in the task file is equal to the number of rows of the df.
+    
+    Args:
+        command (str): Command template with placeholders for dataframe columns (e.g., "source launch.sh").
+        df (pd.DataFrame): DataFrame containing the data and the arguments to concatenate to the command. E.g. --col1 {col_val} --col2 {col_val}
+    pass
+    """
+    with open(outp_file, 'w') as f:
+        for _, row in df.iterrows():
+            cmd = command
+            for col in df.columns:
+                cmd = cmd + f" --{col} {str(row[col])}"
+            f.write(cmd + "\n")
 
 # Function to run the workflow
 def run_workflow():
