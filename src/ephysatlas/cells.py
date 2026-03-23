@@ -68,7 +68,7 @@ def spike_triggered_population_coupling(spikes, df_clusters, file_stpc=None):
 
     sos = scipy.signal.butter(3, 20, 'lp', fs=1 / binsize, output='sos')
 
-    sb  = np.astype((st - tbounds[0]) / binsize, int)
+    sb = ((st - tbounds[0]) / binsize).astype(int)
     neighbours = get_neighbours_members(df_clusters, radius_um)
     nsw = int(wl / binsize)
     icenter = np.searchsorted((np.arange(nsw) - nsw // 2) * binsize, (-lag, lag))
