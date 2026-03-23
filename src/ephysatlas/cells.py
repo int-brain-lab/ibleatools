@@ -68,7 +68,7 @@ def spike_triggered_population_coupling(spikes, df_clusters, file_stpc=None):
 
     sos = scipy.signal.butter(3, 20, 'lp', fs=1 / binsize, output='sos')
 
-    sb  = np.astype(st / binsize, int)
+    sb  = np.astype((st - tbounds[0]) / binsize, int)
     neighbours = get_neighbours_members(df_clusters, radius_um)
     nsw = int(wl / binsize)
     icenter = np.searchsorted((np.arange(nsw) - nsw // 2) * binsize, (-lag, lag))
@@ -81,7 +81,10 @@ def spike_triggered_population_coupling(spikes, df_clusters, file_stpc=None):
         # indices of the window around 0 lag to keep
         for first, last in tqdm.tqdm(wg.firstlast, total=wg.nwin):
             ispikes = np.searchsorted(sb, (first, last))
-            binned_spikes, time_bins, clusters_bins = bincount2D(st[slice(*ispikes)], sc[slice(*ispikes)], binsize, 1, ylim=[0, nc_all - 1], xlim=[first * binsize, (first + wg.nswin) * binsize])
+            binned_spikes, time_bins, clusters_bins = bincount2D(
+                st[slice(*ispikes)] - tbounds[0], sc[slice(*ispikes)], binsize, 1,
+                ylim=[0, nc_all - 1], xlim=[first * binsize, (first + wg.nswin) * binsize]
+            )
             binned_spikes = binned_spikes.astype(np.float32)
             for ic_out, ic in enumerate(i_good):
                 popestimate = binned_spikes[neighbours[ic], :]
@@ -92,8 +95,8 @@ def spike_triggered_population_coupling(spikes, df_clusters, file_stpc=None):
         stpc = scipy.signal.sosfiltfilt(sos, stpc)
         stpc = stpc - np.mean(stpc, axis=1)[:, np.newaxis]
         stpc = stpc / firing_rates[i_good, np.newaxis]
-        file_stpc.parent.mkdir(parents=True, exist_ok=True)
         if file_stpc is not None:
+            file_stpc.parent.mkdir(parents=True, exist_ok=True)
             np.save(file_stpc, stpc)
 
     # % Get coupling strength and coupling delay
