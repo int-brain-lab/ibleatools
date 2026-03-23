@@ -328,6 +328,64 @@ def run_workflow():
     
     luigi.build([WorkflowPipeline()], local_scheduler=True)
 
+
+# Function for summarizing the log files
+
+def parse_logs_to_dataframe(base_dir: str) -> pd.DataFrame:
+    """
+    Traverses a directory of log files and creates a DataFrame flagging 
+    specific errors based on string matches.
+    """
+    # Define the exact strings to grep/search for in the log files
+    error_signatures = {
+        'error': 'Traceback',
+        'timerange_error': "ValueError: Requested time range",
+        'nodata_error': 'AssertionError: Failed to load data',
+        'traj_error': '(t for t in trajs if t["provenance"] == "Micro-manipulator")',
+        'axial_um_error': "KeyError: 'axial_um'",
+        'outside_brain_error': 'ValueError: At least one y value lies outside of the atlas volume',
+        'http_error': 'requests.exceptions.HTTPError'
+    }
+    
+    parsed_data = []
+    base_path = Path(base_dir)
+    
+    # rglob('*.log') recursively finds all .log files in all subdirectories
+    log_files = list(base_path.rglob('*.log'))
+    for log_file in log_files:
+        
+        # Extract contextual info from the path
+        row = {
+            'pid': log_file.parent.name,
+            'filename': log_file.name,
+        }
+        
+        # Initialize all error columns to False by default
+        for col in error_signatures:
+            row[col] = False
+            
+        # Read the file and check for the presence of the error strings
+        try:
+            with open(log_file, 'r', encoding='utf-8') as f:
+                content = f.read()
+                
+                # Check each signature against the file's content
+                for col_name, signature in error_signatures.items():
+                    if signature in content:
+                        row[col_name] = True
+                        
+        except Exception as e:
+            print(f"Warning: Could not read {log_file} due to: {e}")
+            
+        parsed_data.append(row)
+        
+    # Convert the list of dictionaries into a Pandas DataFrame
+    df = pd.DataFrame(parsed_data)
+    
+    return df
+
+
+
 if __name__ == "__main__":
     run_workflow()
 
