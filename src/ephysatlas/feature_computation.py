@@ -263,7 +263,7 @@ def online_feature_computation(
         raw_lf = None
 
     # Determine channel labels for bad channel detection
-    if channels.get("labels") is None:
+    if channels is None or channels.get("labels") is None:
         # If we have access to the whole recording, then we can detect bad channels from the cbin file.
         if sr_ap is not None and sr_ap.file_bin is not None:
             channel_labels = ibldsp.voltage.detect_bad_channels_cbin(sr_ap.file_bin)
