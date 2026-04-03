@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 
 import ibldsp.voltage
 import ibldsp.utils
+import spikeglx
 
 import iblatlas.atlas
 from iblutil.numerical import bincount2D
@@ -184,3 +185,37 @@ def display_stpc(df_clusters, stpc, tscale, coupling_strength, coupling_delay, f
         Path(save_file).parent.mkdir(parents=True, exist_ok=True)
         fig.savefig(save_file)
         plt.close(fig)
+
+
+def spike_triggered_lfp(file_rsamp_lfp, spikes, df_clusters, event_window=(-0.5, 0.5), fs_ap=30_000, fs=2500 // 10, file_stlfp=None):
+    if not file_rsamp_lfp.exists():
+        raise FileNotFoundError()
+    # read npy file
+    sr = spikeglx.Reader(file_rsamp_lfp, fs=fs)
+    w = sr[:, :]  # this is intentionally casting the memmap in memory !
+    w = w - np.median(w, axis=1)[:, np.newaxis]  # common average referencing
+    i_good = np.where(df_clusters['bitwise_fail'] == 0)[0]
+    event_window_samples = (np.array(event_window) * fs).astype(int)
+    if file_stlfp.exists():
+        lfp_spike_triggered = np.load(file_stlfp)
+    else:
+        lfp_spike_triggered = np.zeros((i_good.size, np.sum(np.abs(event_window_samples))))
+        for i, iclu in tqdm.tqdm(enumerate(i_good)):
+            # the spike samples on the AP band
+            st = spikes['samples'][spikes['clusters'] == iclu]
+            # the spike samples on the resampled LF band
+            st = (st / (fs_ap / fs))
+            event_samples = st[slice(*np.searchsorted(st, [event_window[0] * fs, sr.ns - event_window[1] * fs]))]
+            residual_dt = event_samples - event_samples.astype(int)  # positive dt means the t0 will have to be delayed
+            # compute a vector of indices corresponding to the perievent window at the given sampling rate
+            sample_window = np.round(np.arange(event_window_samples[0], event_window_samples[1])).astype(int)
+            # we inflate this vector to a 2d array where each column corresponds to an event
+            idx_psth = np.tile(sample_window[:, np.newaxis], (1, event_samples.size))
+            # we add the index of each event too their respective column
+            idx_psth += event_samples.astype(int)
+            ich = df_clusters.loc[iclu, 'channels']
+            p = w[idx_psth, ich].astype(np.float32)  # psth is a 2d array (ntimes, nevents)b
+            # p = p - np.mean(p, axis=1)[:, np.newaxis]
+            p = ibldsp.fourier.fshift(p, residual_dt, axis=0)
+            lfp_spike_triggered[i, :] = np.median(p, axis=-1)
+        np.save(file_stlfp, lfp_spike_triggered)
