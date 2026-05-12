@@ -18,7 +18,10 @@ logger = logging.getLogger(__name__)
 
 # TODO - There can be a better way to specify both of these arguments - maybe only one is needed.
 def aggregate_all_probes(
-    path_list: List[Path], base_level_dir: Path | None | str = None, n_jobs: int = -1, verbose: int = 1
+    path_list: List[Path],
+    base_level_dir: Path | None | str = None,
+    n_jobs: int = -1,
+    verbose: int = 1,
 ):
     """Aggregate snippet-level data from multiple probe directories into a single DataFrame.
 
@@ -48,7 +51,7 @@ def aggregate_all_probes(
     dfs = Parallel(n_jobs=n_jobs, verbose=verbose)(
         delayed(get_aggregated_snippets_df)(path) for path in path_list
     )
-    
+
     # Concatenate all results into a single DataFrame
     df = pd.concat(dfs, ignore_index=True)
 
@@ -252,9 +255,9 @@ def aggregate_raw_features(concatenated_df: pd.DataFrame):
     # Define custom aggregation functions for specific feature types
     agg_func_dict = {
         "spike_count": lambda x: np.mean(x.fillna(0)),  # Mean with nulls as zeros
-        "channel_labels": lambda x: x.mode().iloc[0]
-        if not x.mode().empty
-        else np.nan,  # Mode or NaN
+        "channel_labels": lambda x: (
+            x.mode().iloc[0] if not x.mode().empty else np.nan
+        ),  # Mode or NaN
     }
 
     # Helper function to get the appropriate aggregation function for a column
@@ -310,9 +313,9 @@ def get_aggregated_features_per_pid(snippet_df_per_pid: pd.DataFrame):
         - The result includes both aggregated features and channel position information.
     """
     # Ensure only one PID is present in the DataFrame
-    assert (
-        snippet_df_per_pid["pid"].nunique() == 1
-    ), "There should be only one pid in the dataframe"
+    assert snippet_df_per_pid["pid"].nunique() == 1, (
+        "There should be only one pid in the dataframe"
+    )
 
     # Concatenate raw features from all snippets for this PID
     df_concat = concat_raw_features(snippet_df_per_pid)
@@ -326,8 +329,9 @@ def get_aggregated_features_per_pid(snippet_df_per_pid: pd.DataFrame):
     # Reset the index to make pid and channel regular columns
     agg_df_per_pid = agg_df_per_pid.reset_index()
 
-    agg_df_per_pid = outlier_treatment(agg_df_per_pid, columns = ['alpha_mean','alpha_std'], replace_with_nan=True)
-
+    agg_df_per_pid = outlier_treatment(
+        agg_df_per_pid, columns=["alpha_mean", "alpha_std"], replace_with_nan=True
+    )
 
     # then we join with the channel information to get coordinates and anatomical information
     # Load channel metadata (axial and lateral positions) from channels.pqt
@@ -351,7 +355,10 @@ def get_aggregated_features_per_pid(snippet_df_per_pid: pd.DataFrame):
 
 
 def get_aggregated_raw_features(
-    snippet_df: pd.DataFrame, output_dir: Path | None = None, n_jobs: int = -1, verbose: int = 1
+    snippet_df: pd.DataFrame,
+    output_dir: Path | None = None,
+    n_jobs: int = -1,
+    verbose: int = 1,
 ):
     """Process and aggregate raw features for multiple probe IDs (PIDs) across all their snippets.
 
@@ -392,12 +399,12 @@ def get_aggregated_raw_features(
     """
     # Collect all PID groups
     pid_groups = [pid_df for _, pid_df in snippet_df.groupby("pid")]
-    
+
     # Process all PIDs in parallel using joblib
     agg_dfs = Parallel(n_jobs=n_jobs, verbose=verbose)(
         delayed(get_aggregated_features_per_pid)(pid_df) for pid_df in pid_groups
     )
-    
+
     # Concatenate all results into a single DataFrame
     agg_df = pd.concat(agg_dfs, ignore_index=True)
     # Set the multi-index to (pid, channel)
@@ -414,7 +421,10 @@ def get_aggregated_raw_features(
 
 
 def denoise_raw_features_data(
-    agg_raw_ephys_features: pd.DataFrame, output_dir: Path | None = None, n_jobs: int = -1, verbose: int = 1
+    agg_raw_ephys_features: pd.DataFrame,
+    output_dir: Path | None = None,
+    n_jobs: int = -1,
+    verbose: int = 1,
 ):
     """Apply denoising to aggregated raw electrophysiological features for each probe ID (PID).
 
@@ -449,7 +459,7 @@ def denoise_raw_features_data(
     """
     # Store the original column names to preserve structure
     original_columns = agg_raw_ephys_features.columns.tolist()
-    
+
     # Helper function to process a single PID group
     def denoise_pid(pid_df_tuple):
         pid, df_pid = pid_df_tuple
@@ -459,21 +469,25 @@ def denoise_raw_features_data(
         )
         # Keep only the original columns to maintain structure
         return df_denoised.loc[:, original_columns]
-    
+
     # Collect all PID groups
     pid_groups = list(agg_raw_ephys_features.groupby("pid"))
-    
+
     # Process all PIDs in parallel using joblib
     df_pids = Parallel(n_jobs=n_jobs, verbose=verbose)(
         delayed(denoise_pid)(pid_group) for pid_group in pid_groups
     )
-    
+
     # Concatenate all denoised PID DataFrames
     df_features_denoise = pd.concat(df_pids)
 
-    df_features_denoise = outlier_treatment(df_features_denoise, columns = ['alpha_mean','alpha_std'])
+    df_features_denoise = outlier_treatment(
+        df_features_denoise, columns=["alpha_mean", "alpha_std"]
+    )
 
-    df_features_denoise = replace_nan(df_features_denoise, columns = df_features_denoise.columns)
+    df_features_denoise = replace_nan(
+        df_features_denoise, columns=df_features_denoise.columns
+    )
 
     # Optionally save the denoised features to a Parquet file
     if output_dir is not None:

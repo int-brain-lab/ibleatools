@@ -17,8 +17,7 @@ class TestFeatureComputation(unittest.TestCase):
     def test_load_data_from_files_nonexistent_files(self):
         """Test load_data_from_files with non-existent files"""
         with self.assertRaises(RuntimeError):
-            load_data_from_files(
-                "nonexistent_ap.cbin", "nonexistent_lf.cbin")
+            load_data_from_files("nonexistent_ap.cbin", "nonexistent_lf.cbin")
 
     def test_load_data_from_files_invalid_file_types(self):
         """Test load_data_from_files with invalid file types"""
@@ -111,7 +110,7 @@ class TestFeatureComputation(unittest.TestCase):
             "x": np.zeros(n_channels),  # All channels in same column
             "y": np.arange(n_channels) * 20,  # 20 um spacing between channels
             "sample_shift": np.zeros(n_channels),
-            "shank": np.zeros(n_channels)
+            "shank": np.zeros(n_channels),
         }
 
         # Test with a subset of features to avoid long computation time
@@ -207,7 +206,9 @@ class TestFeatureComputation(unittest.TestCase):
             "x": np.zeros(n_channels_ap),
             "y": np.arange(n_channels_ap) * 20,
             "sample_shift": np.zeros(n_channels_ap),
-            "shank": np.zeros(n_channels_ap),  # Assuming all channels are on the same shank for testing
+            "shank": np.zeros(
+                n_channels_ap
+            ),  # Assuming all channels are on the same shank for testing
         }
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -220,7 +221,9 @@ class TestFeatureComputation(unittest.TestCase):
                 fs_ap=fs_ap,
                 fs_lf=None,
                 geometry=geometry_ap,
-                features_to_compute=["ap"],  # Let function determine based on available data
+                features_to_compute=[
+                    "ap"
+                ],  # Let function determine based on available data
                 output_dir=output_dir,
             )
 
@@ -240,7 +243,9 @@ class TestFeatureComputation(unittest.TestCase):
             "col": np.zeros(n_channels_lf),
             "row": np.arange(n_channels_lf),
             "sample_shift": np.zeros(n_channels_lf),
-            "shank": np.zeros(n_channels_lf),  # Assuming all channels are on the same shank for testing
+            "shank": np.zeros(
+                n_channels_lf
+            ),  # Assuming all channels are on the same shank for testing
         }
 
         with tempfile.TemporaryDirectory() as temp_dir:

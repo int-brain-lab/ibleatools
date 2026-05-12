@@ -15,7 +15,7 @@ from ephysatlas import features
 def save_model(path_model, classifier, meta, subfolder="", identifier=None):
     """Save model to disk in ubj format with associated meta-data and a hash.
 
-    The model is a set of files in a folder named after the meta-data 'VINTAGE' and 'REGION_MAP' fields, 
+    The model is a set of files in a folder named after the meta-data 'VINTAGE' and 'REGION_MAP' fields,
     with the hash as suffix e.g. 2023_W41_Cosmos_dfd731f0.
 
     Args:
@@ -200,9 +200,9 @@ def infer_regions(df_inference, path_model, n_folds=5, denoise=False):
 
     Returns:
         tuple: A tuple containing:
-            - predicted_probas (np.ndarray): Array of shape (n_folds, n_samples, n_classes) containing 
+            - predicted_probas (np.ndarray): Array of shape (n_folds, n_samples, n_classes) containing
               prediction probabilities for each fold.
-            - predicted_region (np.ndarray): Array of shape (n_folds, n_samples) containing 
+            - predicted_region (np.ndarray): Array of shape (n_folds, n_samples) containing
               predicted region labels for each fold.
     """
     for fold in range(n_folds):
