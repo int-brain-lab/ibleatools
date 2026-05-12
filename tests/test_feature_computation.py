@@ -111,6 +111,7 @@ class TestFeatureComputation(unittest.TestCase):
             "x": np.zeros(n_channels),  # All channels in same column
             "y": np.arange(n_channels) * 20,  # 20 um spacing between channels
             "sample_shift": np.zeros(n_channels),
+            "shank": np.zeros(n_channels)
         }
 
         # Test with a subset of features to avoid long computation time
