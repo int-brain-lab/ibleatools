@@ -147,9 +147,9 @@ class AtlasReveal:
         self.one = one
         self.df_pid = df_pid
         self.pid = pid
-        self.ssl = SpikeSortingLoader(pid=self.pid, one=self.one)
-        self.sr_ap = self.ssl.raw_electrophysiology(band="ap", stream=self.STREAM)
-        self.sr_lf = self.ssl.raw_electrophysiology(band="lf", stream=self.STREAM)
+        # self.ssl = SpikeSortingLoader(pid=self.pid, one=self.one)
+        # self.sr_ap = self.ssl.raw_electrophysiology(band="ap", stream=self.STREAM)
+        # self.sr_lf = self.ssl.raw_electrophysiology(band="lf", stream=self.STREAM)
 
     @property
     def x_list(self):
