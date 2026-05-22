@@ -3,6 +3,18 @@
 This file documents the changes to the features for supported feature versions.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.6.0] - 2026-05-22
+
+### Added
+- Added `ModelClusters` pandera schema in `ephysatlas.cells` for cluster-level features (good_clusters.pqt / all_clusters.pqt)
+- Added `ModelProbeDetails` pandera schema in `ephysatlas.features` for probe insertion metadata (df_probe_details.pqt)
+- Added `download_probe_details()`, `download_cell_features()`, and `download_project_data()` in `ephysatlas.data` for fetching project data from S3; probe details and cell aggregates are separate calls to avoid downloading ~1 GB unnecessarily
+- Added `read_probe_details()` and `read_cell_features()` in `ephysatlas.data` for loading project data from disk with optional pandera validation
+- Added `TestProjectDataIO` test class with synthetic fixtures generated from pandera schemas
+
+### Fixed
+- Fixed `Series[T]` annotations in all pandera `DataFrameModel` subclasses (`ChannelDataFrameSchema`, `ModelLfFeatures`, `ModelCsdFeatures`, `ModelApFeatures`, `ModelSpikeFeatures`, `ModelChannelLayout`, `ModelHistologyResolved`) to use plain Python types, required by pandera 0.25.0
+
 ## [0.5.0]
 
 ### Added

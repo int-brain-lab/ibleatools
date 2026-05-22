@@ -469,6 +469,138 @@ def read_features_from_disk(
     return df_features
 
 
+def _project_s3(local_path, project, one):
+    """Set up ONE/S3 connection and return (s3, bucket_name, local_project_path)."""
+    from one.api import ONE
+
+    if one is None:
+        one = ONE()
+    local_project_path = Path(local_path) / project
+    local_project_path.mkdir(parents=True, exist_ok=True)
+    s3, bucket_name = aws.get_s3_from_alyx(alyx=one.alyx)
+    return s3, bucket_name, local_project_path
+
+
+def download_probe_details(
+    local_path, project="ibl_neuropixel_brainwide_01", one=None, overwrite=False
+):
+    """Download probe insertion metadata (df_probe_details.pqt) for a project from S3.
+
+    Args:
+        local_path (Path): Local root; file is placed under local_path/project/.
+        project (str): Project name.
+        one (one.api.ONE, optional): ONE instance for AWS credentials.
+        overwrite (bool): Re-download if file already exists locally.
+
+    Returns:
+        Path: Path to the downloaded df_probe_details.pqt file.
+    """
+    s3, bucket_name, local_project_path = _project_s3(local_path, project, one)
+    local_file = local_project_path / "df_probe_details.pqt"
+    if overwrite or not local_file.exists():
+        s3.download_file(
+            bucket_name,
+            f"aggregates/atlas/projects/{project}/df_probe_details.pqt",
+            str(local_file),
+        )
+    return local_file
+
+
+def download_cell_features(
+    local_path, project="ibl_neuropixel_brainwide_01", one=None, overwrite=False
+):
+    """Download cell-level aggregates (good_clusters.pqt, good_stpc.npy, good_stlfp.npy) from S3.
+
+    This downloads the full cell_aggregates/ subfolder (~1 GB). Use download_probe_details()
+    if you only need probe metadata.
+
+    Args:
+        local_path (Path): Local root; files are placed under local_path/project/cell_aggregates/.
+        project (str): Project name.
+        one (one.api.ONE, optional): ONE instance for AWS credentials.
+        overwrite (bool): Re-download files that already exist locally.
+
+    Returns:
+        Path: local_path/project/cell_aggregates/ directory.
+    """
+    s3, bucket_name, local_project_path = _project_s3(local_path, project, one)
+    dest = local_project_path / "cell_aggregates"
+    local_files = aws.s3_download_folder(
+        f"aggregates/atlas/projects/{project}/cell_aggregates",
+        dest,
+        s3=s3,
+        bucket_name=bucket_name,
+        overwrite=overwrite,
+    )
+    assert len(local_files), (
+        f"aggregates/atlas/projects/{project}/cell_aggregates not found on AWS"
+    )
+    return dest
+
+
+def download_project_data(
+    local_path, project="ibl_neuropixel_brainwide_01", one=None, overwrite=False
+):
+    """Download all project data (probe details + cell aggregates) from S3.
+
+    Convenience wrapper that calls download_probe_details() and download_cell_features().
+
+    Args:
+        local_path (Path): Local root; files are placed under local_path/project/.
+        project (str): Project name.
+        one (one.api.ONE, optional): ONE instance for AWS credentials.
+        overwrite (bool): Re-download files that already exist locally.
+
+    Returns:
+        Path: local_path/project directory.
+    """
+    download_probe_details(local_path, project=project, one=one, overwrite=overwrite)
+    download_cell_features(local_path, project=project, one=one, overwrite=overwrite)
+    return Path(local_path) / project
+
+
+def read_probe_details(path_project, strict=True):
+    """Read probe insertion metadata from disk.
+
+    Args:
+        path_project (Path): Path to the project folder (containing df_probe_details.pqt).
+        strict (bool): Validate against ModelProbeDetails schema if True.
+
+    Returns:
+        pd.DataFrame: One row per probe insertion.
+    """
+    import ephysatlas.features
+
+    df = pd.read_parquet(Path(path_project) / "df_probe_details.pqt")
+    if strict:
+        df = pd.DataFrame(ephysatlas.features.ModelProbeDetails.validate(df))
+    return df
+
+
+def read_cell_features(path_project, strict=True):
+    """Read cluster-level features and associated arrays from disk.
+
+    Args:
+        path_project (Path): Path to the project folder (containing cell_aggregates/).
+        strict (bool): Validate df_clusters against ModelClusters schema if True.
+
+    Returns:
+        tuple: (df_clusters, stpc, stlfp)
+            - df_clusters: DataFrame with one row per good unit
+            - stpc: (n_units, 1000) memory-mapped numpy array of spike template PCs
+            - stlfp: (n_units, 250) memory-mapped numpy array of LFP features
+    """
+    import ephysatlas.cells
+
+    path = Path(path_project) / "cell_aggregates"
+    df_clusters = pd.read_parquet(path / "good_clusters.pqt")
+    if strict:
+        df_clusters = pd.DataFrame(ephysatlas.cells.ModelClusters.validate(df_clusters))
+    stpc = np.load(path / "good_stpc.npy", mmap_mode="r")
+    stlfp = np.load(path / "good_stlfp.npy", mmap_mode="r")
+    return df_clusters, stpc, stlfp
+
+
 def compute_depth_dataframe(df_raw_features, df_clusters, df_channels):
     """Compute a features dataframe for each pid and depth along the probe.
 
