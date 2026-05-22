@@ -498,8 +498,7 @@ def download_probe_details(
     s3, bucket_name, local_project_path = _project_s3(local_path, project, one)
     local_file = local_project_path / "df_probe_details.pqt"
     if overwrite or not local_file.exists():
-        s3.download_file(
-            bucket_name,
+        s3.Bucket(bucket_name).download_file(
             f"aggregates/atlas/projects/{project}/df_probe_details.pqt",
             str(local_file),
         )
