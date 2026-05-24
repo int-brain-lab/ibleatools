@@ -345,6 +345,39 @@ def download_tables(
     return local_path
 
 
+def download_encoding_volume(local_path, label="2026_W12", project=None, one=None, overwrite=False):
+    """Download a pre-computed ephys atlas encoding volume from AWS S3.
+
+    The encoding volume is a 4-D volumetric representation of electrophysiological
+    features on the 25 µm Allen Common Coordinate Framework (CCF), stored as a .npz file.
+    Load the result with ``np.load(file_path, allow_pickle=True)``.
+
+    Parameters
+    ----------
+    local_path : Path
+        Local directory where the file will be saved.
+    label : str, optional
+        Vintage label, e.g. "2026_W12". Defaults to "2026_W12".
+    project : str, optional
+        Project name. Defaults to "ea_active".
+    one : ONE
+        ONE client instance for AWS authentication.
+    overwrite : bool, optional
+        Force re-download even if the file already exists. Defaults to False.
+
+    Returns
+    -------
+    Path
+        Local path to the downloaded .npz file.
+    """
+    if project is None:
+        project = "ea_active"
+    local_file = Path(local_path).joinpath("brainwide_ephys_atlas_25um.npz")
+    s3_key = f"aggregates/atlas/encoding_volumes/{project}/{label}/brainwide_ephys_atlas_25um.npz"
+    s3, bucket_name = aws.get_s3_from_alyx(alyx=one.alyx)
+    return aws.s3_download_file(s3_key, local_file, s3=s3, bucket_name=bucket_name, overwrite=overwrite)
+
+
 def outlier_treatment(df_features, columns=None, replace_with_nan=False):
     # TODO can make it more general by allowing for different detection and replacement functions.
     if columns is None:
