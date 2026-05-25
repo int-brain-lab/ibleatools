@@ -85,9 +85,9 @@ def _schema_example(model_cls, n=5):
     data = {}
     for col_name, col in schema.columns.items():
         type_str = str(col.dtype)
-        if "float" in type_str:
+        if "float" in type_str.lower():
             data[col_name] = np.ones(n, dtype=float)
-        elif "int" in type_str:
+        elif "int" in type_str.lower():
             data[col_name] = np.zeros(n, dtype=int)
         elif "bool" in type_str:
             data[col_name] = [True] * n
@@ -152,10 +152,11 @@ class TestProjectDataIO(unittest.TestCase):
             ephysatlas.data.download_probe_details(
                 self.tmp / "dl", project=self.project, one=mock_one
             )
-        mock_s3.download_file.assert_called_once()
-        args = mock_s3.download_file.call_args[0]
-        self.assertEqual(args[0], "test-bucket")
-        self.assertIn("df_probe_details.pqt", args[1])
+        mock_s3.Bucket.assert_called_once_with("test-bucket")
+        mock_s3.Bucket.return_value.download_file.assert_called_once()
+        args = mock_s3.Bucket.return_value.download_file.call_args[0]
+        self.assertIn("df_probe_details.pqt", args[0])  # S3 key
+        self.assertIn("df_probe_details.pqt", args[1])  # local path
 
     def test_download_cell_features(self):
         mock_one = MagicMock()
