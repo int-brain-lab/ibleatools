@@ -318,3 +318,59 @@ class ModelClusters(pa.DataFrameModel):
     lateral_um: float = pa.Field(coerce=True, nullable=True)
     coupling_delay: Optional[float] = pa.Field(coerce=True, nullable=True)
     coupling_strength: Optional[float] = pa.Field(coerce=True, nullable=True)
+
+
+def compute_burstiness_and_memory(spike_train):
+    """
+    Computes the burstiness (B) and memory (M) metrics from a neuronal spike train.
+
+    Metrics Summary:
+    - Burstiness (B): Reflects the variability of a unit's inter-spike intervals (ISIs)[cite: 195].
+      It solely describes the distribution of ISI durations, normalized to a range between
+      -1 (completely regular) and 1 (maximally bursty)[cite: 195, 996].
+    - Memory (M): Reflects the temporal ordering of ISIs[cite: 195]. It is defined as the
+      Pearson correlation coefficient between subsequent ISIs[cite: 195, 1002].
+
+    Args:
+        spike_train (array-like): A sequence of timestamps representing action potentials (spikes).
+
+    Returns:
+        tuple: (burstiness, memory). Returns (np.nan, np.nan) if there are fewer
+               than 6 spikes, as reliable estimation requires sufficient data[cite: 1005].
+    """
+    # Convert input to a numpy array
+    spikes = np.asarray(spike_train)
+
+    # Metrics are only computed in epochs with at least six spikes available[cite: 1005].
+    if len(spikes) < 6:
+        return np.nan, np.nan
+
+    # Calculate Inter-Spike Intervals (ISIs)
+    isis = np.diff(spikes)
+
+    # ----------------------------------------------------
+    # 1. Compute Burstiness (B)
+    # ----------------------------------------------------
+    mean_isi = np.mean(isis)
+    std_isi = np.std(isis, ddof=1)  # Sample standard deviation
+
+    # Prevent division by zero
+    if (std_isi + mean_isi) == 0:
+        burstiness = np.nan
+    else:
+        burstiness = (std_isi - mean_isi) / (std_isi + mean_isi)
+
+    # ----------------------------------------------------
+    # 2. Compute Memory (M)
+    # ----------------------------------------------------
+    isis_current = isis[:-1]
+    isis_next = isis[1:]
+
+    # Prevent Pearson correlation errors if the ISIs are entirely constant
+    if np.std(isis_current, ddof=1) == 0 or np.std(isis_next, ddof=1) == 0:
+        memory = np.nan
+    else:
+        # np.corrcoef returns a 2x2 correlation matrix; we want the off-diagonal value
+        memory = np.corrcoef(isis_current, isis_next)[0, 1]
+
+    return burstiness, memory
