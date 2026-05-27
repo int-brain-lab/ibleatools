@@ -54,7 +54,13 @@ class TestComputeLogAcg(unittest.TestCase):
     def test_output_shapes_consistent(self):
         acg, t_log = compute_log_acg(self._poisson_spikes(), fs=self.FS)
         self.assertEqual(acg.shape, t_log.shape)
-        self.assertGreater(t_log.size, 0)
+
+    def test_n_log_bins_exact(self):
+        """n_log_bins controls the exact output length."""
+        for n in (64, 256, 512):
+            acg, t_log = compute_log_acg(self._poisson_spikes(), fs=self.FS, n_log_bins=n)
+            self.assertEqual(acg.size, n)
+            self.assertEqual(t_log.size, n)
 
     def test_t_log_monotone_and_above_trim(self):
         _, t_log = compute_log_acg(self._poisson_spikes(), fs=self.FS)

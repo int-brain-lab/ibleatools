@@ -5,9 +5,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [UNRELEASED]
 
-### Added
+### Changed
 **Cells Features**
-- `compute_log_acg(spike_times, fs, ...)` in `ephysatlas.cells`: computes a long autocorrelogram with log-spaced bins for a single spike train; returns `(acg_log, t_log)` in counts/s
+- `compute_log_acg`: simplified implementation using `np.geomspace` directly in time-space; removed `log_start` parameter; output length is now exactly `n_log_bins` (previously variable after trimming)
 
 ## [0.6.0] - 2026-05-22
 
