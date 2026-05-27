@@ -604,7 +604,7 @@ def compute_features_from_pid(
     t_start=None,
     duration=None,
     duration_ap=5,
-    duration_lf=5,
+    duration_lf=25,
     one=None,
     features_to_compute=None,
     output_dir=None,
@@ -699,15 +699,20 @@ def compute_features_from_pid(
     # Convert time parameters to float and handle default values
     t_start = float(t_start) if t_start is not None else 0.0
 
-    # If duration is None, calculate the maximum available duration from both AP and LF data
+    # Compute both max times unconditionally so each branch below has them available.
+    # Safe because load_data_from_pid asserts sr_ap and sr_lf are non-None.
+    max_time_ap = sr_ap.ns / sr_ap.fs
+    max_time_lf = sr_lf.ns / sr_lf.fs
+
+    # If duration is None, fall back to the maximum available duration for that band.
     if duration_ap is None:
-        max_time_ap = sr_ap.ns / sr_ap.fs
         duration_ap = max_time_ap - t_start
-    if duration_lf is None:
-        max_time_lf = sr_lf.ns / sr_lf.fs
-        duration_lf = min(max_time_ap, max_time_lf) - t_start
     else:
         duration_ap = float(duration_ap)
+
+    if duration_lf is None:
+        duration_lf = min(max_time_ap, max_time_lf) - t_start
+    else:
         duration_lf = float(duration_lf)
 
     # Add target coordinates to channel information if not already present
@@ -811,7 +816,7 @@ def compute_features_from_file(
     t_start=None,
     duration=None,
     duration_ap=5,
-    duration_lf=5,
+    duration_lf=25,
     traj_dict=None,
     features_to_compute=None,
     output_dir=None,
