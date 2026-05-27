@@ -3,6 +3,12 @@
 This file documents the changes to the features for supported feature versions.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [UNRELEASED]
+
+### Added
+**Cells Features**
+- `compute_log_acg(spike_times, fs, ...)` in `ephysatlas.cells`: computes a long autocorrelogram with log-spaced bins for a single spike train; returns `(acg_log, t_log)` in counts/s
+
 ## [0.6.0] - 2026-05-22
 
 ### Added

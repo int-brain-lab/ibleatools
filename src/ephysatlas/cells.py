@@ -11,6 +11,8 @@ import scipy.signal
 import tqdm
 import matplotlib.pyplot as plt
 
+import phylib.stats
+
 import ibldsp.voltage
 import ibldsp.utils
 import spikeglx
@@ -374,3 +376,90 @@ def compute_burstiness_and_memory(spike_train):
         memory = np.corrcoef(isis_current, isis_next)[0, 1]
 
     return burstiness, memory
+
+
+def compute_log_acg(
+    spike_times,
+    fs,
+    spike_clusters=None,
+    bin_size=0.2e-3,
+    win_size=2.0,
+    n_log_bins=512,
+    log_start=0.001e-3,
+    log_trim=1e-3,
+):
+    """
+    Compute a long autocorrelogram with log-spaced bins.
+
+    Parameters
+    ----------
+    spike_times : numpy.ndarray
+        Spike times in seconds.
+    fs : float
+        Sampling rate of the recording in Hz.
+    spike_clusters : numpy.ndarray, optional
+        Cluster label for each spike. If provided, the function computes one ACG per
+        unique cluster and returns a 2-D array whose rows are ordered by
+        ``np.unique(spike_clusters)``. If None (default), ``spike_times`` is treated as a
+        single cluster and a 1-D array is returned.
+    bin_size : float, optional
+        Base bin resolution in seconds. Default 0.2e-3 s.
+    win_size : float, optional
+        One-sided window length in seconds. Default 2.0 s.
+    n_log_bins : int, optional
+        Target number of log-spaced bins before trimming. Default 512.
+    log_start : float, optional
+        Lag at which log-spaced sampling begins in seconds. Default 0.001e-3 s.
+    log_trim : float, optional
+        Discard bins below this lag (refractory period). Default 1e-3 s.
+
+    Returns
+    -------
+    acg_log : numpy.ndarray
+        Log-binned ACG in counts/s. Shape ``(n_trimmed_bins,)`` when
+        ``spike_clusters`` is None, or ``(n_unique_clusters, n_trimmed_bins)`` otherwise.
+    t_log : numpy.ndarray
+        Centre of each log bin in seconds, shape ``(n_trimmed_bins,)``.
+    """
+    n_bins = int(win_size / bin_size) + 1
+    t_bins = np.arange(n_bins) * bin_size
+
+    # build log bin boundaries in index space (guarantees no empty bins) — computed once
+    i_start = np.searchsorted(t_bins, log_start)
+    min_step = max(1, round(1e-3 / bin_size))  # enforce >= 1 ms per log bin
+    _raw_bnd = np.unique(np.round(np.geomspace(i_start, n_bins, n_log_bins)).astype(int))
+    _kept = [_raw_bnd[0]]
+    for _b in _raw_bnd[1:]:
+        if _b - _kept[-1] >= min_step:
+            _kept.append(_b)
+    bnd = np.array(_kept)
+    n_actual = len(bnd) - 1
+    t_log_full = np.array([t_bins[bnd[j] : bnd[j + 1]].mean() for j in range(n_actual)])
+    bin_widths = np.diff(bnd) * bin_size
+    i_trim = int(np.searchsorted(t_log_full, log_trim))
+    t_log = t_log_full[i_trim:]
+    bin_idx = np.searchsorted(bnd[1:], np.arange(n_bins), side="right")
+
+    def _single_acg(st):
+        if st.size < 2:
+            return np.zeros(t_log.size)
+        autocorr = phylib.stats.correlograms(
+            st,
+            np.zeros(st.size, dtype=int),
+            np.array([0], dtype=int),
+            sample_rate=fs,
+            bin_size=bin_size,
+            window_size=2 * win_size,
+            symmetrize=False,
+        ).squeeze()
+        return (
+            np.bincount(bin_idx, weights=autocorr.astype(float), minlength=n_actual)
+            / bin_widths
+        )[i_trim:]
+
+    if spike_clusters is None:
+        return _single_acg(spike_times), t_log
+
+    cluster_ids = np.unique(spike_clusters)
+    acg_log = np.array([_single_acg(spike_times[spike_clusters == cid]) for cid in cluster_ids])
+    return acg_log, t_log
