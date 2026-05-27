@@ -39,7 +39,7 @@ def get_waveforms_coordinates(
         return_indices (bool, optional): If True, returns the indices of the channels within the radius. Defaults to False.
 
     Returns:
-        np.array or tuple: 
+        np.array or tuple:
             - If return_indices is False: (nspikes, ntraces, n_coordinates) array of axial and transverse coordinates
             - If return_indices is True: tuple of (coordinates, indices) where indices is (nspikes, ntraces) array
     """
@@ -111,7 +111,7 @@ def atlas_pids_autism(one):
     return [item["id"] for item in ins_keep], ins_keep
 
 
-def atlas_pids(one, tracing=True, project='ibl_neuropixel_brainwide_01'):
+def atlas_pids(one, tracing=True, project="ibl_neuropixel_brainwide_01"):
     """Get atlas PIDs from the IBL neuropixel brainwide project.
 
     Args:
@@ -152,21 +152,22 @@ def read_correlogram(file_correlogram, nclusters):
     )
     return mmap_correlogram
 
-def _get_immediate_children(bucket, prefix=None, delimiter='/'):
+
+def _get_immediate_children(bucket, prefix=None, delimiter="/"):
     """Base function to get the immediate children of a prefix on AWS S3 as a list.
-    
+
     Args:
         bucket: AWS S3 bucket object
         prefix (str, optional): S3 prefix to search under
         delimiter (str, optional): Delimiter to use for splitting keys. Defaults to '/'
-        
+
     Returns:
         list: List of immediate child prefixes
     """
     immediate_children = set()
 
     for obj in bucket.objects.filter(Prefix=prefix):
-        key = obj.key[len(prefix):]  # Remove the base prefix from key
+        key = obj.key[len(prefix) :]  # Remove the base prefix from key
         if delimiter in key:
             # Extract the immediate child prefix up to the first delimiter
             child_prefix = key.split(delimiter)[0]
@@ -179,29 +180,29 @@ def _get_immediate_children(bucket, prefix=None, delimiter='/'):
     return list(immediate_children)
 
 
-def get_immediate_labels(bucket, prefix=None, delimiter='/', limit=None):
+def get_immediate_labels(bucket, prefix=None, delimiter="/", limit=None):
     """Get immediate children under a prefix that match the label format (YYYY_WXX) from AWS S3.
-    
+
     Args:
         bucket: AWS S3 bucket object
         prefix (str, optional): S3 prefix to search under
         delimiter (str, optional): Delimiter to use for splitting keys. Defaults to '/'
         limit (int, optional): Maximum number of results to return
-        
+
     Returns:
         list: List of immediate child prefixes that match the label format
     """
     immediate_children = _get_immediate_children(bucket, prefix, delimiter)
-    
+
     # Filter for label format (YYYY_WXX)
     filtered_children = []
     for child_prefix in immediate_children:
-        if re.match(r'^\d{4}_W\d{2}$', child_prefix):
+        if re.match(r"^\d{4}_W\d{2}$", child_prefix):
             filtered_children.append(child_prefix)
         else:
             pass
             # print(f"Skipping {child_prefix} as it does not match the expected format")
-    
+
     return sorted(filtered_children, reverse=True)[:limit]
 
 
@@ -210,21 +211,33 @@ def list_available_projects(one=None):
     assert one is not None, "ONE client instance is required"
     _logger.info("Listing available projects.")
     s3, bucket_name = aws.get_s3_from_alyx(alyx=one.alyx)
-    bucket = s3.Bucket(bucket_name)    
-    return _get_immediate_children(bucket, prefix="aggregates/atlas/features/", delimiter='/')
+    bucket = s3.Bucket(bucket_name)
+    return _get_immediate_children(
+        bucket, prefix="aggregates/atlas/features/", delimiter="/"
+    )
 
-def list_available_labels(one=None, project = None, limit=None):
+
+def list_available_labels(one=None, project=None, limit=None):
     """List available labels on AWS S3."""
     assert one is not None, "ONE client instance is required"
-    assert project is not None, "First get list of available projects using list_available_projects(one=one)"
+    assert project is not None, (
+        "First get list of available projects using list_available_projects(one=one)"
+    )
     _logger.info(f"Listing available labels for project: {project}")
     s3, bucket_name = aws.get_s3_from_alyx(alyx=one.alyx)
     bucket = s3.Bucket(bucket_name)
-    return get_immediate_labels(bucket, prefix=f"aggregates/atlas/features/{project}/", delimiter='/', limit=limit)
+    return get_immediate_labels(
+        bucket,
+        prefix=f"aggregates/atlas/features/{project}/",
+        delimiter="/",
+        limit=limit,
+    )
 
-def get_latest_label(one=None, project = None):
+
+def get_latest_label(one=None, project=None):
     """Get the latest label on AWS S3."""
-    return list_available_labels(one=one, project = project, limit=1)[0]
+    return list_available_labels(one=one, project=project, limit=1)[0]
+
 
 def download_tables(
     local_path,
@@ -266,20 +279,20 @@ def download_tables(
     if project is None:
         project = "ea_active"
         _logger.warning(f"Project is None, using default project: {project}")
-    
+
     # Create local directory structure
     local_path = Path(local_path).joinpath(project).joinpath(label).joinpath(agg_level)
     local_path.mkdir(parents=True, exist_ok=True)
-    
+
     # Get AWS credentials
     s3, bucket_name = aws.get_s3_from_alyx(alyx=one.alyx)
-    
+
     # Download main data with backward compatibility for agg_full
     if agg_level == "agg_full":
         # Try the new path with agg_level first, then fall back to backward compatibility
         primary_path = f"aggregates/atlas/features/{project}/{label}/{agg_level}"
         fallback_path = f"aggregates/atlas/features/{project}/{label}"
-        
+
         try:
             local_files = aws.s3_download_folder(
                 primary_path,
@@ -315,7 +328,7 @@ def download_tables(
             bucket_name=bucket_name,
             overwrite=overwrite,
         )
-    
+
     # Download extended data if requested
     if extended:
         local_files = aws.s3_download_folder(
@@ -325,42 +338,51 @@ def download_tables(
             bucket_name=bucket_name,
             overwrite=overwrite,
         )
-    
-    assert len(local_files), f"aggregates/atlas/features/{project}/{label} not found on AWS"
+
+    assert len(local_files), (
+        f"aggregates/atlas/features/{project}/{label} not found on AWS"
+    )
     return local_path
 
 
-def outlier_treatment(df_features, columns = None, replace_with_nan=False):
-    #TODO can make it more general by allowing for different detection and replacement functions.
+def outlier_treatment(df_features, columns=None, replace_with_nan=False):
+    # TODO can make it more general by allowing for different detection and replacement functions.
     if columns is None:
         return df_features
     bad_index = False
     for column in columns:
-        #Threshold based on a factor of the median value.
+        # Threshold based on a factor of the median value.
         bad = df_features[column].values >= (1e3 * np.nanmedian(df_features[column]))
         bad_index = np.logical_or(bad_index, bad)
     if np.sum(bad) > 0:
-        _logger.warning(f"Number of bad channels: {np.sum(bad)},"
-                        f" those will be replaced with replace_with_nan = {replace_with_nan} strategy.")
+        _logger.warning(
+            f"Number of bad channels: {np.sum(bad)},"
+            f" those will be replaced with replace_with_nan = {replace_with_nan} strategy."
+        )
     for column in columns:
         if replace_with_nan:
             df_features.loc[bad_index, column] = np.nan
         else:
             df_features.loc[bad_index, column] = np.nanmedian(df_features[column])
-    
+
     return df_features
 
 
-def replace_nan(df_features, columns = None):
+def replace_nan(df_features, columns=None):
     if columns is None:
         return df_features
     for column in columns:
         if np.isnan(df_features[column]).sum() > 0:
-            _logger.warning(f"Number of nan values in column {column}: {np.isnan(df_features[column]).sum()}")
-            df_features.loc[np.isnan(df_features[column]), column] = np.nanmedian(df_features[column])
+            _logger.warning(
+                f"Number of nan values in column {column}: {np.isnan(df_features[column]).sum()}"
+            )
+            df_features.loc[np.isnan(df_features[column]), column] = np.nanmedian(
+                df_features[column]
+            )
         else:
             _logger.info(f"No nan values in column {column}")
     return df_features
+
 
 def read_features_from_disk(
     path_features: Path,
@@ -396,9 +418,9 @@ def read_features_from_disk(
         brain_atlas if brain_atlas is not None else ephysatlas.anatomy.ClassifierAtlas()
     )
     assert brain_atlas is not None, "Brain atlas is required to map labels to regions"
-    assert all(
-        mapping in brain_atlas.regions.mappings for mapping in mappings
-    ), f"Unknown mapping: {mappings}"
+    assert all(mapping in brain_atlas.regions.mappings for mapping in mappings), (
+        f"Unknown mapping: {mappings}"
+    )
     # merge the channel information with the features
     if load_denoised:  # load the denoised features
         df_features = pd.read_parquet(path_features / "raw_ephys_features_denoised.pqt")
@@ -441,11 +463,10 @@ def read_features_from_disk(
     if strict:
         df_features = pd.DataFrame(ephysatlas.features.ModelRawFeatures(df_features))
 
-    #Do the outlier treatment for the alpha features.
-    df_features = outlier_treatment(df_features, columns = ['alpha_mean','alpha_std'])
+    # Do the outlier treatment for the alpha features.
+    df_features = outlier_treatment(df_features, columns=["alpha_mean", "alpha_std"])
 
     return df_features
-
 
 
 def compute_depth_dataframe(df_raw_features, df_clusters, df_channels):

@@ -48,13 +48,13 @@ Examples
 >>> from ephysatlas.plots import plot_histogram, plot_probe_rect2
 >>> import numpy as np
 >>> import matplotlib.pyplot as plt
->>> 
+>>>
 >>> # Create sample data
 >>> data = np.random.randn(1000)
->>> 
+>>>
 >>> # Plot histogram
 >>> plot_histogram(data, xlabel="Value", title="Sample Distribution")
->>> 
+>>>
 >>> # Plot probe visualization
 >>> xy = np.column_stack([np.arange(64), np.zeros(64)])
 >>> colors = np.random.rand(64, 3)
@@ -111,10 +111,10 @@ def plot_histogram(
     series, ax=None, quantiles=None, bins=None, xlabel=None, title=None, normalise=False
 ):
     """Create histograms with quantile-based color coding.
-    
+
     This function creates histograms with color coding based on quantile values,
     providing visual distinction between different ranges of the data distribution.
-    
+
     Args:
         series (pd.Series or np.ndarray): Data series to plot as histogram.
         ax (matplotlib.axes.Axes, optional): Axes on which to plot. If None,
@@ -126,10 +126,10 @@ def plot_histogram(
         title (str, optional): Title for the plot.
         normalise (bool, optional): Whether to normalize the histogram counts.
             Defaults to False.
-            
+
     Returns:
         None: The function modifies the provided axes or creates a new plot.
-        
+
     Note:
         The function uses the viridis colormap for quantile-based coloring.
         Sample count is displayed in the top-right corner of the plot.
@@ -183,11 +183,11 @@ def plot_histogram(
 
 def plot_cumulative_probas(probas, depths, aids, regions=None, ax=None, legend=False):
     """Plot cumulative probabilities of brain regions along probe depths.
-    
+
     Creates a stacked area plot showing the probability distribution of different brain regions
     at each depth along a probe trajectory. Each region is colored according to its standard
     atlas color.
-    
+
     Args:
         probas (np.ndarray): Array of shape (ndepths, nregions) containing probabilities
             for each region at each depth. Values should sum to 1 across regions for each depth.
@@ -200,10 +200,10 @@ def plot_cumulative_probas(probas, depths, aids, regions=None, ax=None, legend=F
             axes will be used.
         legend (bool, optional): Whether to display a legend with region names.
             Defaults to False.
-            
+
     Returns:
         matplotlib.axes.Axes: The axes object containing the plot.
-        
+
     Note:
         The function creates a stacked area plot where each brain region is represented
         by a different color from the atlas. The y-axis represents depth along the probe.
@@ -230,11 +230,11 @@ def plot_cumulative_probas(probas, depths, aids, regions=None, ax=None, legend=F
 # How to add ground truth(histology data) to the plot?
 def plot_results(df, predicted_probas, dict_model, regions=None):
     """Visualize model prediction results and feature distributions.
-    
+
     This function creates a comprehensive visualization of model prediction results,
     including feature heatmaps, cumulative probability plots for different folds,
     and entropy analysis across channels.
-    
+
     Args:
         df (pd.DataFrame): DataFrame containing channel data and features.
         predicted_probas (np.ndarray): Array of predicted probabilities with shape
@@ -243,12 +243,12 @@ def plot_results(df, predicted_probas, dict_model, regions=None):
             and class information.
         regions (iblatlas.BrainRegions, optional): BrainRegions object for region
             visualization. If None, a new instance is created.
-            
+
     Returns:
         tuple: A tuple containing:
             - fig (matplotlib.figure.Figure): The figure object containing all plots.
             - axs (np.ndarray): Array of matplotlib axes objects.
-            
+
     Note:
         The function creates a multi-panel figure with feature heatmaps, probability
         plots for each fold, and entropy analysis. It automatically handles both
@@ -299,10 +299,10 @@ def plot_results(df, predicted_probas, dict_model, regions=None):
 
 def select_series(df, features=None, acronym=None, id=None, mapping="Allen"):
     """Select data series based on features and brain region criteria.
-    
+
     This function filters a DataFrame to select specific features based on
     brain region criteria (acronym or ID) and returns the selected data series.
-    
+
     Args:
         df (pd.DataFrame): DataFrame containing the data to filter.
         features (list, optional): List of feature names to select. If None,
@@ -313,11 +313,11 @@ def select_series(df, features=None, acronym=None, id=None, mapping="Allen"):
             Mutually exclusive with acronym parameter.
         mapping (str, optional): Brain region mapping system to use.
             Defaults to "Allen".
-            
+
     Returns:
         pd.DataFrame: Filtered DataFrame containing only the selected features
             for the specified brain region.
-            
+
     Note:
         Either acronym or id should be provided, but not both. If neither is
         provided, the function will return None.
@@ -333,11 +333,11 @@ def select_series(df, features=None, acronym=None, id=None, mapping="Allen"):
 
 def get_color_feat(x, cmap_name="viridis", min_val=None, max_val=None):
     """Generate colors for feature values using colormaps.
-    
+
     This function normalizes feature values to the range [0, 1] and maps them
     to colors using a specified colormap. Useful for creating color-coded
     visualizations of feature values.
-    
+
     Args:
         x (np.ndarray): Array of feature values to colorize.
         cmap_name (str, optional): Name of the matplotlib colormap to use.
@@ -346,10 +346,10 @@ def get_color_feat(x, cmap_name="viridis", min_val=None, max_val=None):
             uses the minimum value in x. Defaults to None.
         max_val (float, optional): Maximum value for normalization. If None,
             uses the maximum value in x. Defaults to None.
-            
+
     Returns:
         np.ndarray: Array of RGBA colors with the same shape as x.
-        
+
     Note:
         The function performs min-max normalization and maps the normalized
         values to colors using the specified colormap. Values are clipped to
@@ -367,10 +367,10 @@ def get_color_feat(x, cmap_name="viridis", min_val=None, max_val=None):
 
 def get_color_br(pid_ch_df, br, mapping="Allen"):
     """Generate colors for brain regions.
-    
+
     This function extracts brain region IDs from a DataFrame and maps them
     to their corresponding RGB colors from the brain regions atlas.
-    
+
     Args:
         pid_ch_df (pd.DataFrame): DataFrame containing brain region mapping
             columns (e.g., "Allen_id").
@@ -378,10 +378,10 @@ def get_color_br(pid_ch_df, br, mapping="Allen"):
             region information and colors.
         mapping (str, optional): Brain region mapping system to use.
             Defaults to "Allen".
-            
+
     Returns:
         np.ndarray: Array of RGB colors normalized to [0, 1] range.
-        
+
     Note:
         The function looks for a column named "{mapping}_id" in the DataFrame
         and uses the brain regions atlas to map these IDs to RGB colors.
@@ -393,10 +393,10 @@ def get_color_br(pid_ch_df, br, mapping="Allen"):
 
 def plot_probe_rect(xy, color, ax, width=16, height=40):
     """Plot probe channels as rectangles with specified colors.
-    
+
     This function uses matplotlib rectangles to visualize probe channels
     at their spatial coordinates with specified colors and dimensions.
-    
+
     Args:
         xy (np.ndarray): Array of shape (n_channels, 2) containing x,y coordinates
             for each channel in micrometers.
@@ -407,10 +407,10 @@ def plot_probe_rect(xy, color, ax, width=16, height=40):
             Defaults to 16.
         height (float, optional): Height of each rectangle in micrometers.
             Defaults to 40.
-            
+
     Returns:
         None: The function modifies the provided axes.
-        
+
     Note:
         The function automatically adjusts the plot limits to accommodate all
         rectangles. Each channel is represented by a filled rectangle centered
@@ -438,11 +438,11 @@ def plot_probe_rect(xy, color, ax, width=16, height=40):
 
 def plot_probe_rect2(xy, color, ax, width=16, height=40, colorbar=False):
     """Plot probe channels using imshow for better visualization.
-    
+
     This function uses matplotlib's imshow to visualize probe channels as
     colored rectangles, providing better performance and visualization quality
     compared to individual rectangle patches.
-    
+
     Args:
         xy (np.ndarray): Array of shape (n_channels, 2) containing x,y coordinates
             for each channel in micrometers.
@@ -455,10 +455,10 @@ def plot_probe_rect2(xy, color, ax, width=16, height=40, colorbar=False):
             Defaults to 40.
         colorbar (bool, optional): Whether to add a colorbar to the plot.
             Defaults to False.
-            
+
     Returns:
         None: The function modifies the provided axes.
-        
+
     Note:
         The function stretches the probe in the X direction (factor of 3) to improve
         readability for very long thin probes. It creates a rasterized representation
@@ -520,11 +520,11 @@ def figure_features_channel_space(
     vmax: float = None,
 ):
     """Create a figure displaying electrophysiological features and brain regions along a probe.
-    
+
     This function visualizes multiple features along a probe's channels in physical space,
     as well as brain region information. It creates a multi-panel figure where each panel
     shows a different feature or brain region mapping.
-    
+
     Args:
         pid_df (pd.DataFrame): Dataframe containing channels and voltage information for
             a given probe ID (PID). Must contain columns for the specified features and
@@ -551,17 +551,17 @@ def figure_features_channel_space(
             value in the data is used.
         vmax (float, optional): Maximum value for color normalization. If None, the maximum
             value in the data is used.
-            
+
     Returns:
         tuple: A tuple containing:
             - fig (matplotlib.figure.Figure): The figure object containing the plots.
             - axs (np.ndarray): The axes objects for each subplot.
-            
+
     Note:
         The function creates a multi-panel figure with brain region visualization,
         feature plots, and probe layout. It automatically handles figure sizing and
         subplot arrangement for optimal visualization.
-        
+
     Example:
         # Merge the voltage and channels dataframe
         df_voltage = pd.merge(df_voltage, df_channels, left_index=True, right_index=True).dropna()
@@ -594,7 +594,7 @@ def figure_features_channel_space(
         axs[2].axis("off")
     else:
         brainbox.ephys_plots.plot_brain_regions(
-            pid_df[mapping+"_id"].values,
+            pid_df[mapping + "_id"].values,
             channel_depths=xy[:, 1],
             brain_regions=br,
             display=True,
@@ -620,7 +620,6 @@ def figure_features_channel_space(
         ax.set_xticklabels([])
         ax.set_yticklabels([])
 
-
     axs[3].axis("off")
     # Add pid as suptitle
     # pid = pid_df.index[0][0]
@@ -644,23 +643,23 @@ def figure_features_channel_space(
 
 def plot_features_distributions(df_features, x_list=None, title=""):
     """Create a grid of histograms displaying the distribution of electrophysiological features.
-    
+
     This function generates a multi-panel figure with histograms for each feature in x_list.
     Each histogram is color-coded according to feature values and accompanied by a colorbar.
     The function uses quantile-based limits to handle outliers in the data visualization.
-    
+
     Args:
         df_features (pd.DataFrame): DataFrame containing the feature values with feature
             names as columns.
         x_list (list, optional): List of feature names to plot. If None, uses all
             available voltage features. Defaults to None.
         title (str, optional): Title for the figure. Defaults to "".
-            
+
     Returns:
         tuple: A tuple containing:
             - fig (matplotlib.figure.Figure): The figure object containing all histograms.
             - axs (np.ndarray): Array of matplotlib.axes.Axes objects for each subplot.
-            
+
     Note:
         The function creates a 4x12 grid layout with histograms and colorbars.
         Each histogram uses quantile-based limits (0.1-0.9 for color range, 0.005-0.995

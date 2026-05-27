@@ -33,7 +33,8 @@ class TestSetupOutputDirectory(unittest.TestCase):
         params = {
             "pid": "test_pid",
             "t_start": 300.0,
-            "duration": 5.0,
+            "duration_ap": 5.0,
+            "duration_lf": 5.0,
             "output_dir": str(self.base_path),
         }
 
@@ -45,7 +46,7 @@ class TestSetupOutputDirectory(unittest.TestCase):
 
         # Check directory names
         self.assertEqual(probe_level_dir.name, "test_pid")
-        expected_snippet_name = "probe_test_pid_000300.0_05.0"
+        expected_snippet_name = "probe_test_pid_000300.0_05.0_05.0"
         self.assertEqual(snippet_level_dir.name, expected_snippet_name)
 
         # Check directory structure
@@ -58,7 +59,8 @@ class TestSetupOutputDirectory(unittest.TestCase):
             "pid": None,
             "filename": "/path/to/test_ap.cbin",
             "t_start": 100.5,
-            "duration": 25.0,
+            "duration_ap": 25.0,
+            "duration_lf": 25.0,
             "output_dir": str(self.base_path),
         }
 
@@ -73,7 +75,7 @@ class TestSetupOutputDirectory(unittest.TestCase):
         self.assertEqual(probe_level_dir.name, ap_file_hash)
 
         # Check snippet level directory name (should use None for pid)
-        expected_snippet_name = "probe_None_000100.5_25.0"
+        expected_snippet_name = "probe_None_000100.5_25.0_25.0"
         self.assertEqual(snippet_level_dir.name, expected_snippet_name)
 
     def test_setup_output_directory_padding(self):
@@ -81,14 +83,15 @@ class TestSetupOutputDirectory(unittest.TestCase):
         params = {
             "pid": "test_pid",
             "t_start": 123.456,
-            "duration": 7.89,
+            "duration_ap": 7.89,
+            "duration_lf": 7.89,
             "output_dir": str(self.base_path),
         }
 
         probe_level_dir, snippet_level_dir = setup_output_directory(params)
 
         # Check padding format
-        expected_snippet_name = "probe_test_pid_000123.5_07.9"
+        expected_snippet_name = "probe_test_pid_000123.5_07.9_07.9"
         self.assertEqual(snippet_level_dir.name, expected_snippet_name)
 
     def test_setup_output_directory_existing_directories(self):
@@ -96,13 +99,14 @@ class TestSetupOutputDirectory(unittest.TestCase):
         params = {
             "pid": "test_pid",
             "t_start": 0.0,
-            "duration": 100.0,
+            "duration_ap": 100.0,
+            "duration_lf": 100.0,
             "output_dir": str(self.base_path),
         }
 
         # Create directories manually first
         probe_level_dir = self.base_path / "test_pid"
-        snippet_level_dir = probe_level_dir / "probe_test_pid_000000.0_100.0"
+        snippet_level_dir = probe_level_dir / "probe_test_pid_000000.0_100.0_100.0"
         probe_level_dir.mkdir(parents=True, exist_ok=True)
         snippet_level_dir.mkdir(parents=True, exist_ok=True)
 
@@ -118,7 +122,8 @@ class TestSetupOutputDirectory(unittest.TestCase):
         params = {
             "pid": "test_pid",
             "t_start": 0.0,
-            "duration": 100.0,
+            "duration_ap": 100.0,
+            "duration_lf": 100.0,
             "output_dir": str(self.base_path / "nonexistent" / "subdir"),
         }
 
@@ -135,24 +140,26 @@ class TestSetupOutputDirectory(unittest.TestCase):
         params = {
             "pid": "test_pid",
             "t_start": 0.0,
-            "duration": 0.0,
+            "duration_ap": 0.0,
+            "duration_lf": 0.0,
             "output_dir": str(self.base_path),
         }
 
         probe_level_dir, snippet_level_dir = setup_output_directory(params)
-        expected_snippet_name = "probe_test_pid_000000.0_00.0"
+        expected_snippet_name = "probe_test_pid_000000.0_00.0_00.0"
         self.assertEqual(snippet_level_dir.name, expected_snippet_name)
 
         # Test with large values
         params = {
             "pid": "test_pid",
             "t_start": 999999.9,
-            "duration": 9999.9,
+            "duration_ap": 9999.9,
+            "duration_lf": 9999.9,
             "output_dir": str(self.base_path),
         }
 
         probe_level_dir, snippet_level_dir = setup_output_directory(params)
-        expected_snippet_name = "probe_test_pid_999999.9_9999.9"
+        expected_snippet_name = "probe_test_pid_999999.9_9999.9_9999.9"
         self.assertEqual(snippet_level_dir.name, expected_snippet_name)
 
     def test_setup_output_directory_hash_consistency(self):
@@ -161,7 +168,8 @@ class TestSetupOutputDirectory(unittest.TestCase):
             "pid": None,
             "filename": "/path/to/test_ap.cbin",
             "t_start": 0.0,
-            "duration": 100.0,
+            "duration_ap": 100.0,
+            "duration_lf": 100.0,
             "output_dir": str(self.base_path),
         }
 
@@ -169,7 +177,8 @@ class TestSetupOutputDirectory(unittest.TestCase):
             "pid": None,
             "filename": "/different/path/to/test_ap.cbin",  # Same filename, different path
             "t_start": 0.0,
-            "duration": 100.0,
+            "duration_ap": 100.0,
+            "duration_lf": 100.0,
             "output_dir": str(self.base_path),
         }
 
@@ -184,7 +193,8 @@ class TestSetupOutputDirectory(unittest.TestCase):
             "pid": None,
             "filename": "/path/to/different_ap.cbin",
             "t_start": 0.0,
-            "duration": 100.0,
+            "duration_ap": 100.0,
+            "duration_lf": 100.0,
             "output_dir": str(self.base_path),
         }
 

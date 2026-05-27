@@ -76,18 +76,18 @@ Examples
 --------
 >>> from ephysatlas.features import lf, csd, ap
 >>> import numpy as np
->>> 
+>>>
 >>> # Generate sample data
 >>> data = np.random.randn(64, 30000)  # 64 channels, 30k samples
 >>> fs = 30000  # 30 kHz sampling rate
->>> 
+>>>
 >>> # Compute LF features
 >>> lf_features = lf(data, fs)
->>> 
+>>>
 >>> # Compute CSD features
 >>> geometry = {'x': np.arange(64), 'y': np.zeros(64)}
 >>> csd_features = csd(data, fs, geometry)
->>> 
+>>>
 >>> # Compute AP features
 >>> ap_data = np.random.randn(64, 10000)
 >>> ap_features = ap(ap_data, geometry, np.zeros(64))
@@ -186,13 +186,13 @@ FEATURES_LIST = ["raw_ap", "raw_lf", "localisation", "waveforms"]
 
 def get_feature_cmin(feature_name):
     """Get the minimum value for a given feature.
-    
+
     Args:
         feature_name (str): Name of the feature.
-        
+
     Returns:
         float: Minimum value for the feature.
-        
+
     Note:
         This function is currently a placeholder and needs implementation.
     """
@@ -202,10 +202,10 @@ def get_feature_cmin(feature_name):
 
 class DartParameters(pydantic.BaseModel):
     """Configuration parameters for Dartsort backend.
-    
+
     This class defines the parameters used for spike detection and feature
     extraction using the Dartsort algorithm.
-    
+
     Attributes:
         localization_radius (float): Radius in micrometers for spike localization.
             Defaults to 150.
@@ -216,6 +216,7 @@ class DartParameters(pydantic.BaseModel):
         scratch_dir (Path or str, optional): Scratch directory for temporary files.
             If None, will use system defaults.
     """
+
     localization_radius: pydantic.PositiveFloat = 150
     chunk_length_samples: pydantic.PositiveInt = 2**15
     trough_offset: pydantic.PositiveInt = 42
@@ -227,10 +228,10 @@ class DartParameters(pydantic.BaseModel):
 
 class ChannelDataFrameSchema(pa.DataFrameModel):
     """Pandera schema for channel data validation.
-    
+
     This schema defines the structure and validation rules for channel
     information including spatial coordinates and anatomical labels.
-    
+
     Attributes:
         pid (Series[str]): Probe insertion ID.
         channel (Series[int]): Channel index.
@@ -242,79 +243,68 @@ class ChannelDataFrameSchema(pa.DataFrameModel):
         acronym (Series[str]): Brain region acronym.
         atlas_id (Series[int]): Atlas region identifier.
     """
+
     pid: Series[str] = pa.Field(
-        coerce=True,
-        description="Probe insertion ID",
-        metadata={
-            "raw_unit": "N/A"}
+        coerce=True, description="Probe insertion ID", metadata={"raw_unit": "N/A"}
     )
     channel: Series[int] = pa.Field(
-        coerce=True,
-        description="Channel index",
-        metadata={
-            "raw_unit": "index"}
+        coerce=True, description="Channel index", metadata={"raw_unit": "index"}
     )
     x: Series[float] = pa.Field(
         coerce=True,
         description="X-coordinate in micrometers",
-        metadata={
-            "raw_unit": "um"}
+        metadata={"raw_unit": "um"},
     )
     y: Series[float] = pa.Field(
         coerce=True,
         description="Y-coordinate in micrometers",
-        metadata={
-            "raw_unit": "um"}
+        metadata={"raw_unit": "um"},
     )
     z: Series[float] = pa.Field(
         coerce=True,
         description="Z-coordinate in micrometers",
-        metadata={
-            "raw_unit": "um"}
+        metadata={"raw_unit": "um"},
     )
     axial_um: Series[float] = pa.Field(
         coerce=True,
         description="Distance along the probe length (depth)",
-        metadata={
-            "raw_unit": "um"}
+        metadata={"raw_unit": "um"},
     )
     lateral_um: Series[float] = pa.Field(
         coerce=True,
         description="Distance along the probe width",
-        metadata={
-            "raw_unit": "um"}
+        metadata={"raw_unit": "um"},
     )
     acronym: Series[str] = pa.Field(
         description="Brain region acronym in the Allen mapping",
-        metadata={
-            "raw_unit": "N/A"}
+        metadata={"raw_unit": "N/A"},
     )
     atlas_id: Series[int] = pa.Field(
         description="Atlas region identifier in Allen mapping",
-        metadata={
-            "raw_unit": "N/A"}
+        metadata={"raw_unit": "N/A"},
     )
 
 
 class BaseChannelFeatures(pa.DataFrameModel):
     """Base class for channel-based feature schemas.
-    
+
     This is an abstract base class that provides the foundation for
     all channel-based feature validation schemas.
-    
+
     Note:
         The channel field is expected to be an index in derived classes.
     """
+
     pass  # channel: Index[int] = pa.Field(check_name=True)
 
 
 class ModelLfFeatures(BaseChannelFeatures):
     """Schema for local field potential features.
-    
+
     This schema defines the structure and validation rules for local field
     potential (LFP) features including RMS values and power spectral density
     across different frequency bands.
-    
+
     Attributes:
         rms_lf (Series[float]): Root mean square of LFP signal in dB.
         psd_delta (Series[float]): Power spectral density in delta band (0-4 Hz).
@@ -324,112 +314,111 @@ class ModelLfFeatures(BaseChannelFeatures):
         psd_gamma (Series[float]): Power spectral density in gamma band (30-90 Hz).
         psd_lfp (Series[float]): Power spectral density in full LFP band (0-90 Hz).
     """
+
     rms_lf: Series[float] = pa.Field(
-        coerce=True, description="Root mean square of LFP signal in V. The value is transformed to dB using 20 * np.log10(x)",
+        coerce=True,
+        description="Root mean square of LFP signal in V. The value is transformed to dB using 20 * np.log10(x)",
         metadata={
             "raw_unit": "V",
             "transformed_unit": "dB rel. V",
-            "transform": lambda x: 20 * np.log10(x)}
+            "transform": lambda x: 20 * np.log10(x),
+        },
     )
     psd_lfp: Series[float] = pa.Field(
-        coerce=True, description="Power in the band 0 - 90 Hz in decibels relative to V ** 2 / Hz",
-        metadata={
-            "raw_unit": "dB rel. V**2/Hz"}
+        coerce=True,
+        description="Power in the band 0 - 90 Hz in decibels relative to V ** 2 / Hz",
+        metadata={"raw_unit": "dB rel. V**2/Hz"},
     )
     psd_delta: Series[float] = pa.Field(
-        coerce=True, description="Power in the band 0 - 4 Hz in decibels relative to V ** 2 / Hz",
-        metadata={
-            "raw_unit": "dB rel. V**2/Hz"}
+        coerce=True,
+        description="Power in the band 0 - 4 Hz in decibels relative to V ** 2 / Hz",
+        metadata={"raw_unit": "dB rel. V**2/Hz"},
     )
     psd_theta: Series[float] = pa.Field(
-        coerce=True, description="Power in the band 4 - 10 Hz in decibels relative to V ** 2 / Hz",
-        metadata={
-            "raw_unit": "dB rel. V**2/Hz"}
+        coerce=True,
+        description="Power in the band 4 - 10 Hz in decibels relative to V ** 2 / Hz",
+        metadata={"raw_unit": "dB rel. V**2/Hz"},
     )
     psd_alpha: Series[float] = pa.Field(
-        coerce=True, description="Power in the band 8 - 12 Hz in decibels relative to V ** 2 / Hz",
-        metadata={
-            "raw_unit": "dB rel. V**2/Hz"}
+        coerce=True,
+        description="Power in the band 8 - 12 Hz in decibels relative to V ** 2 / Hz",
+        metadata={"raw_unit": "dB rel. V**2/Hz"},
     )
     psd_beta: Series[float] = pa.Field(
-        coerce=True, description="Power in the band 15 - 30 Hz in decibels relative to V ** 2 / Hz",
-        metadata={
-            "raw_unit": "dB rel. V**2/Hz"}
+        coerce=True,
+        description="Power in the band 15 - 30 Hz in decibels relative to V ** 2 / Hz",
+        metadata={"raw_unit": "dB rel. V**2/Hz"},
     )
     psd_gamma: Series[float] = pa.Field(
-        coerce=True, description="Power in the band 30 - 90 Hz in decibels relative to V ** 2 / Hz",
-        metadata={
-            "raw_unit": "dB rel. V**2/Hz"}
+        coerce=True,
+        description="Power in the band 30 - 90 Hz in decibels relative to V ** 2 / Hz",
+        metadata={"raw_unit": "dB rel. V**2/Hz"},
     )
     psd_residual_lfp: Optional[Series[float]] = pa.Field(
         description="Power in the band 0 - 90 Hz in decibels relative to V ** 2 / Hz after removing the linear fit of the psd decay in log-log space",
-        metadata={
-            "raw_unit": "dB rel. V**2/Hz"},
-        nullable=True
+        metadata={"raw_unit": "dB rel. V**2/Hz"},
+        nullable=True,
     )
     psd_residual_delta: Optional[Series[float]] = pa.Field(
         description="Power in the band 0 - 4 Hz in decibels relative to V ** 2 / Hz after removing the linear fit of the psd decay in log-log space",
-        metadata={
-            "raw_unit": "dB rel. V**2/Hz"},
-        nullable=True)
+        metadata={"raw_unit": "dB rel. V**2/Hz"},
+        nullable=True,
+    )
     psd_residual_theta: Optional[Series[float]] = pa.Field(
         description="Power in the band 4 - 10 Hz in decibels relative to V ** 2 / Hz after removing the linear fit of the psd decay in log-log space",
-        metadata={
-            "raw_unit": "dB rel. V**2/Hz"},
-        nullable=True)
+        metadata={"raw_unit": "dB rel. V**2/Hz"},
+        nullable=True,
+    )
     psd_residual_alpha: Optional[Series[float]] = pa.Field(
         description="Power in the band 8 - 12 Hz in decibels relative to V ** 2 / Hz after removing the linear fit of the psd decay in log-log space",
-        metadata={
-            "raw_unit": "dB rel. V**2/Hz"},
-        nullable=True)
+        metadata={"raw_unit": "dB rel. V**2/Hz"},
+        nullable=True,
+    )
     psd_residual_beta: Optional[Series[float]] = pa.Field(
         description="Power in the band 15 - 30 Hz in decibels relative to V ** 2 / Hz after removing the linear fit of the psd decay in log-log space",
-        metadata={
-            "raw_unit": "dB rel. V**2/Hz"},
-        nullable=True)
+        metadata={"raw_unit": "dB rel. V**2/Hz"},
+        nullable=True,
+    )
     psd_residual_gamma: Optional[Series[float]] = pa.Field(
         description="Power in the band 30 - 90 Hz in decibels relative to V ** 2 / Hz after removing the linear fit of the psd decay in log-log space",
-        metadata={
-            "raw_unit": "dB rel. V**2/Hz"},
-        nullable=True)
+        metadata={"raw_unit": "dB rel. V**2/Hz"},
+        nullable=True,
+    )
     aperiodic_offset: Optional[Series[float]] = pa.Field(
         nullable=True,
         description="Y-intercept for the fit of the psd decay in log-log space",
-        metadata={
-            "raw_unit": "dB rel. V**2/Hz" }
+        metadata={"raw_unit": "dB rel. V**2/Hz"},
     )
     aperiodic_exponent: Optional[Series[float]] = pa.Field(
         nullable=True,
         description="Slope for the fit of the psd decay in log-log space",
-        metadata={
-            "raw_unit": "dB rel. V**2/Hz"}
+        metadata={"raw_unit": "dB rel. V**2/Hz"},
     )
     decay_fit_error: Optional[Series[float]] = pa.Field(
         nullable=True,
         description="RMS error of the fit of the psd decay in log-log space",
-        metadata={
-            "raw_unit": "dB rel. V**2/Hz"}
+        metadata={"raw_unit": "dB rel. V**2/Hz"},
     )
     decay_fit_r_squared: Optional[Series[float]] = pa.Field(
         nullable=True,
         description="R-squared value of the fit of the psd decay in log-log space",
-        metadata={
-            "raw_unit": "dimensionless"}
+        metadata={"raw_unit": "dimensionless"},
     )
-    decay_n_peaks: Optional[Series[float]] = pa.Field(coerce=True,
+    decay_n_peaks: Optional[Series[float]] = pa.Field(
+        coerce=True,
         nullable=True,
         description="Number of peaks detected in the residual plot after removing the linear fit of the psd decay in log-log space",
-        metadata={
-            "raw_unit": "count"}
+        metadata={"raw_unit": "count"},
     )
+
 
 class ModelCsdFeatures(BaseChannelFeatures):
     """Schema for current source density features.
-    
+
     This schema defines the structure and validation rules for current source
     density (CSD) features including RMS values and power spectral density
     across different frequency bands.
-    
+
     Attributes:
         rms_lf_csd (Series[float]): Root mean square of CSD signal in dB.
         psd_delta_csd (Series[float]): CSD power spectral density in delta band (0-4 Hz).
@@ -439,88 +428,138 @@ class ModelCsdFeatures(BaseChannelFeatures):
         psd_gamma_csd (Series[float]): CSD power spectral density in gamma band (30-90 Hz).
         psd_lfp_csd (Series[float]): CSD power spectral density in full LFP band (0-90 Hz).
     """
+
     rms_lf_csd: Series[float] = pa.Field(
-        coerce=True, description="Root mean square of CSD signal in V. The value is transformed to dB using 20 * np.log10(x)",
+        coerce=True,
+        description="Root mean square of CSD signal in V. The value is transformed to dB using 20 * np.log10(x)",
         metadata={
             "raw_unit": "V",
             "transformed_unit": "dB rel. V",
-            "transform": lambda x: 20 * np.log10(x)}
+            "transform": lambda x: 20 * np.log10(x),
+        },
     )
     psd_delta_csd: Series[float] = pa.Field(
-        coerce=True, description="Power in the band 0 - 4 Hz after current source density estimation in decibels relative to V ** 2 / Hz",
-        metadata={
-            "raw_unit": "dB rel. V**2/Hz"}
+        coerce=True,
+        description="Power in the band 0 - 4 Hz after current source density estimation in decibels relative to V ** 2 / Hz",
+        metadata={"raw_unit": "dB rel. V**2/Hz"},
     )
     psd_theta_csd: Series[float] = pa.Field(
-        coerce=True, description="Power in the band 4 - 10 Hz after current source density estimation in decibels relative to V ** 2 / Hz",
-        metadata={
-            "raw_unit": "dB rel. V**2/Hz"}
+        coerce=True,
+        description="Power in the band 4 - 10 Hz after current source density estimation in decibels relative to V ** 2 / Hz",
+        metadata={"raw_unit": "dB rel. V**2/Hz"},
     )
     psd_alpha_csd: Series[float] = pa.Field(
-        coerce=True, description="Power in the band 8 - 12 Hz after current source density estimation in decibels relative to V ** 2 / Hz",
-        metadata={
-            "raw_unit": "dB rel. V**2/Hz"}
+        coerce=True,
+        description="Power in the band 8 - 12 Hz after current source density estimation in decibels relative to V ** 2 / Hz",
+        metadata={"raw_unit": "dB rel. V**2/Hz"},
     )
     psd_beta_csd: Series[float] = pa.Field(
-        coerce=True, description="Power in the band 15 - 30 Hz after current source density estimation in decibels relative to V ** 2 / Hz",
-        metadata={
-            "raw_unit": "dB rel. V**2/Hz"}
+        coerce=True,
+        description="Power in the band 15 - 30 Hz after current source density estimation in decibels relative to V ** 2 / Hz",
+        metadata={"raw_unit": "dB rel. V**2/Hz"},
     )
     psd_gamma_csd: Series[float] = pa.Field(
-        coerce=True, description="Power in the band 30 - 90 Hz after current source density estimation in decibels relative to V ** 2 / Hz",
-        metadata={
-            "raw_unit": "dB rel. V**2/Hz"}
+        coerce=True,
+        description="Power in the band 30 - 90 Hz after current source density estimation in decibels relative to V ** 2 / Hz",
+        metadata={"raw_unit": "dB rel. V**2/Hz"},
     )
     psd_lfp_csd: Series[float] = pa.Field(
-        coerce=True, description="Power in the band 0 - 90 Hz after current source density estimation in decibels relative to V ** 2 / Hz",
+        coerce=True,
+        description="Power in the band 0 - 90 Hz after current source density estimation in decibels relative to V ** 2 / Hz",
+        metadata={"raw_unit": "dB rel. V**2/Hz"},
+    )
+
+    rms_lf_csd_diff1: Optional[Series[float]] = pa.Field(
+        coerce=True,
+        description="Root mean square of Diff1 CSD signal in V. The value is transformed to dB using 20 * np.log10(x)",
         metadata={
-            "raw_unit": "dB rel. V**2/Hz"}
+            "raw_unit": "V",
+            "transformed_unit": "dB rel. V",
+            "transform": lambda x: 20 * np.log10(x),
+        },
+    )
+
+    psd_delta_csd_diff1: Optional[Series[float]] = pa.Field(
+        coerce=True,
+        description="Power in the band 0 - 4 Hz after Diff1 current source density estimation in decibels relative to V ** 2 / Hz",
+        metadata={"raw_unit": "dB rel. V**2/Hz"},
+    )
+
+    psd_theta_csd_diff1: Optional[Series[float]] = pa.Field(
+        coerce=True,
+        description="Power in the band 4 - 10 Hz after Diff1 current source density estimation in decibels relative to V ** 2 / Hz",
+        metadata={"raw_unit": "dB rel. V**2/Hz"},
+    )
+
+    psd_alpha_csd_diff1: Optional[Series[float]] = pa.Field(
+        coerce=True,
+        description="Power in the band 8 - 12 Hz after Diff1 current source density estimation in decibels relative to V ** 2 / Hz",
+        metadata={"raw_unit": "dB rel. V**2/Hz"},
+    )
+
+    psd_beta_csd_diff1: Optional[Series[float]] = pa.Field(
+        coerce=True,
+        description="Power in the band 15 - 30 Hz after Diff1 current source density estimation in decibels relative to V ** 2 / Hz",
+        metadata={"raw_unit": "dB rel. V**2/Hz"},
+    )
+
+    psd_gamma_csd_diff1: Optional[Series[float]] = pa.Field(
+        coerce=True,
+        description="Power in the band 30 - 90 Hz after Diff1 current source density estimation in decibels relative to V ** 2 / Hz",
+        metadata={"raw_unit": "dB rel. V**2/Hz"},
+    )
+
+    psd_lfp_csd_diff1: Optional[Series[float]] = pa.Field(
+        coerce=True,
+        description="Power in the band 0 - 90 Hz after Diff1 current source density estimation in decibels relative to V ** 2 / Hz",
+        metadata={"raw_unit": "dB rel. V**2/Hz"},
     )
 
 
 class ModelApFeatures(BaseChannelFeatures):
     """Schema for action potential features.
-    
+
     This schema defines the structure and validation rules for action potential
     (AP) features including RMS values and correlation ratios.
-    
+
     Attributes:
         rms_ap (Series[float]): Root mean square of AP signal in dB.
         cor_ratio (Series[float]): Cross-correlation over auto-correlation ratio.
         channel_labels (Series[int]): Quality labels for channels.
     """
+
     rms_ap: Series[float] = pa.Field(
-        coerce=True, description="Root mean square of AP signal in V. The value is transformed to dB using 20 * np.log10(x)",
+        coerce=True,
+        description="Root mean square of AP signal in V. The value is transformed to dB using 20 * np.log10(x)",
         metadata={
             "raw_unit": "V",
             "transformed_unit": "dB rel. V",
-            "transform": lambda x: 20 * np.log10(x)}
+            "transform": lambda x: 20 * np.log10(x),
+        },
     )
     cor_ratio: Series[float] = pa.Field(
-        coerce=True, 
+        coerce=True,
         description="Ratio of the median of zero-lag cross-correlations with neighbouring channels over zero-lag autocorrelation",
-        metadata={
-            "raw_unit": "dimensionless"}
+        metadata={"raw_unit": "dimensionless"},
     )
     channel_labels: Series[int] = pa.Field(
-        coerce=True, 
+        coerce=True,
         description=(
             "Quality labels for channels. 0 means a good channel, values higher than 0 means a bad channel. "
             "1: dead low coherence / amplitude, "
             "2: noisy, "
             "3: outside of the brain"
         ),
-        metadata={
-            "raw_unit": ""}
+        metadata={"raw_unit": ""},
     )
 
 
 class ModelSpikeFeatures(BaseChannelFeatures):
     """Schema for spike waveform features.
-    
+
     This schema defines the structure and validation rules for spike waveform
     features including timing, amplitude, and slope characteristics.
-    
+
     Attributes:
         alpha_mean (Series[float]): Mean alpha parameter for spike localization.
         alpha_std (Series[float]): Standard deviation of alpha parameter.
@@ -537,17 +576,16 @@ class ModelSpikeFeatures(BaseChannelFeatures):
         trough_time_secs (Series[float]): Time to trough in seconds.
         trough_val (Series[float]): Trough amplitude value.
     """
+
     alpha_mean: Series[float] = pa.Field(
         coerce=True,
         description="Average brightness of the spike (output of the spike localisation code)",
-        metadata={
-            "raw_unit": "N/A"}
+        metadata={"raw_unit": "N/A"},
     )
     alpha_std: Series[float] = pa.Field(
         coerce=True,
         description="Standard deviation of the brightness of the spike (output of the spike localisation code)",
-        metadata={
-            "raw_unit": "N/A"}
+        metadata={"raw_unit": "N/A"},
     )
     depolarisation_slope: Series[float] = pa.Field(coerce=True)
     peak_time_secs: Series[float] = pa.Field(coerce=True)
@@ -555,8 +593,7 @@ class ModelSpikeFeatures(BaseChannelFeatures):
     polarity: Series[float] = pa.Field(
         coerce=True,
         description="Sum of each spike polarity divided by the total number of spikes",
-        metadata={
-            "raw_unit": "dimensionless"}
+        metadata={"raw_unit": "dimensionless"},
     )
     recovery_slope: Series[float] = pa.Field(coerce=True)
     recovery_time_secs: Series[float] = pa.Field(coerce=True)
@@ -567,7 +604,7 @@ class ModelSpikeFeatures(BaseChannelFeatures):
         metadata={
             "raw_unit": "count",
             "transformed_unit": "log2 count",
-            "transform": lambda x: np.where(x == 0, np.nan, np.log2(x.astype(float)))
+            "transform": lambda x: np.where(x == 0, np.nan, np.log2(x.astype(float))),
         },
     )
     tip_time_secs: Series[float] = pa.Field(coerce=True)
@@ -578,60 +615,62 @@ class ModelSpikeFeatures(BaseChannelFeatures):
 
 class ModelChannelLayout(BaseChannelFeatures):
     """Schema for channel layout information.
-    
+
     This schema defines the structure and validation rules for channel
     layout features including spatial positioning.
-    
+
     Attributes:
         axial_um (Series[float]): Axial distance in micrometers.
         lateral_um (Series[float]): Lateral distance in micrometers.
     """
+
     axial_um: Series[float] = pa.Field(
-        coerce=True, 
+        coerce=True,
         description="Distance along the probe length (depth)",
-        metadata={"raw_unit": "um"}
+        metadata={"raw_unit": "um"},
     )
     lateral_um: Series[float] = pa.Field(
-        coerce=True, 
+        coerce=True,
         description="Distance along the probe width",
-        metadata={"raw_unit": "um"}
+        metadata={"raw_unit": "um"},
     )
 
 
 class ModelHistologyPlanned(BaseChannelFeatures):
     """Schema for planned histology coordinates.
-    
+
     This schema defines the structure and validation rules for planned
     histology coordinates before actual histological analysis.
-    
+
     Attributes:
         x_target (Series[float]): Target X-coordinate in micrometers.
         y_target (Series[float]): Target Y-coordinate in micrometers.
         z_target (Series[float]): Target Z-coordinate in micrometers.
     """
+
     x_target: Series[float] = pa.Field(
-        coerce=True, description="Target X-coordinate in micrometers using the micro-manipulator trajectory",
-        metadata={
-            "raw_unit": "um"}
+        coerce=True,
+        description="Target X-coordinate in micrometers using the micro-manipulator trajectory",
+        metadata={"raw_unit": "um"},
     )
     y_target: Series[float] = pa.Field(
-        coerce=True, description="Target Y-coordinate in micrometers using the micro-manipulator trajectory",
-        metadata={
-            "raw_unit": "um"}
+        coerce=True,
+        description="Target Y-coordinate in micrometers using the micro-manipulator trajectory",
+        metadata={"raw_unit": "um"},
     )
     z_target: Series[float] = pa.Field(
-        coerce=True, description="Target Z-coordinate in micrometers using the micro-manipulator trajectory",
-        metadata={
-            "raw_unit": "um"}
+        coerce=True,
+        description="Target Z-coordinate in micrometers using the micro-manipulator trajectory",
+        metadata={"raw_unit": "um"},
     )
 
 
 class ModelHistologyResolved(BaseChannelFeatures):
     """Schema for resolved histology coordinates.
-    
+
     This schema defines the structure and validation rules for resolved
     histology coordinates after actual histological analysis.
-    
+
     Attributes:
         x (Series[float]): Resolved X-coordinate in micrometers.
         y (Series[float]): Resolved Y-coordinate in micrometers.
@@ -639,33 +678,31 @@ class ModelHistologyResolved(BaseChannelFeatures):
         atlas_id (Series[int]): Atlas region identifier.
         acronym (Series[str]): Brain region acronym.
     """
+
     x: Series[float] = pa.Field(
         coerce=True,
         description=" x-position in um from Bregma (in IBL coordinates space). Coordinates at the most recent histology step",
-        metadata={
-            "raw_unit": "um"}
-
+        metadata={"raw_unit": "um"},
     )
-    y: Series[float] = pa.Field(coerce=True,
+    y: Series[float] = pa.Field(
+        coerce=True,
         description=" y-position in um from Bregma (in IBL coordinates space). Coordinates at the most recent histology step",
-        metadata={
-            "raw_unit": "um"}
+        metadata={"raw_unit": "um"},
     )
-    z: Series[float] = pa.Field(coerce=True,
+    z: Series[float] = pa.Field(
+        coerce=True,
         description=" z-position in um from Bregma (in IBL coordinates space). Coordinates at the most recent histology step",
-        metadata={
-            "raw_unit": "um"}
+        metadata={"raw_unit": "um"},
     )
     atlas_id: Series[int] = pa.Field(
         coerce=True,
         description="Atlas region identifier in Allen mapping",
-        metadata={
-            "raw_unit": "N/A"}
+        metadata={"raw_unit": "N/A"},
     )
-    acronym: Series[str] = pa.Field(coerce=True,
+    acronym: Series[str] = pa.Field(
+        coerce=True,
         description="Brain region acronym in the Allen mapping",
-        metadata={
-            "raw_unit": "N/A"}
+        metadata={"raw_unit": "N/A"},
     )
 
 
@@ -677,31 +714,32 @@ class ModelRawFeatures(
     ModelChannelLayout,
 ):
     """Combined schema for all raw features.
-    
+
     This schema combines all individual feature schemas into a single
     comprehensive schema for raw electrophysiological data validation.
-    
+
     Note:
         This class inherits from multiple feature schemas to provide
         a unified interface for all feature types.
     """
+
     pass
 
 
 def voltage_features_set(features_list=FEATURES_LIST):
     """Get list of feature column names by provenance.
-    
+
     This function returns the list of features columns names depending on their provenance.
     This is useful to select the columns for training.
-    
+
     Args:
         features_list (list, optional): List of feature groups to include.
             Defaults to ['raw_ap', 'raw_lf', 'localisation', 'waveforms'].
             Use 'all' to include all available feature groups.
-            
+
     Returns:
         list: Sorted list of feature column names excluding the 'channel' column.
-        
+
     Note:
         The looping preserves the order of the features groups in the list.
         Available feature groups: 'raw_ap', 'raw_lf', 'raw_lf_csd', 'waveforms', 'micro-manipulator'.
@@ -733,15 +771,15 @@ def voltage_features_set(features_list=FEATURES_LIST):
 
 def _get_power_in_band(fscale, period, band):
     """Calculate power in a specific frequency band.
-    
+
     Args:
         fscale (np.ndarray): Frequency scale array.
         period (np.ndarray): Periodogram values.
         band (list): Frequency band [low, high] in Hz.
-        
+
     Returns:
         np.ndarray: Power in the specified band in dB relative to v/sqrt(Hz).
-        
+
     Note:
         This function weights the frequencies using a cosine window and
         computes the weighted average power in the specified band.
@@ -756,23 +794,26 @@ def _get_power_in_band(fscale, period, band):
     )  # dB relative to v/sqrt(Hz)
     return p
 
-def get_psd_decay_features(data, fs, fscale, period, bands, nperseg=2048, PSD_range=BANDS["lfp"]):
+
+def get_psd_decay_features(
+    data, fs, fscale, period, bands, nperseg=2048, PSD_range=BANDS["lfp"]
+):
     """
     Extract power spectral density decay features from electrophysiological data.
-    
-    This function computes spectral parameterization features that characterize the 
-    aperiodic (1/f) component of the power spectral density (PSD) using the specparam 
+
+    This function computes spectral parameterization features that characterize the
+    aperiodic (1/f) component of the power spectral density (PSD) using the specparam
     library. It fits a model to separate periodic peaks from the aperiodic background
     in the frequency domain, providing insights into the underlying neural dynamics.
-    
+
     Additionally, it computes residual power features by removing the fitted aperiodic
     component from the observed PSD, highlighting periodic components across different
     frequency bands.
-    
-    The aperiodic component of neural signals is thought to reflect the balance of 
-    excitation and inhibition in neural circuits, making these features particularly 
+
+    The aperiodic component of neural signals is thought to reflect the balance of
+    excitation and inhibition in neural circuits, making these features particularly
     useful for characterizing brain states and pathological conditions.
-    
+
     Parameters
     ----------
     data : np.ndarray
@@ -794,16 +835,16 @@ def get_psd_decay_features(data, fs, fscale, period, bands, nperseg=2048, PSD_ra
     PSD_range : list of float, optional
         Frequency range [min_freq, max_freq] in Hz for spectral parameterization,
         by default BANDS["lfp"] which is [0, 90] Hz.
-    
+
     Returns
     -------
     pd.DataFrame
         DataFrame with one row per channel containing the following features:
-        
+
         **Aperiodic component features:**
         - aperiodic_offset : float
             Y-intercept of the aperiodic component fit (log10 power at 1 Hz)
-        - aperiodic_exponent : float  
+        - aperiodic_exponent : float
             Slope of the aperiodic component in log-log space (1/f exponent)
         - decay_fit_error : float
             Root mean square error of the spectral model fit
@@ -811,7 +852,7 @@ def get_psd_decay_features(data, fs, fscale, period, bands, nperseg=2048, PSD_ra
             R-squared goodness of fit for the spectral model
         - decay_n_peaks : int
             Number of periodic peaks detected above the aperiodic background
-            
+
         **Residual power features (periodic component after aperiodic removal):**
         - psd_residual_delta : float
             Residual power in delta band after aperiodic component removal
@@ -825,24 +866,24 @@ def get_psd_decay_features(data, fs, fscale, period, bands, nperseg=2048, PSD_ra
             Residual power in gamma band after aperiodic component removal
         - psd_residual_lfp : float
             Residual power in full LFP band after aperiodic component removal
-    
+
     Notes
     -----
-    The function uses the specparam library (formerly FOOOF) to separate periodic 
-    and aperiodic components of the PSD. The aperiodic component follows a 1/f^β 
+    The function uses the specparam library (formerly FOOOF) to separate periodic
+    and aperiodic components of the PSD. The aperiodic component follows a 1/f^β
     relationship where β is the aperiodic exponent.
-    
-    Channels with R-squared < 0.9 are flagged as having poor fits, which may 
+
+    Channels with R-squared < 0.9 are flagged as having poor fits, which may
     indicate artifacts or unusual spectral properties.
-    
+
     The spectral model is configured with:
     - Peak width limits: [10, 15] Hz
     - Maximum peaks: 4
     - Minimum peak height: 0.1
-    
+
     The residual curve is computed as:
     residual = 10^(log10(observed_PSD) - log10(fitted_aperiodic_component))
-    
+
     Examples
     --------
     >>> import numpy as np
@@ -857,60 +898,67 @@ def get_psd_decay_features(data, fs, fscale, period, bands, nperseg=2048, PSD_ra
     Index(['aperiodic_offset', 'aperiodic_exponent', 'decay_fit_error',
            'decay_fit_r_squared', 'decay_n_peaks', 'psd_residual_delta',
            'psd_residual_theta', 'psd_residual_alpha', ...], dtype='object')
-    
+
     References
     ----------
-    .. [1] Donoghue, T., Haller, M., Peterson, E. J., Varma, P., Sebastian, P., 
-           Gao, R., ... & Voytek, B. (2020). Parameterizing neural power spectra 
+    .. [1] Donoghue, T., Haller, M., Peterson, E. J., Varma, P., Sebastian, P.,
+           Gao, R., ... & Voytek, B. (2020). Parameterizing neural power spectra
            into periodic and aperiodic components. Nature neuroscience, 23(12), 1655-1665.
     """
     assert period.ndim == 2, "Period must be a 2D array"
     from scipy.signal import welch
+
     # Get a smoothed out version of the PSD
     frequencies, psd_arr = welch(data, fs, nperseg=nperseg)
 
     from specparam import SpectralModel
+
     # Initialize a model object for spectral parameterization, with some settings
-    fm = SpectralModel(peak_width_limits=[10,15], max_n_peaks=4,
-                   min_peak_height=0.1, verbose=False)
-    
+    fm = SpectralModel(
+        peak_width_limits=[10, 15], max_n_peaks=4, min_peak_height=0.1, verbose=False
+    )
+
     result_list = []
 
     if fscale[0] == 0:
         fscale = fscale[1:]
-        period = period[:,1:]
+        period = period[:, 1:]
 
     # Fit individual PSD over 3-40 Hz range
     for i in range(psd_arr.shape[0]):
-        if np.sum(psd_arr[i,:]) == 0:
-            result_dict = {"aperiodic_offset": np.nan,
-                        "aperiodic_exponent": np.nan,
-                        "decay_fit_error" : np.nan,
-                        "decay_fit_r_squared" : np.nan,
-                        "decay_n_peaks" : np.nan,
-                        }
+        if np.sum(psd_arr[i, :]) == 0:
+            result_dict = {
+                "aperiodic_offset": np.nan,
+                "aperiodic_exponent": np.nan,
+                "decay_fit_error": np.nan,
+                "decay_fit_r_squared": np.nan,
+                "decay_n_peaks": np.nan,
+            }
             for b in BANDS:
                 result_dict[f"psd_residual_{b}"] = np.nan
             result_list.append(result_dict)
             continue
 
-        fm.fit(frequencies, psd_arr[i,:], PSD_range)
+        fm.fit(frequencies, psd_arr[i, :], PSD_range)
 
         fit_result = fm.get_results()
         offset, slope = fit_result.aperiodic_params
-        
-        result_dict = {"aperiodic_offset": fit_result.aperiodic_params[0],
-                       "aperiodic_exponent": fit_result.aperiodic_params[1],
-                       "decay_fit_error" : fit_result.error,
-                       "decay_fit_r_squared" : fit_result.r_squared,
-                       "decay_n_peaks" : fm.n_peaks_,
-                        }
+
+        result_dict = {
+            "aperiodic_offset": fit_result.aperiodic_params[0],
+            "aperiodic_exponent": fit_result.aperiodic_params[1],
+            "decay_fit_error": fit_result.error,
+            "decay_fit_r_squared": fit_result.r_squared,
+            "decay_n_peaks": fm.n_peaks_,
+        }
         # Get the predicted decay of PSD the curve based on offset and slope
-        psd_decay = offset - np.log10(fscale ** slope)
-        residual_curve = 10**(np.log10(period[i,:]) - psd_decay)
+        psd_decay = offset - np.log10(fscale**slope)
+        residual_curve = 10 ** (np.log10(period[i, :]) - psd_decay)
 
         for b in BANDS:
-            result_dict[f"psd_residual_{b}"] = _get_power_in_band(fscale, residual_curve, bands[b])
+            result_dict[f"psd_residual_{b}"] = _get_power_in_band(
+                fscale, residual_curve, bands[b]
+            )
         result_list.append(result_dict)
 
         # if i==0:
@@ -920,34 +968,39 @@ def get_psd_decay_features(data, fs, fscale, period, bands, nperseg=2048, PSD_ra
         #     ax[0].plot(fscale,psd_decay,'g*', markersize=0.1, alpha=0.5)
         #     ax[1].semilogy(fscale,residual_curve,'r', markersize=0.1, alpha=0.5)
         #     ax[1].set_xlim(0, 90)
-    
+
     psd_decay_features = pd.DataFrame(result_list)
 
-    low_r_squared_channels = psd_decay_features[psd_decay_features['decay_fit_r_squared']<0.9].index
-    logger.info(f"Number of channels with low r squared during psd decay fit: {len(low_r_squared_channels)}")
+    low_r_squared_channels = psd_decay_features[
+        psd_decay_features["decay_fit_r_squared"] < 0.9
+    ].index
+    logger.info(
+        f"Number of channels with low r squared during psd decay fit: {len(low_r_squared_channels)}"
+    )
     if len(low_r_squared_channels) > 0:
-        logger.warning(f"Channels with low r squared during psd decay fit: {low_r_squared_channels}")
-
+        logger.warning(
+            f"Channels with low r squared during psd decay fit: {low_r_squared_channels}"
+        )
 
     return psd_decay_features
 
 
-def lf(data, fs, bands=None):
+def lf(data, fs, bands=None, decay_features=True):
     """Compute LF features from a numpy array.
-    
+
     Computes the local field potential (LF) features from electrophysiological data
     including RMS values and power spectral density across different frequency bands.
-    
+
     Args:
         data (np.ndarray): Data array with shape (channels, samples).
         fs (float): Sampling frequency in Hz.
         bands (dict, optional): Dictionary with frequency bands to compute.
             Defaults to BANDS constant.
-            
+
     Returns:
         pd.DataFrame: DataFrame with columns ['channel', 'rms_lf', 'psd_delta',
             'psd_theta', 'psd_alpha', 'psd_beta', 'psd_gamma', 'psd_lfp'].
-            
+
     Note:
         The function computes RMS values and power spectral density for each
         frequency band defined in the BANDS constant.
@@ -960,25 +1013,25 @@ def lf(data, fs, bands=None):
     df_lf["rms_lf"] = ibldsp.utils.rms(data, axis=-1)
     for b in BANDS:
         df_lf[f"psd_{b}"] = _get_power_in_band(fscale, period, bands[b])
-    
-    # Caluclate the Aperiodic and Periodic features
-    logger.info("Calculating Aperiodic and Periodic features")
-    df_decay = get_psd_decay_features(data, fs, fscale, period, bands)
-    assert df_decay.shape[0] == df_lf.shape[0]
-    assert len(set(df_decay.columns) & set(df_lf.columns)) == 0
-    df_lf = pd.concat([df_lf, df_decay], axis=1)
-    
-    
+
+    if decay_features:
+        # Caluclate the Aperiodic and Periodic features
+        logger.info("Calculating Aperiodic and Periodic features")
+        df_decay = get_psd_decay_features(data, fs, fscale, period, bands)
+        assert df_decay.shape[0] == df_lf.shape[0]
+        assert len(set(df_decay.columns) & set(df_lf.columns)) == 0
+        df_lf = pd.concat([df_lf, df_decay], axis=1)
+
     ModelLfFeatures.validate(df_lf)
     return df_lf
 
 
 def csd(data, fs, geometry, bands=None, decimate=10):
     """Compute CSD features from a numpy array.
-    
+
     Computes the current source density (CSD) features from electrophysiological data
     including RMS values and power spectral density across different frequency bands.
-    
+
     Args:
         data (np.ndarray): Data array with shape (channels, samples).
         fs (float): Sampling frequency in Hz.
@@ -987,43 +1040,60 @@ def csd(data, fs, geometry, bands=None, decimate=10):
             Defaults to BANDS constant.
         decimate (int, optional): Decimation factor for CSD calculation.
             Defaults to 10.
-            
+
     Returns:
         pd.DataFrame: DataFrame with columns ['channel', 'rms_lf_csd', 'psd_delta_csd',
             'psd_theta_csd', 'psd_alpha_csd', 'psd_beta_csd', 'psd_gamma_csd', 'psd_lfp_csd'].
-            
+
     Note:
         The function applies Cadzow denoising and current source density computation
         before computing the spectral features.
     """
     data_rs = scipy.signal.decimate(data, decimate, axis=1, ftype="fir")
-    data_rs = ibldsp.cadzow.cadzow_np1(data_rs, rank=2, fs=fs, niter=1, fmax=90)
-    data_rs = ibldsp.voltage.current_source_density(data_rs, h=geometry)
-    df_csd = lf(data_rs, fs, bands=bands)
+    data_rs = ibldsp.cadzow.cadzow_np1(
+        data_rs, rank=2, fs=fs / decimate, niter=1, fmax=90, h=geometry
+    )
+    # Calculate the CSD features
+    data_rs_diff2 = ibldsp.voltage.current_source_density(data_rs, h=geometry, n=2)
+    df_csd = lf(data_rs_diff2, fs / decimate, bands=bands, decay_features=False)
     df_csd = df_csd.rename(
         columns={c: f"{c}_csd" for c in df_csd.columns if c not in ["channel"]}
     )
+
+    # Calculate the Diff1 CSD features.
+    data_rs_diff1 = ibldsp.voltage.current_source_density(data_rs, h=geometry, n=1)
+    df_csd_diff1 = lf(data_rs_diff1, fs / decimate, bands=bands, decay_features=False)
+    df_csd_diff1 = df_csd_diff1.rename(
+        columns={
+            c: f"{c}_csd_diff1" for c in df_csd_diff1.columns if c not in ["channel"]
+        }
+    )
+    assert df_csd_diff1["channel"].equals(df_csd["channel"]), (
+        "Channels are not perfectly aligned!"
+    )
+
+    df_csd = pd.concat([df_csd, df_csd_diff1.drop(columns=["channel"])], axis=1)
     ModelCsdFeatures.validate(df_csd)
     return df_csd
 
 
 def ap(data, geometry=None, channel_labels=None):
     """Compute AP features from a numpy array.
-    
+
     Computes the action potential (AP) features from electrophysiological data
     including RMS values and correlation ratios.
-    
+
     Args:
         data (np.ndarray): AP band data array with shape (channels, samples).
         geometry (dict): Dictionary with channel geometry containing 'x' and 'y' arrays.
         channel_labels (np.ndarray): Array of channel quality labels.
-            
+
     Returns:
         pd.DataFrame: DataFrame with columns ['channel', 'rms_ap', 'cor_ratio', 'channel_labels'].
-        
+
     Raises:
         AssertionError: If geometry or channel_labels are not provided.
-        
+
     Note:
         This function computes RMS values and cross-correlation ratios for
         action potential band data.
@@ -1042,25 +1112,25 @@ def ap(data, geometry=None, channel_labels=None):
 
 def dart_subtraction_numpy(data, fs, geometry, **params):
     """Perform spike detection using Dartsort.
-    
+
     This function performs spike detection and feature extraction using the
     Dartsort algorithm with configurable parameters.
-    
+
     Args:
         data (np.ndarray): Voltage traces array with shape [nc, ns] where nc is
             number of channels and ns is number of samples. Data can be z-scored or not.
         fs (float): Sampling frequency in Hz.
         geometry (dict): Dictionary with channel geometry containing 'x' and 'y' arrays.
         **params: Additional parameters for Dartsort configuration.
-            
+
     Returns:
         tuple: A tuple containing:
-            
+
             - df_spikes (pd.DataFrame): DataFrame with spike information including
               sample indices, channels, peak-to-peak amplitudes, and localizations.
             - d_waveforms (dict): Dictionary containing raw and denoised waveforms
               and channel indices.
-              
+
     Note:
         This function requires the dartsort package to be installed.
         It creates temporary directories for processing and cleans them up afterward.
@@ -1145,55 +1215,57 @@ def dart_subtraction_numpy(data, fs, geometry, **params):
 
 def _spikes_dartsort(data, fs: int, geometry: dict, scratch_dir=None, **params):
     """Dartsort backend for spike detection.
-    
+
     This function serves as the Dartsort backend for the main spikes function,
     handling spike detection and feature extraction using Dartsort.
-    
+
     Args:
         data (np.ndarray): Raw electrophysiology data.
         fs (int): Sampling frequency in Hz.
         geometry (dict): Channel geometry dictionary.
         scratch_dir (str, optional): Directory for temporary files.
         **params: Dartsort parameters.
-            
+
     Returns:
         tuple: A tuple containing:
-            
+
             - ``df_spikes_`` (pd.DataFrame): DataFrame with spike information.
             - d_waveforms (dict): Dictionary containing waveform data.
             - params_obj (DartParameters): Dartsort parameters object.
     """
     params_obj = DartParameters() if params is None else DartParameters(**params)
     logger.info("Starting spike detection with Dartsort backend")
-    df_spikes_, d_waveforms = dart_subtraction_numpy(data, fs, geometry, scratch_dir=scratch_dir, params=params_obj)
+    df_spikes_, d_waveforms = dart_subtraction_numpy(
+        data, fs, geometry, scratch_dir=scratch_dir, params=params_obj
+    )
     logger.info("Spike detection completed with Dartsort backend")
     return df_spikes_, d_waveforms, params_obj
 
 
 def _spikes_spikeinterface(data, fs: int, geometry: dict, scratch_dir=None, **params):
     """SpikeInterface backend for spike detection.
-    
+
     This function serves as the SpikeInterface backend for the main spikes function,
     handling spike detection and feature extraction using SpikeInterface.
-    
+
     Args:
         data (np.ndarray): Raw electrophysiology data.
         fs (int): Sampling frequency in Hz.
         geometry (dict): Channel geometry dictionary.
         scratch_dir (str, optional): Directory for temporary files.
         **params: SpikeInterface parameters.
-            
+
     Returns:
         tuple: A tuple containing:
-            
+
             - ``df_spikes_`` (pd.DataFrame): DataFrame with spike information.
             - d_waveforms (dict): Dictionary containing waveform data.
             - params_obj (dict): SpikeInterface parameters object.
-            
+
     Raises:
         ImportError: If SpikeInterface is not installed.
         NotImplementedError: This function is not yet fully implemented.
-        
+
     Note:
         This function is currently a placeholder and needs full implementation
         for SpikeInterface backend support.
@@ -1203,46 +1275,68 @@ def _spikes_spikeinterface(data, fs: int, geometry: dict, scratch_dir=None, **pa
         from probeinterface.neuropixels_tools import read_spikeglx
         from spikeinterface.sortingcomponents.peak_detection import detect_peaks
         from spikeinterface.core.node_pipeline import ExtractDenseWaveforms
-        from spikeinterface.sortingcomponents.peak_localization import LocalizeCenterOfMass
+        from spikeinterface.sortingcomponents.peak_localization import (
+            LocalizeCenterOfMass,
+        )
         from spikeinterface.core.node_pipeline import run_node_pipeline, PeakRetriever
     except ImportError as e:
-        raise ImportError(f"SpikeInterface not installed. Please install with: pip install spikeinterface. Error: {e}")
-    
+        raise ImportError(
+            f"SpikeInterface not installed. Please install with: pip install spikeinterface. Error: {e}"
+        )
+
     logger.info("Starting spike detection with SpikeInterface backend")
-    
+
     # Create SpikeInterface recording object
     recording = sc.NumpyRecording(data.T, sampling_frequency=fs)
-    
+
     # Set up probe geometry
     assert params.get("sr_ap_filepath")
     from probeinterface.neuropixels_tools import read_spikeglx
-    probe = read_spikeglx(params['sr_ap_filepath']) # TODO: Pending implementation for the case when data is loaded using files, and not pid 
+
+    probe = read_spikeglx(
+        params["sr_ap_filepath"]
+    )  # TODO: Pending implementation for the case when data is loaded using files, and not pid
     recording = recording.set_probe(probe)
 
     si_params = {
-        'method': params.get('method', 'locally_exclusive'),
-        'peak_sign': params.get('peak_sign', 'neg'),
-        'detect_threshold': params.get('detect_threshold', 5.0),
-        'exclude_sweep_ms': params.get('exclude_sweep_ms', 0.1),
-        'radius_um': params.get('localization_radius', 100),
-        'job_kwargs': params.get('job_kwargs', {})
+        "method": params.get("method", "locally_exclusive"),
+        "peak_sign": params.get("peak_sign", "neg"),
+        "detect_threshold": params.get("detect_threshold", 5.0),
+        "exclude_sweep_ms": params.get("exclude_sweep_ms", 0.1),
+        "radius_um": params.get("localization_radius", 100),
+        "job_kwargs": params.get("job_kwargs", {}),
     }
 
-    peaks = detect_peaks(recording,  method=si_params['method'],
-                     detect_threshold=si_params['detect_threshold'], radius_um=si_params['radius_um'], **si_params['job_kwargs'])
-    
+    peaks = detect_peaks(
+        recording,
+        method=si_params["method"],
+        detect_threshold=si_params["detect_threshold"],
+        radius_um=si_params["radius_um"],
+        **si_params["job_kwargs"],
+    )
+
     peak_retriever = PeakRetriever(recording, peaks)
 
     extract_dense_waveforms = ExtractDenseWaveforms(
-                recording, parents=[peak_retriever], ms_before=0.5, ms_after=0.5, return_output=True
-            )
+        recording,
+        parents=[peak_retriever],
+        ms_before=0.5,
+        ms_after=0.5,
+        return_output=True,
+    )
     pipeline_nodes = [
-                peak_retriever,
-                extract_dense_waveforms,
-                LocalizeCenterOfMass(recording, parents=[peak_retriever, extract_dense_waveforms], radius_um=si_params["radius_um"]),
-            ]
+        peak_retriever,
+        extract_dense_waveforms,
+        LocalizeCenterOfMass(
+            recording,
+            parents=[peak_retriever, extract_dense_waveforms],
+            radius_um=si_params["radius_um"],
+        ),
+    ]
     job_name = "localize peaks using center_of_mass"
-    waveform_data, peak_locations = run_node_pipeline(recording, pipeline_nodes, si_params["job_kwargs"], job_name=job_name)
+    waveform_data, peak_locations = run_node_pipeline(
+        recording, pipeline_nodes, si_params["job_kwargs"], job_name=job_name
+    )
     waveform_data, peak_locations
     # # Create DataFrame similar to Dartsort output
     # df_spikes_ = pd.DataFrame({
@@ -1254,35 +1348,41 @@ def _spikes_spikeinterface(data, fs: int, geometry: dict, scratch_dir=None, **pa
     #     'zloc': np.zeros(len(spikes)),  # Placeholder
     #     'alpha': np.ones(len(spikes)) * 1.0,  # Placeholder - need proper computation
     # })
-    
+
     # # Create waveforms dictionary in same format as Dartsort
     # d_waveforms = {
     #     "raw": waveforms,  # Raw waveforms
     #     "denoised": waveforms,  # For now, same as raw (could add denoising step)
     #     "channel_index": we.channel_ids,
     # }
-    
+
     # # Create a simple params object to maintain interface compatibility
     # # For SpikeInterface, we'll use a dict instead of DartParameters
     # params_obj = {
     #     'trough_offset': params.get('trough_offset', 42),  # Default from DartParameters
     #     **params
     # }
-    
+
     # logger.info("Spike detection completed with SpikeInterface backend")
     # return df_spikes_, d_waveforms, params_obj
     raise NotImplementedError("This function is not implemented yet")
 
 
 def spikes(
-    data, fs: int, geometry: dict, return_waveforms=True, backend="dartsort", scratch_dir=None, **params
+    data,
+    fs: int,
+    geometry: dict,
+    return_waveforms=True,
+    backend="dartsort",
+    scratch_dir=None,
+    **params,
 ):
     """Spike detection and feature extraction with multiple backend support.
-    
+
     This function performs spike detection and feature extraction using either
     Dartsort or SpikeInterface backend, with comprehensive feature computation
     including waveform analysis and spike characterization.
-    
+
     Args:
         data (np.ndarray): Raw electrophysiology data with shape [nc, ns] where
             nc is number of channels and ns is number of samples.
@@ -1294,15 +1394,15 @@ def spikes(
             Defaults to 'dartsort'.
         scratch_dir (str, optional): Directory for temporary files.
         **params: Backend-specific parameters.
-            
+
     Returns:
         pd.DataFrame or tuple: If return_waveforms is False, returns DataFrame with
             aggregated spike features per channel. If True, returns tuple of
             (DataFrame, waveforms_dict).
-            
+
     Raises:
         ValueError: If an unknown backend is specified.
-        
+
     Note:
         The function aggregates spike features by channel and computes various
         waveform characteristics including timing, amplitude, and slope features.
@@ -1310,30 +1410,36 @@ def spikes(
     """
     # Call the appropriate backend function to get raw spike data
     if backend == "dartsort":
-        df_spikes_, d_waveforms, params_obj = _spikes_dartsort(data, fs, geometry, scratch_dir, **params)
+        df_spikes_, d_waveforms, params_obj = _spikes_dartsort(
+            data, fs, geometry, scratch_dir, **params
+        )
     elif backend == "spikeinterface":
-        df_spikes_, d_waveforms, params_obj = _spikes_spikeinterface(data, fs, geometry, scratch_dir, **params)
+        df_spikes_, d_waveforms, params_obj = _spikes_spikeinterface(
+            data, fs, geometry, scratch_dir, **params
+        )
     else:
-        raise ValueError(f"Unknown backend: {backend}. Supported backends: 'dartsort', 'spikeinterface'")
-    
+        raise ValueError(
+            f"Unknown backend: {backend}. Supported backends: 'dartsort', 'spikeinterface'"
+        )
+
     # Common processing for both backends
     logger.info("Computing waveform features")
     df_waveforms = ibldsp.waveforms.compute_spike_features(d_waveforms["denoised"])
     df_spikes = df_spikes_.merge(df_waveforms, left_index=True, right_index=True)
-    
+
     # Cast the float32 values as float64
     df_spikes[df_spikes.select_dtypes(np.float32).columns] = df_spikes.select_dtypes(
         np.float32
     ).astype(np.float64)
-    
+
     # Get trough_offset from params_obj (handle both DartParameters object and dict)
-    if hasattr(params_obj, 'trough_offset'):
+    if hasattr(params_obj, "trough_offset"):
         trough_offset = params_obj.trough_offset
     else:
-        trough_offset = params_obj.get('trough_offset', 42)
-    
+        trough_offset = params_obj.get("trough_offset", 42)
+
     fcn_mean_time = lambda x: np.mean((x - trough_offset)) / fs  # NOQA
-    
+
     # Aggregation by channel of the spikes / waveforms features
     df_spiking = (
         df_spikes.groupby("channel")
@@ -1365,9 +1471,9 @@ def spikes(
         )
         .reset_index()
     )
-    
+
     ModelSpikeFeatures.validate(df_spiking)
-    
+
     if return_waveforms:
         return df_spiking, d_waveforms | {"df_spikes": df_spikes}
     else:
@@ -1376,10 +1482,10 @@ def spikes(
 
 def xcor_acor_ratio(v: np.ndarray, geometry: dict, n_neighbor: int = 3) -> np.ndarray:
     """Compute cross-correlation over auto-correlation ratio.
-    
+
     This function calculates the ratio of cross-correlation between neighboring
     channels over the auto-correlation for each channel in the AP band data.
-    
+
     Args:
         v (np.ndarray): Voltage array for AP band with shape (nc, ns) where
             nc is number of channels and ns is number of samples.
@@ -1387,10 +1493,10 @@ def xcor_acor_ratio(v: np.ndarray, geometry: dict, n_neighbor: int = 3) -> np.nd
             electrode positions.
         n_neighbor (int, optional): Number of neighboring channels to consider.
             Defaults to 3.
-            
+
     Returns:
         np.ndarray: Array of size (nc,) containing the correlation ratios.
-        
+
     Note:
         The function computes covariance matrices and extracts diagonal elements
         to calculate cross-correlation ratios for neighboring channels.
@@ -1441,11 +1547,11 @@ def denoise_shank(
     feature: np.ndarray, xy: np.ndarray, labels: np.ndarray | None = None, fac: int = 1
 ) -> np.ndarray:
     """Denoise AP features using total variation filter.
-    
+
     Denoise the AP feature using a maximum variation filter. Interpolates the
     feature in a square grid, performs the filtering, and then interpolates
     back to the original grid.
-    
+
     Args:
         feature (np.ndarray): AP feature to denoise with shape (nc,).
         xy (np.ndarray): Coordinates of the AP feature with shape (nc, 2).
@@ -1454,16 +1560,18 @@ def denoise_shank(
             Set to None for no annotation. Defaults to None.
         fac (int, optional): Factor for the TV denoising in median deviation units.
             Defaults to 1.
-            
+
     Returns:
         np.ndarray: Denoised AP features with shape (nc,).
-        
+
     Note:
         This function uses scikit-image's total variation Chambolle denoising
         algorithm to smooth the feature values while preserving edges.
     """
     isvalid = ~np.isnan(feature)
-    if np.count_nonzero(isvalid) < 5: #Grid data interpolation requires at least 5 valid points
+    if (
+        np.count_nonzero(isvalid) < 5
+    ):  # Grid data interpolation requires at least 5 valid points
         return feature
     xyu = np.unique(xy[:, 0]), np.unique(xy[:, 1])
     x, y = np.meshgrid(*xyu)
@@ -1493,14 +1601,15 @@ class _EphysTransformerInterface(
     sklearn.base.BaseEstimator,
 ):
     """Abstract base class for electrophysiological feature transformers.
-    
+
     This class provides the interface for transformers that work with
     electrophysiological features, implementing scikit-learn's transformer
     interface and setting pandas as the default output format.
-    
+
     Note:
         This is an abstract base class that should not be instantiated directly.
     """
+
     def __init__(self):
         super().__init__()
         self.set_output(transform="pandas")
@@ -1517,11 +1626,11 @@ class _EphysTransformerInterface(
 
     def fit_transform(self, X: pd.DataFrame = None, y=None):
         """Fit the transformer and transform the data.
-        
+
         Args:
             X (pd.DataFrame, optional): Input data to fit and transform.
             y: Ignored, present for compatibility with scikit-learn interface.
-            
+
         Returns:
             pd.DataFrame: Transformed data.
         """
@@ -1587,7 +1696,7 @@ class EphysDenoiser(_EphysTransformerInterface):
                 feature=fval,
                 xy=X[["lateral_um", "axial_um"]].values,
                 fac=self.fac,
-            )  #.astype(X[feature_name].dtype)
+            )  # .astype(X[feature_name].dtype)
             # Check that the denoised values have the expected length
             if len(denoised_values) != ns:
                 raise ValueError(
