@@ -416,8 +416,14 @@ def compute_log_acg(
     Returns
     -------
     acg_log : numpy.ndarray
-        Log-binned ACG in counts/s. Shape ``(n_log_bins,)`` when ``spike_clusters``
-        is None, or ``(n_unique_clusters, n_log_bins)`` otherwise.
+        Log-binned ACG in **spike pairs · s⁻¹** (raw coincident pair counts divided
+        by log-bin width; not normalised by recording duration or firing rate).
+        The asymptotic value at long lags (τ ≫ any temporal correlation) is
+        λ² × T = λ × n_spikes, where λ is the firing rate and T the recording duration.
+        To obtain sp/s units with an asymptote equal to the firing rate, divide by
+        ``n_spikes``; to obtain a dimensionless ACG, divide by ``n_spikes × λ``.
+        Shape ``(n_log_bins,)`` when ``spike_clusters`` is None, or
+        ``(n_unique_clusters, n_log_bins)`` otherwise.
     t_log : numpy.ndarray
         Geometric centre of each log bin in seconds, shape ``(n_log_bins,)``.
     """

@@ -10,6 +10,7 @@ Getting Started
    :maxdepth: 2
 
    basic-feature-extraction
+   load-cluster-features
 
 Overview
 ---------
