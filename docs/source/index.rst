@@ -140,7 +140,63 @@ The function returns a pandas DataFrame containing various electrophysiological 
 .. important::
    This package (`ephysatlas`) is different from the `ephys_atlas` package (with underscore) from the `paper-ephys-atlas <https://github.com/int-brain-lab/paper-ephys-atlas>`_ repository.
 
-4. Region Inference (`infer_regions`)
+4. Encoding Volume (`download_encoding_volume`)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Downloads a pre-computed 4-D volumetric representation of electrophysiological features
+on the 25 µm Allen Common Coordinate Framework (CCF).
+
+.. code-block:: python
+
+   from pathlib import Path
+   import numpy as np
+   from one.api import ONE
+   from ephysatlas.data import download_encoding_volume
+
+   one = ONE()
+   file_path = download_encoding_volume(Path("/path/to/local/storage"), label="2026_W12", one=one)
+   data = np.load(file_path, allow_pickle=True)  # allow_pickle required for feature_names
+
+The file contains the following arrays (N = number of features for the vintage, e.g. 41 for ``2026_W12``):
+
+.. list-table::
+   :header-rows: 1
+   :widths: 25 25 15 35
+
+   * - Key
+     - Shape
+     - Dtype
+     - Description
+   * - ``ephys_atlas_vol``
+     - (456, 528, 320, N)
+     - float16
+     - 4-D volume: x × y × z × features
+   * - ``feature_names``
+     - (N,)
+     - object
+     - Feature name strings
+   * - ``mean_per_feature``
+     - (N,)
+     - float32
+     - Per-feature normalisation mean
+   * - ``std_per_feature``
+     - (N,)
+     - float32
+     - Per-feature normalisation std deviation
+   * - ``grid_shape``
+     - (3,)
+     - int32
+     - Volume grid dimensions [456, 528, 320]
+   * - ``res_um``
+     - (1,)
+     - int32
+     - Voxel resolution in µm (25)
+
+Encoding volumes are versioned by vintage label and stored on S3 at
+``aggregates/atlas/encoding_volumes/{project}/{label}/brainwide_ephys_atlas_25um.npz``.
+Use ``list_available_labels(one=one, project="ea_active")`` to list available vintages.
+
+5. Region Inference (`infer_regions`)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 This function uses pre-trained models to infer brain regions from the computed features. It performs inference across multiple model folds and returns both the predicted regions and their probabilities.
