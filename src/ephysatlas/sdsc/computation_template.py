@@ -15,7 +15,6 @@ OUTPUT_DIR = Path("/mnt/sdceph/users/prai1/data/projects/psychedlics/output/")
 
 
 def calc_features(probe_dict):
-
     print(f"Processing probe {probe_dict['pid'], probe_dict['t_start']}")
     one = OneSdsc(mode="local", cache_rest=None)
     # assert isinstance(one, OneSdsc), "one must be an instance of OneSdsc"

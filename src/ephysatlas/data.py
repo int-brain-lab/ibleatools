@@ -345,7 +345,9 @@ def download_tables(
     return local_path
 
 
-def download_encoding_volume(local_path, label="2026_W12", project=None, one=None, overwrite=False):
+def download_encoding_volume(
+    local_path, label="2026_W12", project=None, one=None, overwrite=False
+):
     """Download a pre-computed ephys atlas encoding volume from AWS S3.
 
     The encoding volume is a 4-D volumetric representation of electrophysiological
@@ -375,7 +377,9 @@ def download_encoding_volume(local_path, label="2026_W12", project=None, one=Non
     local_file = Path(local_path).joinpath("brainwide_ephys_atlas_25um.npz")
     s3_key = f"aggregates/atlas/encoding_volumes/{project}/{label}/brainwide_ephys_atlas_25um.npz"
     s3, bucket_name = aws.get_s3_from_alyx(alyx=one.alyx)
-    return aws.s3_download_file(s3_key, local_file, s3=s3, bucket_name=bucket_name, overwrite=overwrite)
+    return aws.s3_download_file(
+        s3_key, local_file, s3=s3, bucket_name=bucket_name, overwrite=overwrite
+    )
 
 
 def outlier_treatment(df_features, columns=None, replace_with_nan=False):
