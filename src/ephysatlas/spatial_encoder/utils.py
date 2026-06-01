@@ -1,7 +1,8 @@
 import numpy as np
 
+import pandas as pd
 from pathlib import Path
-from typing import Tuple, Any
+from typing import Tuple, Any, Optional
 from dataclasses import dataclass
 
 from sklearn.decomposition import PCA
@@ -18,62 +19,20 @@ from iblatlas.atlas import AllenAtlas
 
 from one.api import ONE
 
+import matplotlib.pyplot as plt
 from tqdm import tqdm
 import scipy.interpolate
 
 FEATURE_LIST = [
-    "rms_lf",
-    "psd_lfp",
-    "psd_alpha",
-    "psd_beta",
-    "psd_gamma",
-    "psd_delta",
-    "psd_theta",
-    "psd_lfp_csd_diff1",
-    "psd_alpha_csd_diff1",
-    "psd_beta_csd_diff1",
-    "psd_gamma_csd_diff1",
-    "psd_delta_csd_diff1",
-    "psd_theta_csd_diff1",
-    "rms_lf_csd_diff1",
-    "psd_residual_lfp",
-    "psd_residual_alpha",
-    "psd_residual_beta",
-    "psd_residual_gamma",
-    "psd_residual_delta",
-    "psd_residual_theta",
-    "decay_fit_error",
-    "decay_fit_r_squared",
-    "decay_n_peaks",
-    "aperiodic_exponent",
-    "aperiodic_offset",
-    "cor_ratio",
-    "rms_ap",
-    "alpha_mean",
-    "alpha_std",
-    "spike_count",
-    "tip_time_secs",
-    "recovery_time_secs",
-    "peak_time_secs",
-    "trough_time_secs",
-    "trough_val",
-    "tip_val",
-    "peak_val",
-    "recovery_slope",
-    "depolarisation_slope",
-    "repolarisation_slope",
-    "polarity",
-    #'channel_labels'
+    'rms_lf', 'psd_lfp', 'psd_alpha', 'psd_beta', 'psd_gamma', 'psd_delta', 'psd_theta',
+    'psd_lfp_csd_diff1', 'psd_alpha_csd_diff1', 'psd_beta_csd_diff1', 'psd_gamma_csd_diff1', 'psd_delta_csd_diff1', 'psd_theta_csd_diff1',
+    'rms_lf_csd_diff1', 'psd_residual_lfp', 'psd_residual_alpha', 'psd_residual_beta', 'psd_residual_gamma',
+    'psd_residual_delta', 'psd_residual_theta', 'decay_fit_error', 'decay_fit_r_squared', 'decay_n_peaks',
+    'aperiodic_exponent', 'aperiodic_offset', 'cor_ratio', 'rms_ap', 'alpha_mean', 'alpha_std', 'spike_count',
+    'tip_time_secs', 'recovery_time_secs', 'peak_time_secs', 'trough_time_secs', 'trough_val', 'tip_val', 'peak_val',
+    'recovery_slope', 'depolarisation_slope', 'repolarisation_slope', 'polarity',
+     #'channel_labels'
 ]
-
-
-def get_device():
-    if torch.cuda.is_available():
-        return torch.device("cuda")
-    if torch.backends.mps.is_available():
-        return torch.device("mps")
-    return torch.device("cpu")
-
 
 # ============================= data handling =============================
 @dataclass
@@ -82,19 +41,12 @@ class AtlasPCAConfig:
     n_gene_pcs: int = 50  # 4345
     no_pca: bool = False
 
-
 class ContextAtlasManager:
     """
     Handles loading raw atlases, computing PCs, caching transforms, sampling,
     and now: saving/loading precomputed context to/from disk.
     """
-
-    def __init__(
-        self,
-        cfg: AtlasPCAConfig,
-        regenerate_context: bool = False,
-        output_dir: Path = Path("."),
-    ):
+    def __init__(self, cfg: AtlasPCAConfig, regenerate_context: bool = False, output_dir: Path = Path('.')):
         brain_atlas = AllenAtlas()
         self.bc = brain_atlas.bc
         self.cfg = cfg
@@ -105,62 +57,52 @@ class ContextAtlasManager:
         self.zscale = np.asarray(self.bc.zscale)
 
         # -------- Load brain regions --------
-        Allen_regions = brain_atlas._get_mapping(mapping="Allen")[brain_atlas.label]
+        Allen_regions = brain_atlas._get_mapping(mapping='Allen')[brain_atlas.label]
 
         if regenerate_context:
             # -------- AGEA → PCA --------
-            _, gene_vols, _ = agea.load(label="processed")  # [G, Xc, Zc, Yc]
+            _, gene_vols, _ = agea.load(label='processed')  # [G, Xc, Zc, Yc]
             size_x, size_z, size_y = gene_vols.shape[1:]
             xgenes = gene_vols.reshape(gene_vols.shape[0], -1).T.astype(np.float32)
             scaler = StandardScaler().fit(xgenes)
             xgenes = scaler.transform(xgenes)
             pca = PCA(n_components=cfg.n_gene_pcs).fit(xgenes)
-            X_pca = pca.transform(xgenes).reshape(
-                size_x, size_z, size_y, cfg.n_gene_pcs
-            )
-            gene_exp_vol = np.moveaxis(X_pca, -1, 0).astype(
-                np.float32
-            )  # [P_gene, Xc, Zc, Yc]
+            X_pca = pca.transform(xgenes).reshape(size_x, size_z, size_y, cfg.n_gene_pcs)
+            gene_exp_vol = np.moveaxis(X_pca, -1, 0).astype(np.float32)  # [P_gene, Xc, Zc, Yc]
 
             # -------- MERFISH → PCA --------
             merfish.load()
-            LEVEL = "subclass"
-            path = AllenAtlas._get_cache_dir().joinpath("merfish")
-            cell_type_vol = torch.tensor(np.load(path.joinpath(f"merfish_{LEVEL}.npy")))
+            LEVEL = 'subclass'
+            path = AllenAtlas._get_cache_dir().joinpath('merfish')
+            cell_type_vol = torch.tensor(np.load(path.joinpath(f'merfish_{LEVEL}.npy')))
             zero_ind = torch.where(cell_type_vol.sum(dim=0) == 0)
             cell_type_vol = cell_type_vol.numpy()
             size_x, size_z, size_y = cell_type_vol.shape[1:]
 
-            xcells = cell_type_vol.reshape(cell_type_vol.shape[0], -1).T.astype(
-                np.float32
-            )
+            xcells = cell_type_vol.reshape(cell_type_vol.shape[0], -1).T.astype(np.float32)
             scaler = StandardScaler().fit(xcells)
             xcells = scaler.transform(xcells)
             pca = PCA(n_components=cfg.n_cell_pcs).fit(xcells)
-            X_pca = pca.transform(xcells).reshape(
-                size_x, size_z, size_y, cfg.n_cell_pcs
-            )
-            cell_type_vol = np.moveaxis(X_pca, -1, 0).astype(
-                np.float32
-            )  # [P_cell, Xc, Zc, Yc]
+            X_pca = pca.transform(xcells).reshape(size_x, size_z, size_y, cfg.n_cell_pcs)
+            cell_type_vol = np.moveaxis(X_pca, -1, 0).astype(np.float32)  # [P_cell, Xc, Zc, Yc]
 
             # zero out empty MERFISH sites in both modalities
             cell_type_vol[:, zero_ind[0], zero_ind[1], zero_ind[2]] = 0
-            gene_exp_vol[:, zero_ind[0], zero_ind[1], zero_ind[2]] = 0
+            gene_exp_vol[:,  zero_ind[0], zero_ind[1], zero_ind[2]] = 0
 
-            np.save(output_dir / "agea_vol_pca", gene_exp_vol)
-            np.save(output_dir / "merfish_vol_pca", cell_type_vol)
+            np.save(output_dir / 'agea_vol_pca', gene_exp_vol)
+            np.save(output_dir / 'merfish_vol_pca', cell_type_vol)
         else:
-            gene_exp_vol = np.load(output_dir / "agea_vol_pca.npy")
-            cell_type_vol = np.load(output_dir / "merfish_vol_pca.npy")
+            gene_exp_vol = np.load(output_dir / 'agea_vol_pca.npy')
+            cell_type_vol = np.load(output_dir / 'merfish_vol_pca.npy')
 
-        self.cell_pca = cell_type_vol  # [P_cell, Xh, Zh, Yh]
-        self.gene_pca = gene_exp_vol  # [P_gene, Xh, Zh, Yh]
-        self.allen_idx = Allen_regions  # [Yh, Xh, Zh]
+        self.cell_pca = cell_type_vol                  # [P_cell, Xh, Zh, Yh]
+        self.gene_pca = gene_exp_vol                   # [P_gene, Xh, Zh, Yh]
+        self.allen_idx = Allen_regions                 # [Yh, Xh, Zh]
         assert self.cell_pca.ndim == 4 and self.gene_pca.ndim == 4
         assert self.allen_idx.ndim == 3
 
-    def sample_context_numpy_m(self, xyz_m: np.ndarray, mode="raise"):
+    def sample_context_numpy_m(self, xyz_m: np.ndarray, mode='raise'):
         xyz_m = xyz_m.copy()
         xyz_m[:, 0] = -np.abs(xyz_m[:, 0])  # mirror to left
         indices = self.bc.xyz2i(xyz_m, mode=mode)  # fractional (x,y,z) high-res
@@ -173,41 +115,34 @@ class ContextAtlasManager:
         cell_pc = self.cell_pca[:, xi, zi, yi].T.astype(np.float32)  # [N, P_cell]
         gene_pc = self.gene_pca[:, xi, zi, yi].T.astype(np.float32)  # [N, P_gene]
         return {
-            "cell_pc": cell_pc,
-            "gene_pc": gene_pc,
-            "allen_ix": self.allen_idx[yi, xi, zi].astype(np.int32),
+            'cell_pc': cell_pc,
+            'gene_pc': gene_pc,
+            'allen_ix': self.allen_idx[yi, xi, zi].astype(np.int32),
         }
 
-    def sample_context_numpy_i(
-        self, xyz_i: np.ndarray, s_xyz: np.ndarray = np.array([8, 8, 8])
-    ):
+    def sample_context_numpy_i(self, xyz_i: np.ndarray, s_xyz: np.ndarray = np.array([8, 8, 8])):
         Xh, Zh, Yh = self.cell_pca.shape[1:]
         xyz_i = xyz_i.copy()
         # xyz_i columns: [xi, yi, zi] in downsampled grid
         xyz_i[:, 0] = mirror_x_indices_to_left(xyz_i[:, 0], Xh)  # mirror x index
 
-        cell_pc = self.cell_pca[:, xyz_i[:, 0], xyz_i[:, 2], xyz_i[:, 1]].T.astype(
-            np.float32
-        )
-        gene_pc = self.gene_pca[:, xyz_i[:, 0], xyz_i[:, 2], xyz_i[:, 1]].T.astype(
-            np.float32
-        )
+        cell_pc = self.cell_pca[:, xyz_i[:, 0], xyz_i[:, 2], xyz_i[:, 1]].T.astype(np.float32)
+        gene_pc = self.gene_pca[:, xyz_i[:, 0], xyz_i[:, 2], xyz_i[:, 1]].T.astype(np.float32)
 
         iy = np.clip(xyz_i[:, 1] * s_xyz[1], 0, len(self.yscale) - 1)
         ix = np.clip(xyz_i[:, 0] * s_xyz[0], 0, len(self.xscale) - 1)
         iz = np.clip(xyz_i[:, 2] * s_xyz[2], 0, len(self.zscale) - 1)
         return {
-            "cell_pc": cell_pc,
-            "gene_pc": gene_pc,
-            "allen_ix": self.allen_idx[iy, ix, iz].astype(np.int32),
+            'cell_pc': cell_pc,
+            'gene_pc': gene_pc,
+            'allen_ix': self.allen_idx[iy, ix, iz].astype(np.int32),
         }
 
-
 def LoadInsertionData(
-    project: str = "ea_active",
-    agg: str = "agg_full",
-    VINTAGE: str = "",
-    path_data: Path = Path("."),
+    project: str = 'ea_active',
+    agg: str = 'agg_full',
+    VINTAGE: str = '',
+    path_data: Path = Path('.')
 ):
     """
     Loads table-based ephys features and concatenates per-channel averaged waveform latents
@@ -219,11 +154,9 @@ def LoadInsertionData(
     """
 
     print("Loading ephys features")
-    one = ONE(base_url="https://alyx.internationalbrainlab.org")
+    one = ONE(base_url='https://alyx.internationalbrainlab.org')
     # path_data = Path('../ephys-atlas-decoding/features')
-    path_data = download_tables(
-        path_data, label=VINTAGE, project=project, one=one, agg_level=agg
-    )
+    path_data = download_tables(path_data, label=VINTAGE, project=project, one=one, agg_level=agg)
     df_features = read_features_from_disk(path_data, strict=False)
 
     # Pre-allocate containers
@@ -232,15 +165,15 @@ def LoadInsertionData(
     ephys_per_probe = []
 
     # Iterate probes
-    for pid, df_pid in df_features.groupby(level="pid"):
+    for pid, df_pid in df_features.groupby(level='pid'):
         C = df_pid["x"].shape[0]
         # --- Prepare channel xyz (actual + planned), preserving your up->down reversal ---
         xyz = np.zeros((C, 3), dtype=np.float32)
         xyz_planned = np.zeros((C, 3), dtype=np.float32)
 
-        channel_indices = df_pid.index.get_level_values("channel").to_numpy()
-        xyz_values = df_pid[["x", "y", "z"]].values
-        xyz_planned_values = df_pid[["x_target", "y_target", "z_target"]].values
+        channel_indices = df_pid.index.get_level_values('channel').to_numpy()
+        xyz_values = df_pid[['x', 'y', 'z']].values
+        xyz_planned_values = df_pid[['x_target', 'y_target', 'z_target']].values
 
         # Reverse order to be up -> down (same as your existing code)
         xyz[channel_indices] = xyz_values[::-1, :].copy()
@@ -251,7 +184,7 @@ def LoadInsertionData(
 
         # --- Table features per probe ---
         ephys_probe = np.zeros((C, len(FEATURE_LIST)), dtype=np.float32)
-        channel_idx = df_pid.index.get_level_values("channel").to_numpy()
+        channel_idx = df_pid.index.get_level_values('channel').to_numpy()
         values = np.stack([df_pid[feat].values for feat in FEATURE_LIST], axis=-1)
         ephys_probe[channel_idx] = values
 
@@ -261,11 +194,11 @@ def LoadInsertionData(
     # Stack all probes
     ephys = np.stack(ephys_per_probe)  # [N, C, F(+L)]
     ephys[np.where(np.isinf(ephys))] = 0.0
-    probe_positions = np.stack(probe_positions)  # [N, C, 3]
+    probe_positions = np.stack(probe_positions)          # [N, C, 3]
     probe_planned_positions = np.stack(probe_planned_positions)
 
     # PIDs in the df order
-    unique_pids = df_features.index.get_level_values("pid").unique()
+    unique_pids = df_features.index.get_level_values('pid').unique()
 
     # Filter bad/misaligned
     MISALIGNED_PIDS = ephysatlas.fixtures.misaligned_pids
@@ -278,17 +211,9 @@ def LoadInsertionData(
     filter_probe_positions = probe_positions[filter_indices]
     filter_probe_planned_positions = probe_planned_positions[filter_indices]
 
-    return (
-        filter_pids,
-        filter_ephys,
-        filter_probe_positions,
-        filter_probe_planned_positions,
-    )
+    return filter_pids, filter_ephys, filter_probe_positions, filter_probe_planned_positions
 
-
-def region_ids_from_xyz(
-    brain_atlas, xyz_m_np: np.ndarray, mapping: str = "Cosmos", mode: str = "raise"
-) -> np.ndarray:
+def region_ids_from_xyz(brain_atlas, xyz_m_np: np.ndarray, mapping: str = "Cosmos", mode: str = 'raise') -> np.ndarray:
     """
     xyz_m_np: [C, 3] in meters
     mapping: "Cosmos" or "Allen" (must be supported by your xyz_to_region_ids)
@@ -297,7 +222,6 @@ def region_ids_from_xyz(
     idx = brain_atlas.bc.xyz2i(xyz_m_np, mode=mode)  # meters → voxel indices
     # Assumes you have xyz_to_region_ids(idx, brain_atlas, mapping=...) in your codebase
     return xyz_to_region_ids(idx, brain_atlas, mapping=mapping)
-
 
 def xyz_to_region_ids(xyz_i, brain_atlas, mapping="Cosmos"):
     """
@@ -308,14 +232,12 @@ def xyz_to_region_ids(xyz_i, brain_atlas, mapping="Cosmos"):
 
     return regions
 
-
 def mirror_xyz_to_left(xyz_m: np.ndarray) -> np.ndarray:
     """Return a copy where x is reflected to the left hemisphere (x<=0 in world coords)."""
     out = xyz_m.copy()
-    mirror_ind = np.where(out[..., 0] > 0)[0]
-    out[..., 0][mirror_ind] = -np.abs(out[..., 0][mirror_ind])
+    mirror_ind = np.where(out[...,  0] > 0)[0]
+    out[..., 0][mirror_ind] = -np.abs(out[...,0][mirror_ind])
     return out
-
 
 def mirror_x_indices_to_left(xi: np.ndarray, Xh: int) -> np.ndarray:
     """Mirror an atlas x-index array into the left half (index space)."""
@@ -323,7 +245,6 @@ def mirror_x_indices_to_left(xi: np.ndarray, Xh: int) -> np.ndarray:
     right = xi >= (Xh // 2)
     xi[right] = Xh - xi[right] - 1
     return xi
-
 
 def _axis_step_in_indices(bc, axis: int) -> float:
     """
@@ -336,7 +257,6 @@ def _axis_step_in_indices(bc, axis: int) -> float:
     p0 = bc.i2xyz(a0)  # [1,3], meters
     p1 = bc.i2xyz(a1)
     return float(np.linalg.norm(p1 - p0))
-
 
 def compute_grid_strides_200um(bc) -> Tuple[int, int, int]:
     """
@@ -352,10 +272,8 @@ def compute_grid_strides_200um(bc) -> Tuple[int, int, int]:
     sz = max(1, int(round(target_m / max(dz, 1e-12))))
     return sx, sy, sz
 
-
 def concat_context(cell_pc: np.ndarray, gene_pc: np.ndarray) -> np.ndarray:
     return np.concatenate([cell_pc, gene_pc], axis=-1)
-
 
 def build_channels_plus_emptyvoxels_with_neighbors(
     ctx_manager: ContextAtlasManager,
@@ -389,13 +307,13 @@ def build_channels_plus_emptyvoxels_with_neighbors(
     xs = np.arange(0, Xh, dtype=int)
     ys = np.arange(0, Yh, dtype=int)
     zs = np.arange(0, Zh, dtype=int)
-    XX, ZZ, YY = np.meshgrid(xs, zs, ys, indexing="ij")
+    XX, ZZ, YY = np.meshgrid(xs, zs, ys, indexing='ij')
     xi = XX.reshape(-1)
     zi = ZZ.reshape(-1)
     yi = YY.reshape(-1)
-    N = xi.size
+    N  = xi.size
 
-    ijk = np.stack([xi, yi, zi], axis=1)
+    ijk   = np.stack([xi, yi, zi], axis=1)
     xyz_m = ctx_manager.bc.i2xyz(ijk * 8).astype(np.float32)  # [N,3] meters
     xyz_m = mirror_xyz_to_left(xyz_m)
 
@@ -403,12 +321,13 @@ def build_channels_plus_emptyvoxels_with_neighbors(
     allen_all, ctx_all = [], []
     for i in range(N):
         ctx = ctx_manager.sample_context_numpy_i(
-            np.array((xi[i], yi[i], zi[i]))[None, :], np.array((sx, sy, sz))
+            np.array((xi[i], yi[i], zi[i]))[None, :],
+            np.array((sx, sy, sz))
         )
-        ctx_all.append(concat_context(ctx["cell_pc"], ctx["gene_pc"])[0])
-        allen_all.append(ctx["allen_ix"][0])
+        ctx_all.append(concat_context(ctx['cell_pc'], ctx['gene_pc'])[0])
+        allen_all.append(ctx['allen_ix'][0])
 
-    ctx_all = np.asarray(ctx_all, dtype=np.float32)  # [N, F_ctx]
+    ctx_all = np.asarray(ctx_all, dtype=np.float32)   # [N, F_ctx]
     F_e = int(ephys.shape[-1])
 
     # --- mark voxels that have any ephys channels, to keep only "empty" ones for grid_ds ---
@@ -419,8 +338,8 @@ def build_channels_plus_emptyvoxels_with_neighbors(
 
     # Context stats over ALL grid voxels (rec + non-rec) per your original rule
     ctx_all_t = torch.from_numpy(ctx_all).float()
-    ctx_mean = ctx_all_t[grid_mask].mean(dim=0)
-    ctx_std = ctx_all_t[grid_mask].std(dim=0, unbiased=False).clamp_min(1e-6)
+    ctx_mean  = ctx_all_t[grid_mask].mean(dim=0)
+    ctx_std   = ctx_all_t[grid_mask].std(dim=0, unbiased=False).clamp_min(1e-6)
 
     def _stdz_ctx(t):
         mask = np.where(t.sum(axis=1) != 0)[0]
@@ -429,17 +348,17 @@ def build_channels_plus_emptyvoxels_with_neighbors(
         return t_clone
 
     # GRID DATASET (only voxels WITHOUT ephys)
-    ctx_grid = _stdz_ctx(torch.from_numpy(ctx_all[grid_mask]).float())
-    xyz_grid = torch.from_numpy(xyz_m[grid_mask]).float()
-    grid_ds = GridDS(ctx_grid, xyz_grid, F_e)
+    ctx_grid   = _stdz_ctx(torch.from_numpy(ctx_all[grid_mask]).float())
+    xyz_grid   = torch.from_numpy(xyz_m[grid_mask]).float()
+    grid_ds    = GridDS(ctx_grid, xyz_grid, F_e)
 
     # ----- RECORDED CHANNEL DATASET (per-channel; NO voxel averaging) -----
     P, C, _ = probe_positions.shape
     rec_ctx_list, rec_xyz_list, rec_ephys_list, rec_pid_list = [], [], [], []
 
     for p in range(P):
-        xyz_p = probe_positions[p].astype(np.float32)  # [C,3]
-        eph_p = ephys[p].astype(np.float32)  # [C,F]
+        xyz_p = probe_positions[p].astype(np.float32)       # [C,3]
+        eph_p = ephys[p].astype(np.float32)                 # [C,F]
         valid = ~(np.all(xyz_p == 0.0, axis=1))
         if not valid.any():
             continue
@@ -447,11 +366,9 @@ def build_channels_plus_emptyvoxels_with_neighbors(
         xyz_valid = xyz_p[valid]  # [C_valid,3]
         xyz_valid = mirror_xyz_to_left(xyz_valid)  # <<< add this
 
-        pack = ctx_manager.sample_context_numpy_m(xyz_valid, mode="clip")
+        pack = ctx_manager.sample_context_numpy_m(xyz_valid, mode='clip')
 
-        ctx_p = np.concatenate([pack["cell_pc"], pack["gene_pc"]], axis=1).astype(
-            np.float32
-        )
+        ctx_p = np.concatenate([pack['cell_pc'], pack['gene_pc']], axis=1).astype(np.float32)
         eph_valid = eph_p[valid]
 
         rec_ctx_list.append(ctx_p)
@@ -460,18 +377,12 @@ def build_channels_plus_emptyvoxels_with_neighbors(
         rec_pid_list.append(p * np.ones(valid.sum(), dtype=np.float32))
 
     if len(rec_ctx_list) == 0:
-        raise RuntimeError(
-            "No valid recorded channels found to build recorded dataset."
-        )
+        raise RuntimeError("No valid recorded channels found to build recorded dataset.")
 
-    rec_ctx = torch.from_numpy(
-        np.concatenate(rec_ctx_list, axis=0)
-    ).float()  # [Nc,F_ctx]
-    rec_xyz = torch.from_numpy(np.concatenate(rec_xyz_list, axis=0)).float()  # [Nc,3]
-    rec_ephys = torch.from_numpy(
-        np.concatenate(rec_ephys_list, axis=0)
-    ).float()  # [Nc,F_e]
-    rec_pids = torch.from_numpy(np.concatenate(rec_pid_list, axis=0)).float()  # [Nc,]
+    rec_ctx   = torch.from_numpy(np.concatenate(rec_ctx_list, axis=0)).float()      # [Nc,F_ctx]
+    rec_xyz   = torch.from_numpy(np.concatenate(rec_xyz_list, axis=0)).float()      # [Nc,3]
+    rec_ephys = torch.from_numpy(np.concatenate(rec_ephys_list, axis=0)).float()    # [Nc,F_e]
+    rec_pids  = torch.from_numpy(np.concatenate(rec_pid_list, axis=0)).float()      # [Nc,]
 
     # Standardize context (use global grid stats)
     rec_ctx_std = _stdz_ctx(rec_ctx)
@@ -489,9 +400,7 @@ def build_channels_plus_emptyvoxels_with_neighbors(
                 f"pid_names length={len(pid_names)} is too short for max probe index={uniq_p.max()}"
             )
     else:
-        pid_names = np.asarray(
-            [str(i) for i in range(int(uniq_p.max()) + 1)], dtype=str
-        )
+        pid_names = np.asarray([str(i) for i in range(int(uniq_p.max()) + 1)], dtype=str)
 
     def _read_pid_txt(path):
         path = Path(path)
@@ -499,7 +408,10 @@ def build_channels_plus_emptyvoxels_with_neighbors(
             return [line.strip() for line in f if line.strip()]
 
     def _pid_strings_to_probe_indices(pid_list, *, split_name):
-        pid_to_probe_idx = {str(pid_names[i]): int(i) for i in uniq_p}
+        pid_to_probe_idx = {
+            str(pid_names[i]): int(i)
+            for i in uniq_p
+        }
 
         ids = []
         missing = []
@@ -533,8 +445,8 @@ def build_channels_plus_emptyvoxels_with_neighbors(
     n_va_p = int(np.clip(n_va_p, 0, nP - n_tr_p))
 
     p_tr_ids = set(shuffled[:n_tr_p].astype(int).tolist())
-    p_va_ids = set(shuffled[n_tr_p : n_tr_p + n_va_p].astype(int).tolist())
-    p_te_ids = set(shuffled[n_tr_p + n_va_p :].astype(int).tolist())
+    p_va_ids = set(shuffled[n_tr_p:n_tr_p + n_va_p].astype(int).tolist())
+    p_te_ids = set(shuffled[n_tr_p + n_va_p:].astype(int).tolist())
 
     # safety checks
     all_split_ids = set(p_tr_ids) | set(p_va_ids) | set(p_te_ids)
@@ -556,9 +468,7 @@ def build_channels_plus_emptyvoxels_with_neighbors(
 
     missing_loaded = set(uniq_p.tolist()) - all_split_ids
     if len(missing_loaded) > 0:
-        print(
-            f"[warn] {len(missing_loaded)} loaded probes are not assigned to any split."
-        )
+        print(f"[warn] {len(missing_loaded)} loaded probes are not assigned to any split.")
 
     # map probe split -> row indices
     I_tr = np.flatnonzero(np.isin(rec_pids_i, list(p_tr_ids)))
@@ -566,26 +476,18 @@ def build_channels_plus_emptyvoxels_with_neighbors(
     I_te = np.flatnonzero(np.isin(rec_pids_i, list(p_te_ids)))
 
     # Compute clipping thresholds from TRAIN only
-    rec_ephys_low_pctl = torch.tensor(
-        [
-            np.percentile(rec_ephys[I_tr, feat_ind].cpu().numpy(), 0.5)
-            for feat_ind in range(rec_ephys.shape[1])
-        ],
-        dtype=rec_ephys.dtype,
-    )
+    rec_ephys_low_pctl = torch.tensor([
+        np.percentile(rec_ephys[I_tr, feat_ind].cpu().numpy(), 0.5)
+        for feat_ind in range(rec_ephys.shape[1])
+    ], dtype=rec_ephys.dtype)
 
-    rec_ephys_high_pctl = torch.tensor(
-        [
-            np.percentile(rec_ephys[I_tr, feat_ind].cpu().numpy(), 99.5)
-            for feat_ind in range(rec_ephys.shape[1])
-        ],
-        dtype=rec_ephys.dtype,
-    )
+    rec_ephys_high_pctl = torch.tensor([
+        np.percentile(rec_ephys[I_tr, feat_ind].cpu().numpy(), 99.5)
+        for feat_ind in range(rec_ephys.shape[1])
+    ], dtype=rec_ephys.dtype)
 
     # Clip all splits using train thresholds
-    rec_ephys = torch.maximum(
-        torch.minimum(rec_ephys, rec_ephys_high_pctl), rec_ephys_low_pctl
-    )
+    rec_ephys = torch.maximum(torch.minimum(rec_ephys, rec_ephys_high_pctl), rec_ephys_low_pctl)
 
     # Now compute ephys stats from CLIPPED TRAIN data
     e_mean = rec_ephys[I_tr].mean(dim=0)
@@ -594,15 +496,9 @@ def build_channels_plus_emptyvoxels_with_neighbors(
     # Standardize all splits
     rec_ephys_std = (rec_ephys - e_mean) / e_std
 
-    rec_train = RecDS(
-        rec_ctx_std[I_tr], rec_xyz[I_tr], rec_ephys_std[I_tr], rec_pids[I_tr]
-    )
-    rec_val = RecDS(
-        rec_ctx_std[I_va], rec_xyz[I_va], rec_ephys_std[I_va], rec_pids[I_va]
-    )
-    rec_test = RecDS(
-        rec_ctx_std[I_te], rec_xyz[I_te], rec_ephys_std[I_te], rec_pids[I_te]
-    )
+    rec_train = RecDS(rec_ctx_std[I_tr], rec_xyz[I_tr], rec_ephys_std[I_tr], rec_pids[I_tr])
+    rec_val = RecDS(rec_ctx_std[I_va], rec_xyz[I_va], rec_ephys_std[I_va], rec_pids[I_va])
+    rec_test = RecDS(rec_ctx_std[I_te], rec_xyz[I_te], rec_ephys_std[I_te], rec_pids[I_te])
 
     train_concat = ConcatDataset([rec_train, grid_ds])
 
@@ -617,19 +513,15 @@ def build_channels_plus_emptyvoxels_with_neighbors(
 
     collate = NeighborCollate(
         ctx_manager,
-        bank_xyz,
-        bank_feat_std,
-        bank_pid,
-        nn_bank,
-        e_feat_dim=F_e,
-        M_max=M_MAX,
-        radius_um=RADIUS_UM,
+        bank_xyz, bank_feat_std, bank_pid, nn_bank,
+        e_feat_dim=F_e, M_max=M_MAX, radius_um=RADIUS_UM
     )
 
     split_info = dict(
         p_tr_ids=sorted([int(x) for x in p_tr_ids]),
         p_va_ids=sorted([int(x) for x in p_va_ids]),
         p_te_ids=sorted([int(x) for x in p_te_ids]),
+
         p_tr_names=[str(pid_names[int(i)]) for i in sorted(p_tr_ids)],
         p_va_names=[str(pid_names[int(i)]) for i in sorted(p_va_ids)],
         p_te_names=[str(pid_names[int(i)]) for i in sorted(p_te_ids)],
@@ -637,43 +529,23 @@ def build_channels_plus_emptyvoxels_with_neighbors(
 
     # original mixed train loader for base model
     train_loader = DataLoader(
-        train_concat,
-        batch_size=batch_size_train,
-        shuffle=shuffle_train,
-        num_workers=0,
-        pin_memory=False,
-        drop_last=False,
-        collate_fn=collate,
+        train_concat, batch_size=batch_size_train, shuffle=shuffle_train,
+        num_workers=0, pin_memory=False, drop_last=False, collate_fn=collate
     )
 
     # recorded-only train loader for confidence training
     conf_train_loader = DataLoader(
-        rec_train,
-        batch_size=batch_size_train,
-        shuffle=shuffle_train,
-        num_workers=0,
-        pin_memory=False,
-        drop_last=False,
-        collate_fn=collate,
+        rec_train, batch_size=batch_size_train, shuffle=shuffle_train,
+        num_workers=0, pin_memory=False, drop_last=False, collate_fn=collate
     )
 
     val_loader = DataLoader(
-        rec_val,
-        batch_size=batch_size_eval,
-        shuffle=False,
-        num_workers=0,
-        pin_memory=False,
-        drop_last=False,
-        collate_fn=collate,
+        rec_val, batch_size=batch_size_eval, shuffle=False,
+        num_workers=0, pin_memory=False, drop_last=False, collate_fn=collate
     )
     test_loader = DataLoader(
-        rec_test,
-        batch_size=batch_size_eval,
-        shuffle=False,
-        num_workers=0,
-        pin_memory=False,
-        drop_last=False,
-        collate_fn=collate,
+        rec_test, batch_size=batch_size_eval, shuffle=False,
+        num_workers=0, pin_memory=False, drop_last=False, collate_fn=collate
     )
 
     return (
@@ -681,49 +553,35 @@ def build_channels_plus_emptyvoxels_with_neighbors(
         conf_train_loader,  # recorded-only, for confidence model
         val_loader,
         test_loader,
-        e_mean,
-        e_std,
-        ctx_mean,
-        ctx_std,
+        e_mean, e_std, ctx_mean, ctx_std,
         split_info,
     )
 
-
 class RecDS(Dataset):
     """Recorded voxels: (context, xyz_m, ephys, pid, has_ephys=True)."""
-
     def __init__(self, ctx, xyz_m, ephys, pid):
         self.ctx, self.xyz = ctx, xyz_m
         self.ephys, self.pid = ephys, pid
         self.has = torch.ones(len(self.ctx), dtype=torch.bool)
-
-    def __len__(self):
-        return self.ctx.shape[0]
-
+    def __len__(self): return self.ctx.shape[0]
     def __getitem__(self, i):
         return (self.ctx[i], self.xyz[i], self.ephys[i], self.pid[i], self.has[i])
 
-
 class GridDS(Dataset):
     """Grid-only voxels: (context, xyz_m, empty ephys, pid=0, has_ephys=False)."""
-
     def __init__(self, ctx, xyz_m, f_e):
         self.ctx, self.xyz = ctx, xyz_m
         self._empty = torch.zeros(f_e, dtype=torch.float32)
-        self._empty_pid = torch.tensor(0.0, dtype=torch.float32)  # scalar, not [1]
+        self._empty_pid = torch.tensor(0.0, dtype=torch.float32)   # scalar, not [1]
         self.has = torch.zeros(len(self.ctx), dtype=torch.bool)
-
-    def __len__(self):
-        return self.ctx.shape[0]
-
+    def __len__(self): return self.ctx.shape[0]
     def __getitem__(self, i):
         return (self.ctx[i], self.xyz[i], self._empty, self._empty_pid, self.has[i])
-
 
 def downsample_keys_from_xyz(ctx_manager, xyz_m, ds_rate=8):
     Xh, Zh, Yh = ctx_manager.cell_pca.shape[1:]
     xyz_m = mirror_xyz_to_left(xyz_m)  # <<< add
-    ijk = ctx_manager.bc.xyz2i(xyz_m, mode="clip")
+    ijk = ctx_manager.bc.xyz2i(xyz_m, mode='clip')
     xi = np.clip(np.round(ijk[:, 0] / ds_rate).astype(int), 0, Xh - 1)
     yi = np.clip(np.round(ijk[:, 1] / ds_rate).astype(int), 0, Yh - 1)
     zi = np.clip(np.round(ijk[:, 2] / ds_rate).astype(int), 0, Zh - 1)
@@ -731,65 +589,51 @@ def downsample_keys_from_xyz(ctx_manager, xyz_m, ds_rate=8):
     xi = mirror_x_indices_to_left(xi, Xh)
     return xi, zi, yi
 
-
 def compute_voxel_with_ephys(ctx_manager, probe_positions, xi, yi, zi):
     N = xi.size
 
-    ch_xyz = (
-        probe_positions
-        if len(probe_positions.shape) == 2
-        else probe_positions.reshape(-1, 3)
-    )
+    ch_xyz = probe_positions if len(probe_positions.shape) == 2 else probe_positions.reshape(-1, 3)
     ch_xyz = mirror_xyz_to_left(ch_xyz)  # <<< add
     xic, zic, yic = downsample_keys_from_xyz(ctx_manager, ch_xyz)
 
     has = np.zeros(N, dtype=bool)
 
     # Map grid tuple -> flat index
-    key2flat = {(int(xi[i]), int(zi[i]), int(yi[i])): i for i in range(N)}
+    key2flat = { (int(xi[i]), int(zi[i]), int(yi[i])): i for i in range(N) }
 
     for x, z, y in zip(xic, zic, yic):
-        if (x, z, y) in key2flat:
-            has[key2flat[(x, z, y)]] = True
+        if (x,z,y) in key2flat:
+            has[key2flat[(x,z,y)]] = True
     return has
-
 
 try:
     from sklearn.neighbors import KDTree
-
     _HAS_KDT = True
 except Exception:
     _HAS_KDT = False
 
-
 class ChannelNN:
     def __init__(self, ch_xyz_m: np.ndarray):
         self.X = ch_xyz_m.astype(np.float64)
-        self.tree = (
-            KDTree(self.X, leaf_size=40) if (self.X.shape[0] and _HAS_KDT) else None
-        )
-
+        self.tree = KDTree(self.X, leaf_size=40) if (self.X.shape[0] and _HAS_KDT) else None
     def query_radius(self, q_xyz_m: np.ndarray, r_m: float, k_cap: int = 8):
         if self.tree is not None:
-            inds, _ = self.tree.query_radius(
-                q_xyz_m, r=r_m, return_distance=True, sort_results=True
-            )
+            inds, _ = self.tree.query_radius(q_xyz_m, r=r_m, return_distance=True, sort_results=True)
             return [ii[:k_cap] for ii in inds]
         # brute force
         out = []
         X = self.X
         for q in q_xyz_m:
-            if X.shape[0] == 0:
+            if X.shape[0]==0:
                 out.append(np.array([], dtype=int))
                 continue
-            d2 = np.sum((X - q[None, :]) ** 2, axis=1)
+            d2 = np.sum((X - q[None,:])**2, axis=1)
             filtered_indices = np.where(d2 <= (r_m**2))[0]
             if filtered_indices.size > k_cap:
                 J = np.argpartition(d2[filtered_indices], k_cap)[:k_cap]
                 filtered_indices = filtered_indices[J]
             out.append(filtered_indices)
         return out
-
 
 class NeighborCollate:
     """
@@ -799,27 +643,19 @@ class NeighborCollate:
     Uses a TRAIN-ONLY neighbor bank and excludes same-probe neighbors for recorded voxels.
     Assumes inputs are already standardized.
     """
-
-    def __init__(
-        self,
-        ctx_manager,
-        bank_xyz_m,
-        bank_feat_stdzd,
-        bank_pid,
-        kdtree_bank,
-        e_feat_dim: int,
-        M_max=64,
-        radius_um=600.0,
-        allow_same_probe=False,
-    ):
+    def __init__(self,
+                 ctx_manager,
+                 bank_xyz_m, bank_feat_stdzd, bank_pid, kdtree_bank,
+                 e_feat_dim: int,
+                 M_max=64, radius_um=600.0, allow_same_probe=False):
         self.ctx_manager = ctx_manager
-        self.bank_xyz = bank_xyz_m
+        self.bank_xyz  = bank_xyz_m
         self.bank_feat = bank_feat_stdzd
-        self.bank_pid = bank_pid
-        self.nn = kdtree_bank
-        self.F_e = int(e_feat_dim)
-        self.M = int(M_max)
-        self.r_m = float(radius_um) * 1e-6
+        self.bank_pid  = bank_pid
+        self.nn        = kdtree_bank
+        self.F_e       = int(e_feat_dim)
+        self.M         = int(M_max)
+        self.r_m       = float(radius_um) * 1e-6
         self.allow_same_probe = allow_same_probe
 
     def __call__(self, batch_items):
@@ -827,27 +663,23 @@ class NeighborCollate:
         (ctxs, xyzs, ephys, pids, has) = zip(*batch_items)
 
         B = len(ctxs)
-        ctx_q = torch.stack(ctxs, dim=0)  # [B,F_ctx] (already standardized)
-        p_q = torch.stack(xyzs, dim=0)  # [B,3] m
-        y_e = torch.stack(
-            [
-                t if t.numel() else torch.zeros(self.F_e, dtype=torch.float32)
-                for t in ephys
-            ],
-            dim=0,
-        )  # [B,F_e]
-        has_ephys = torch.stack(has, dim=0).bool()  # [B]
+        ctx_q  = torch.stack(ctxs,   dim=0)        # [B,F_ctx] (already standardized)
+        p_q    = torch.stack(xyzs,   dim=0)        # [B,3] m
+        y_e    = torch.stack([
+                   t if t.numel() else torch.zeros(self.F_e, dtype=torch.float32)
+                 for t in ephys], dim=0)           # [B,F_e]
+        has_ephys = torch.stack(has, dim=0).bool() # [B]
 
         # placeholders
-        e_n = torch.zeros(B, self.M, self.F_e, dtype=torch.float32)
-        p_n = torch.zeros(B, self.M, 3, dtype=torch.float32)
-        mask = torch.zeros(B, self.M, dtype=torch.bool)
+        e_n   = torch.zeros(B, self.M, self.F_e, dtype=torch.float32)
+        p_n   = torch.zeros(B, self.M, 3, dtype=torch.float32)
+        mask  = torch.zeros(B, self.M, dtype=torch.bool)
 
         # voxel keys for exclusion / target lookup
         xi, zi, yi = downsample_keys_from_xyz(self.ctx_manager, p_q.numpy())
 
         # neighbor candidates from train bank
-        neigh_lists = self.nn.query_radius(p_q.numpy(), r_m=self.r_m, k_cap=8 * self.M)
+        neigh_lists = self.nn.query_radius(p_q.numpy(), r_m=self.r_m, k_cap=8*self.M)
 
         for b in range(B):
             _ = (xi[b], zi[b], yi[b])
@@ -858,11 +690,7 @@ class NeighborCollate:
                 exclude_pids = {pids[b].item()}
 
             # build neighbor set
-            cand = [
-                ci
-                for ci in neigh_lists[b]
-                if int(self.bank_pid[ci]) not in exclude_pids
-            ]
+            cand = [ci for ci in neigh_lists[b] if int(self.bank_pid[ci]) not in exclude_pids]
             L = len(cand)
 
             if L > self.M:
@@ -880,6 +708,36 @@ class NeighborCollate:
         batch = (ctx_q, p_q, e_n, p_n, mask, has_ephys, y_e, pids)
         return batch
 
+def build_channel_catalog(ephys_np: np.ndarray, probe_xyz_np: np.ndarray):
+    """
+    ephys_np: [P, C, F], probe_xyz_np: [P, C, 3], good_idx: [Pg]
+    Returns flat arrays:
+      ch_xyz: [Nch,3] (meters), ch_feat: [Nch,F], ch_pid: [Nch] int
+    Filters out channels whose xyz are all-zero.
+    """
+    feats, xyzs, pids = [], [], []
+    for p in range(probe_xyz_np.shape[0]):
+        xyz = probe_xyz_np[p]          # [C,3]
+        ef  = ephys_np[p]              # [C,F]
+        valid = ~(np.all(xyz == 0.0, axis=1))
+        if not valid.any():
+            continue
+        xyzs.append(xyz[valid])
+        feats.append(ef[valid])
+        pids.append(np.full(valid.sum(), p, dtype=np.int32))
+
+    if len(xyzs) == 0:
+        return (np.zeros((0,3), np.float32),
+                np.zeros((0, ephys_np.shape[-1]), np.float32),
+                np.zeros((0,), np.int32))
+
+    ch_xyz = np.concatenate(xyzs, axis=0).astype(np.float32)
+    ch_feat = np.concatenate(feats, axis=0).astype(np.float32)
+    ch_pid = np.concatenate(pids, axis=0).astype(np.int32)
+
+    ch_xyz = mirror_xyz_to_left(ch_xyz)  # <<< add
+
+    return ch_xyz, ch_feat, ch_pid
 
 # ============================================================
 # Synthetic sample generation
@@ -912,7 +770,7 @@ def _build_shift_based_synthetic_probe_sample(
     """
     item = bank[probe_idx]
 
-    rec = item["rec_std"].copy()  # original recorded data stays the input
+    rec = item["rec_std"].copy()            # original recorded data stays the input
     valid = item["valid"].copy()
     hist_xyz_full = item["hist_xyz_full"]
     hist_ctx_full = item["hist_ctx_full"]
@@ -920,7 +778,7 @@ def _build_shift_based_synthetic_probe_sample(
     true_start = int(item["true_start"])
 
     C, F_e = rec.shape
-    labels = np.zeros((C,), dtype=np.int64)  # 0=good, 1=suspicious
+    labels = np.zeros((C,), dtype=np.int64)   # 0=good, 1=suspicious
 
     valid_idx = np.where(valid)[0]
     Nv = len(valid_idx)
@@ -967,9 +825,7 @@ def _build_shift_based_synthetic_probe_sample(
     if hist_cosmos_full is None:
         try:
             brain_atlas = AllenAtlas()
-            hist_cosmos_full = region_ids_from_xyz(
-                brain_atlas, hist_xyz_full, mapping="Cosmos"
-            )
+            hist_cosmos_full = region_ids_from_xyz(brain_atlas, hist_xyz_full, mapping="Cosmos")
             hist_cosmos_full = np.asarray(hist_cosmos_full).reshape(-1)
         except Exception:
             hist_cosmos_full = None
@@ -980,9 +836,7 @@ def _build_shift_based_synthetic_probe_sample(
             use_cosmos_labeling = False
 
     if use_cosmos_labeling and hist_cosmos_full is not None:
-        cosmos_true = np.asarray(hist_cosmos_full[true_start : true_start + C]).reshape(
-            -1
-        )
+        cosmos_true = np.asarray(hist_cosmos_full[true_start:true_start + C]).reshape(-1)
         cosmos_shifted = np.asarray(hist_cosmos_full[start:stop]).reshape(-1)
 
         if cosmos_true.shape[0] != C or cosmos_shifted.shape[0] != C:
@@ -996,7 +850,9 @@ def _build_shift_based_synthetic_probe_sample(
     # -------------------------------------------------
     if use_cosmos_labeling and cosmos_true is not None:
         same_region = (
-            (cosmos_true == cosmos_shifted) & (cosmos_true != 0) & (cosmos_shifted != 0)
+            (cosmos_true == cosmos_shifted) &
+            (cosmos_true != 0) &
+            (cosmos_shifted != 0)
         )
         labels[valid] = np.where(same_region[valid], 0, 1)
     else:
@@ -1012,11 +868,7 @@ def _build_shift_based_synthetic_probe_sample(
         Nvalid = len(valid_local_idx)
 
         if Nvalid > 0:
-            frac = float(
-                rng.uniform(
-                    cfg.suspicious_chunk_frac_min, cfg.suspicious_chunk_frac_max
-                )
-            )
+            frac = float(rng.uniform(cfg.suspicious_chunk_frac_min, cfg.suspicious_chunk_frac_max))
             total_pert = max(1, int(round(frac * Nvalid)))
             total_pert = min(total_pert, Nvalid)
 
@@ -1030,7 +882,7 @@ def _build_shift_based_synthetic_probe_sample(
 
             query_xyz_pert = query_xyz.copy()
 
-            for s_local, e_local in pert_blocks_local:
+            for (s_local, e_local) in pert_blocks_local:
                 selected_idx = valid_local_idx[s_local:e_local]
                 L = len(selected_idx)
                 if L <= 0:
@@ -1063,15 +915,13 @@ def _build_shift_based_synthetic_probe_sample(
             if use_cosmos_labeling and cosmos_true is not None:
                 try:
                     brain_atlas = AllenAtlas()
-                    cosmos_after = region_ids_from_xyz(
-                        brain_atlas, query_xyz_pert, mapping="Cosmos"
-                    )
+                    cosmos_after = region_ids_from_xyz(brain_atlas, query_xyz_pert, mapping="Cosmos")
                     cosmos_after = np.asarray(cosmos_after).reshape(-1)
 
                     same_region_after = (
-                        (cosmos_true == cosmos_after)
-                        & (cosmos_true != 0)
-                        & (cosmos_after != 0)
+                        (cosmos_true == cosmos_after) &
+                        (cosmos_true != 0) &
+                        (cosmos_after != 0)
                     )
                     labels[valid] = np.where(same_region_after[valid], 0, 1)
                 except Exception:
@@ -1088,7 +938,6 @@ def _build_shift_based_synthetic_probe_sample(
         labels.astype(np.int64),
         valid.astype(bool),
     )
-
 
 # ============================================================
 # Utilities
@@ -1122,17 +971,15 @@ def _smooth1d_reflect(x: np.ndarray, kernel_size: int) -> np.ndarray:
 
     raise ValueError(f"x must be 1D or 2D, got shape={x.shape}")
 
-
 def _valid_xyz_mask_np(xyz: np.ndarray) -> np.ndarray:
     xyz = np.asarray(xyz, dtype=np.float64)
     return np.isfinite(xyz).all(axis=1) & ~(np.all(xyz == 0.0, axis=1))
 
-
 def _sample_ctx_for_probe_xyz_std(
     ctx_manager,
-    xyz_m: np.ndarray,  # [C,3]
-    ctx_mean: torch.Tensor,  # [F_ctx]
-    ctx_std: torch.Tensor,  # [F_ctx]
+    xyz_m: np.ndarray,              # [C,3]
+    ctx_mean: torch.Tensor,         # [F_ctx]
+    ctx_std: torch.Tensor,          # [F_ctx]
 ) -> np.ndarray:
     xyz_m = np.asarray(xyz_m, dtype=np.float32)
     valid = _valid_xyz_mask_np(xyz_m)
@@ -1146,9 +993,7 @@ def _sample_ctx_for_probe_xyz_std(
             pass
 
         pack = ctx_manager.sample_context_numpy_m(xyz_use, mode="clip")
-        ctx_valid = np.concatenate([pack["cell_pc"], pack["gene_pc"]], axis=1).astype(
-            np.float32
-        )
+        ctx_valid = np.concatenate([pack["cell_pc"], pack["gene_pc"]], axis=1).astype(np.float32)
 
         ctx_mean_np = ctx_mean.detach().cpu().numpy().astype(np.float32)
         ctx_std_np = ctx_std.detach().cpu().numpy().astype(np.float32)
@@ -1156,7 +1001,6 @@ def _sample_ctx_for_probe_xyz_std(
         ctx[valid] = ctx_valid
 
     return ctx
-
 
 def _cosine_taper(length: int, taper_frac: float = 0.20) -> np.ndarray:
     L = int(length)
@@ -1174,12 +1018,10 @@ def _cosine_taper(length: int, taper_frac: float = 0.20) -> np.ndarray:
         w[-n_edge:] = ramp[::-1]
     return w.astype(np.float32)
 
-
 def _random_unit_vectors(n: int, rng: np.random.Generator) -> np.ndarray:
     v = rng.normal(size=(n, 3)).astype(np.float32)
     norm = np.linalg.norm(v, axis=1, keepdims=True) + 1e-8
     return (v / norm).astype(np.float32)
-
 
 def _make_smooth_xyz_perturbation(
     length: int,
@@ -1210,10 +1052,7 @@ def _make_smooth_xyz_perturbation(
 
     anchor_pos = np.linspace(0, L - 1, n_anchors, dtype=np.float32)
     anchor_dir = _random_unit_vectors(n_anchors, rng)
-    anchor_mag = (
-        rng.uniform(mag_min_um, mag_max_um, size=(n_anchors, 1)).astype(np.float32)
-        * 1e-6
-    )
+    anchor_mag = rng.uniform(mag_min_um, mag_max_um, size=(n_anchors, 1)).astype(np.float32) * 1e-6
     anchor_vec = anchor_dir * anchor_mag
 
     x = np.arange(L, dtype=np.float32)
@@ -1231,7 +1070,6 @@ def _make_smooth_xyz_perturbation(
     taper = _cosine_taper(L, taper_frac=taper_frac)[:, None]
     field = field * taper
     return field.astype(np.float32)
-
 
 def _choose_nonoverlapping_blocks_covering_total_len(
     n: int,
@@ -1253,9 +1091,7 @@ def _choose_nonoverlapping_blocks_covering_total_len(
     if n_chunks == 1:
         chunk_lens = [total_len]
     else:
-        cuts = np.sort(
-            rng.choice(np.arange(1, total_len), size=n_chunks - 1, replace=False)
-        )
+        cuts = np.sort(rng.choice(np.arange(1, total_len), size=n_chunks - 1, replace=False))
         chunk_lens = np.diff(np.r_[0, cuts, total_len]).tolist()
 
     # place chunks greedily with random gaps
@@ -1266,13 +1102,7 @@ def _choose_nonoverlapping_blocks_covering_total_len(
 
     gap_slots = n_chunks + 1
     if remaining_space > 0:
-        gap_cuts = np.sort(
-            rng.choice(
-                np.arange(remaining_space + gap_slots - 1),
-                size=gap_slots - 1,
-                replace=False,
-            )
-        )
+        gap_cuts = np.sort(rng.choice(np.arange(remaining_space + gap_slots - 1), size=gap_slots - 1, replace=False))
         gap_sizes = np.diff(np.r_[-1, gap_cuts, remaining_space + gap_slots - 1]) - 1
     else:
         gap_sizes = np.zeros((gap_slots,), dtype=int)
@@ -1285,7 +1115,6 @@ def _choose_nonoverlapping_blocks_covering_total_len(
         pos = e + int(gap_sizes[i + 1])
 
     return blocks
-
 
 def _infer_xyz_unit_and_convert_to_meters(xyz: np.ndarray) -> np.ndarray:
     """
@@ -1300,10 +1129,9 @@ def _infer_xyz_unit_and_convert_to_meters(xyz: np.ndarray) -> np.ndarray:
         return xyz * 1e-6
     return xyz
 
-
 def _predict_ctx_and_ephys_for_xyz(
     *,
-    xyz_m: np.ndarray,  # [N,3]
+    xyz_m: np.ndarray,     # [N,3]
     ctx_manager,
     base_model,
     handles,
@@ -1336,28 +1164,18 @@ def _predict_ctx_and_ephys_for_xyz(
 
     collate = NeighborCollate(
         ctx_manager,
-        handles["bank_xyz"],
-        handles["bank_feat"],
-        handles["bank_pid"],
-        handles["nn_bank"],
-        e_feat_dim=F_e,
-        M_max=8,
-        radius_um=500,
+        handles["bank_xyz"], handles["bank_feat"], handles["bank_pid"], handles["nn_bank"],
+        e_feat_dim=F_e, M_max=8, radius_um=500
     )
 
     dl = DataLoader(
-        qds,
-        batch_size=batch_size,
-        shuffle=False,
-        num_workers=0,
-        pin_memory=False,
-        drop_last=False,
-        collate_fn=collate,
+        qds, batch_size=batch_size, shuffle=False, num_workers=0,
+        pin_memory=False, drop_last=False, collate_fn=collate
     )
 
     mu_all = []
     device_type = device.type
-    use_autocast = device_type == "cuda"
+    use_autocast = device_type in ["cuda", "mps"]
 
     for batch in dl:
         (ctx_b, p_b, e_n, p_n, mask, has_ephys, y_e, *_) = [
@@ -1372,11 +1190,62 @@ def _predict_ctx_and_ephys_for_xyz(
     ctx[~valid] = 0.0
     return ctx.astype(np.float32), pred.astype(np.float32)
 
+# ============================================================
+# Histology trace construction
+# ============================================================
+def _fit_endpoint_direction(xyz_rows: np.ndarray, side: str, k: int = 12) -> np.ndarray:
+    """
+    Estimate a stable endpoint tangent direction from multiple nearby points using
+    a local linear fit versus row index.
+
+    Returns
+    -------
+    dir_vec : [3] unit vector
+        Outward direction from the chosen endpoint.
+    """
+    xyz_rows = np.asarray(xyz_rows, dtype=np.float64)
+    N = xyz_rows.shape[0]
+    if N < 2:
+        raise ValueError(f"Need at least 2 points, got {N}")
+
+    k = int(max(3, min(k, N)))
+
+    if side == "start":
+        pts = xyz_rows[:k].copy()
+        t = np.arange(k, dtype=np.float64)
+        # inward reference: from start into the curve
+        inward_ref = pts[min(1, k - 1)] - pts[0]
+    elif side == "end":
+        pts = xyz_rows[-k:].copy()
+        t = np.arange(k, dtype=np.float64)
+        # inward reference: from end back into the curve
+        inward_ref = pts[max(0, k - 2)] - pts[-1]
+    else:
+        raise ValueError(f"side must be 'start' or 'end', got {side}")
+
+    # linear fit xyz(t) = a*t + b
+    dir_vec = np.zeros(3, dtype=np.float64)
+    t0 = t - t.mean()
+    denom = np.dot(t0, t0) + 1e-12
+    for d in range(3):
+        y0 = pts[:, d] - pts[:, d].mean()
+        dir_vec[d] = np.dot(t0, y0) / denom
+
+    # dir_vec currently points roughly from earlier t -> later t, i.e. inward for start, outward for end
+    if side == "start":
+        dir_vec = -dir_vec
+
+    # make sure it really points outward
+    if np.dot(dir_vec, inward_ref) > 0:
+        dir_vec = -dir_vec
+
+    dir_vec = dir_vec / (np.linalg.norm(dir_vec) + 1e-12)
+    return dir_vec
 
 def _build_histology_trace_extended_and_aligned_window(
     one,
     pid_name,
-    true_xyz: np.ndarray,  # [C,3] meters, actual probe positions
+    true_xyz: np.ndarray,              # [C,3] meters, actual probe positions
     channel_step_um: float,
     extra_channels_each_side: int = 128,
     ba=None,
@@ -1409,9 +1278,7 @@ def _build_histology_trace_extended_and_aligned_window(
 
     xyz_picks = np.asarray(xyz_picks, dtype=np.float64)
     if xyz_picks.ndim != 2 or xyz_picks.shape[1] != 3:
-        raise ValueError(
-            f"xyz_picks has invalid shape for pid={pid_name}: {xyz_picks.shape}"
-        )
+        raise ValueError(f"xyz_picks has invalid shape for pid={pid_name}: {xyz_picks.shape}")
 
     xyz_picks = _infer_xyz_unit_and_convert_to_meters(xyz_picks)
     xyz_picks = xyz_picks[_valid_xyz_mask_np(xyz_picks)]
@@ -1456,12 +1323,9 @@ def _build_histology_trace_extended_and_aligned_window(
     def _inside_bbox(xyz_m: np.ndarray) -> np.ndarray:
         xyz_m = _ensure_2d(xyz_m)
         return (
-            (xyz_m[:, 0] >= xlo)
-            & (xyz_m[:, 0] <= xhi)
-            & (xyz_m[:, 1] >= ylo)
-            & (xyz_m[:, 1] <= yhi)
-            & (xyz_m[:, 2] >= zlo)
-            & (xyz_m[:, 2] <= zhi)
+            (xyz_m[:, 0] >= xlo) & (xyz_m[:, 0] <= xhi) &
+            (xyz_m[:, 1] >= ylo) & (xyz_m[:, 1] <= yhi) &
+            (xyz_m[:, 2] >= zlo) & (xyz_m[:, 2] <= zhi)
         )
 
     def _inside_regions(xyz_m: np.ndarray) -> np.ndarray:
@@ -1486,9 +1350,7 @@ def _build_histology_trace_extended_and_aligned_window(
         seg = np.linalg.norm(np.diff(xyz, axis=0), axis=1) * 1e6
         return np.cumsum(np.r_[0.0, seg])
 
-    def _resample_curve_equal_arclength(
-        xyz_pts: np.ndarray, step_um: float
-    ) -> np.ndarray:
+    def _resample_curve_equal_arclength(xyz_pts: np.ndarray, step_um: float) -> np.ndarray:
         xyz_pts = np.asarray(xyz_pts, dtype=np.float64)
         if xyz_pts.shape[0] < 2:
             return xyz_pts.copy()
@@ -1499,9 +1361,7 @@ def _build_histology_trace_extended_and_aligned_window(
         interp_kind = "cubic" if xyz_pts.shape[0] >= 4 else "linear"
 
         dense_step_um = min(2.0, max(0.5, step_um / 10.0))
-        s_dense = np.arange(
-            0.0, s_pts[-1] + dense_step_um, dense_step_um, dtype=np.float64
-        )
+        s_dense = np.arange(0.0, s_pts[-1] + dense_step_um, dense_step_um, dtype=np.float64)
         if s_dense.size < 2:
             s_dense = np.array([0.0, s_pts[-1]], dtype=np.float64)
 
@@ -1529,9 +1389,7 @@ def _build_histology_trace_extended_and_aligned_window(
 
         return out
 
-    def _fit_endpoint_direction(
-        xyz_rows: np.ndarray, side: str, k: int = 12
-    ) -> np.ndarray:
+    def _fit_endpoint_direction(xyz_rows: np.ndarray, side: str, k: int = 12) -> np.ndarray:
         """
         Stable endpoint tangent from multiple nearby points.
         Returns outward direction from the chosen endpoint.
@@ -1570,9 +1428,7 @@ def _build_histology_trace_extended_and_aligned_window(
         dir_vec = dir_vec / (np.linalg.norm(dir_vec) + 1e-12)
         return dir_vec
 
-    def _append_linear_steps_inside(
-        start_xyz: np.ndarray, direction: np.ndarray, n_steps_max: int
-    ):
+    def _append_linear_steps_inside(start_xyz: np.ndarray, direction: np.ndarray, n_steps_max: int):
         rows = []
         cur = np.asarray(start_xyz, dtype=np.float64).copy()
         direction = np.asarray(direction, dtype=np.float64)
@@ -1597,9 +1453,7 @@ def _build_histology_trace_extended_and_aligned_window(
     # histology is used only to estimate extension directions
     hist_xyz_rows = _resample_curve_equal_arclength(xyz_picks, row_step_um)
     if hist_xyz_rows.shape[0] < 2:
-        raise ValueError(
-            f"Could not build histology resampled curve for pid={pid_name}"
-        )
+        raise ValueError(f"Could not build histology resampled curve for pid={pid_name}")
 
     fit_k_hist = min(40, max(4, hist_xyz_rows.shape[0] // 10))
     hist_start_dir = _fit_endpoint_direction(hist_xyz_rows, side="start", k=fit_k_hist)
@@ -1611,16 +1465,10 @@ def _build_histology_trace_extended_and_aligned_window(
     last_i = int(core_valid_idx[-1])
 
     if len(core_valid_idx) >= 2:
-        core_inward_start = (
-            core_xyz_ext[core_valid_idx[min(1, len(core_valid_idx) - 1)]]
-            - core_xyz_ext[first_i]
-        )
+        core_inward_start = core_xyz_ext[core_valid_idx[min(1, len(core_valid_idx) - 1)]] - core_xyz_ext[first_i]
         core_outward_start = -core_inward_start
 
-        core_inward_end = (
-            core_xyz_ext[last_i]
-            - core_xyz_ext[core_valid_idx[max(0, len(core_valid_idx) - 2)]]
-        )
+        core_inward_end = core_xyz_ext[last_i] - core_xyz_ext[core_valid_idx[max(0, len(core_valid_idx) - 2)]]
         core_outward_end = core_inward_end
     else:
         core_outward_start = hist_start_dir.copy()
@@ -1643,30 +1491,21 @@ def _build_histology_trace_extended_and_aligned_window(
     max_steps = int(np.ceil(max_extension_um / row_step_um))
     n_extend = max_steps if ba is not None else fallback_extra_rows_each_side
 
-    before_rows = _append_linear_steps_inside(
-        core_xyz_ext[first_i], start_dir, n_extend
-    )
+    before_rows = _append_linear_steps_inside(core_xyz_ext[first_i], start_dir, n_extend)
     after_rows = _append_linear_steps_inside(core_xyz_ext[last_i], end_dir, n_extend)
 
     if before_rows.shape[0] > 0:
         before_rows = before_rows[::-1].copy()
 
-    full_xyz_ext = np.concatenate(
-        [before_rows, core_xyz_ext, after_rows], axis=0
-    ).astype(np.float32)
+    full_xyz_ext = np.concatenate([before_rows, core_xyz_ext, after_rows], axis=0).astype(np.float32)
 
     true_start = int(before_rows.shape[0])
-    true_xyz_out = full_xyz_ext[true_start : true_start + C].copy()
+    true_xyz_out = full_xyz_ext[true_start:true_start + C].copy()
 
     # exact overwrite for absolute safety
-    full_xyz_ext[true_start : true_start + C] = true_xyz.astype(np.float32)
+    full_xyz_ext[true_start:true_start + C] = true_xyz.astype(np.float32)
 
-    return (
-        full_xyz_ext.astype(np.float32),
-        true_xyz_out.astype(np.float32),
-        int(true_start),
-    )
-
+    return full_xyz_ext.astype(np.float32), true_xyz_out.astype(np.float32), int(true_start)
 
 # ============================================================
 # Bank creation
@@ -1674,10 +1513,10 @@ def _build_histology_trace_extended_and_aligned_window(
 def _make_histology_probe_bank(
     *,
     one,
-    ephys: np.ndarray,  # [P,C,F_e] raw
-    probe_positions: np.ndarray,  # [P,C,3] m
-    probe_ids: list[int],  # indices into arrays
-    pid_names: list[str],  # alyx pid name/id for each array index
+    ephys: np.ndarray,              # [P,C,F_e] raw
+    probe_positions: np.ndarray,    # [P,C,3] m
+    probe_ids: list[int],           # indices into arrays
+    pid_names: list[str],           # alyx pid name/id for each array index
     base_model,
     ctx_manager,
     handles,
@@ -1714,14 +1553,12 @@ def _make_histology_probe_bank(
 
         pid_name = pid_names[p]
 
-        hist_xyz_full, true_xyz, true_start = (
-            _build_histology_trace_extended_and_aligned_window(
-                one=one,
-                pid_name=pid_name,
-                true_xyz=xyz,  # use the actual probe positions as the core
-                channel_step_um=cfg.channel_step_um,
-                extra_channels_each_side=cfg.extra_trace_channels_each_side,
-            )
+        hist_xyz_full, true_xyz, true_start = _build_histology_trace_extended_and_aligned_window(
+            one=one,
+            pid_name=pid_name,
+            true_xyz=xyz,  # use the actual probe positions as the core
+            channel_step_um=cfg.channel_step_um,
+            extra_channels_each_side=cfg.extra_trace_channels_each_side,
         )
 
         hist_ctx_full, hist_pred_full = _predict_ctx_and_ephys_for_xyz(
@@ -1734,9 +1571,7 @@ def _make_histology_probe_bank(
 
         # NEW: precompute Cosmos labels for the full dense trace
         try:
-            hist_cosmos_full = region_ids_from_xyz(
-                brain_atlas, hist_xyz_full, mapping="Cosmos"
-            )
+            hist_cosmos_full = region_ids_from_xyz(brain_atlas, hist_xyz_full, mapping="Cosmos")
             hist_cosmos_full = np.asarray(hist_cosmos_full).reshape(-1)
         except Exception:
             hist_cosmos_full = np.zeros((hist_xyz_full.shape[0],), dtype=np.int64)
@@ -1747,19 +1582,17 @@ def _make_histology_probe_bank(
                 f"{hist_cosmos_full.shape} vs hist_xyz_full {hist_xyz_full.shape}"
             )
 
-        bank.append(
-            {
-                "pid": int(p),
-                "pid_name": str(pid_name),
-                "rec_std": rec_std.astype(np.float32),
-                "valid": valid.astype(bool),
-                "true_xyz": true_xyz.astype(np.float32),
-                "hist_xyz_full": hist_xyz_full.astype(np.float32),
-                "hist_ctx_full": hist_ctx_full.astype(np.float32),
-                "hist_pred_full": hist_pred_full.astype(np.float32),
-                "hist_cosmos_full": hist_cosmos_full.astype(np.int64),  # NEW
-                "true_start": int(true_start),
-            }
-        )
+        bank.append({
+            "pid": int(p),
+            "pid_name": str(pid_name),
+            "rec_std": rec_std.astype(np.float32),
+            "valid": valid.astype(bool),
+            "true_xyz": true_xyz.astype(np.float32),
+            "hist_xyz_full": hist_xyz_full.astype(np.float32),
+            "hist_ctx_full": hist_ctx_full.astype(np.float32),
+            "hist_pred_full": hist_pred_full.astype(np.float32),
+            "hist_cosmos_full": hist_cosmos_full.astype(np.int64),   # NEW
+            "true_start": int(true_start),
+        })
 
     return bank
