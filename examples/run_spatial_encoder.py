@@ -72,7 +72,7 @@ def run_base_inference(model, data_loader, device: torch.device, output_dir: Pat
 @dataclass
 class RunConfig:
     data_dir: Path = Path(".")
-    model_base_dir: Path = Path("./encoding_models")
+    model_base_dir: Path = Path(".")
 
     project: str = "ea_active"
     agg: str = "agg_full"
@@ -107,12 +107,12 @@ class RunConfig:
 
 
 def main():
-    cfg = RunConfig(train_models=True)
+    cfg = RunConfig(train_models=False)
     torch.manual_seed(cfg.seed)
     np.random.seed(cfg.seed)
 
     cfg.model_base_dir.mkdir(parents=True, exist_ok=True)
-    (cfg.model_base_dir / f"{cfg.vintage}").mkdir(parents=True, exist_ok=True)
+    (cfg.model_base_dir / f"encoding_models/{cfg.vintage}").mkdir(parents=True, exist_ok=True)
 
     device = cfg.device
     print(f"Using device: {device}")
@@ -121,14 +121,14 @@ def main():
 
     if not cfg.train_models:
         from ephysatlas.regionclassifier import download_model
-        model_path = download_model(cfg.model_base_dir, f"{cfg.vintage}", one=one)
+        model_path = download_model(cfg.model_base_dir, f"encoding_models/{cfg.vintage}", one=one)
 
     # ------------------------- data/context -------------------------
     ctx_cfg = AtlasPCAConfig(n_cell_pcs=cfg.n_cell_pcs, n_gene_pcs=cfg.n_gene_pcs)
     ctx_manager = ContextAtlasManager(
         ctx_cfg,
         regenerate_context=cfg.train_models,
-        output_dir=cfg.model_base_dir / f"{cfg.vintage}",
+        output_dir=cfg.model_base_dir / f"encoding_models/{cfg.vintage}",
     )
 
     pid_names, ephys, probe_positions, probe_planned_positions = LoadInsertionData(
@@ -214,7 +214,7 @@ def main():
             patience=cfg.patience,
             checkpoint_path=str(base_ckpt),
         )
-        torch.save({"model_state": base_model.state_dict(), "meters": base_meters, "split_info": split_info}, cfg.model_base_dir / f"SE_model_{cfg.vintage}.pt")
+        torch.save({"model_state": base_model.state_dict(), "meters": base_meters, "split_info": split_info}, cfg.model_base_dir / f"encoding_models/SE_model_{cfg.vintage}.pt")
         print(f"[base] best_epoch={best_epoch}, best_value={best_value}")
 
         # ------------------------- confidence model -------------------------
@@ -244,7 +244,7 @@ def main():
             cfg=conf_cfg,
             checkpoint_path=str(conf_ckpt),
         )
-        torch.save({"model_state": conf_model.state_dict(), "info": conf_info, "meters": conf_meters}, cfg.model_base_dir / f"Confidence_model_{cfg.vintage}.pt")
+        torch.save({"model_state": conf_model.state_dict(), "info": conf_info, "meters": conf_meters}, cfg.model_base_dir / f"encoding_models/Confidence_model_{cfg.vintage}.pt")
 
         conf_eval = evaluate_probe_confidence_model(
             conf_model=conf_model,
