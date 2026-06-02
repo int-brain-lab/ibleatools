@@ -12,6 +12,7 @@ from ephysatlas.spatial_encoder.utils import (
     LoadInsertionData,
     build_channels_plus_emptyvoxels_with_neighbors,
     FEATURE_LIST,
+    get_device,
 )
 from ephysatlas.spatial_encoder.model import (
     NeighborInpaintingModel,
@@ -41,7 +42,7 @@ def run_base_inference(model, data_loader, device: torch.device, output_dir: Pat
     model.eval().to(device)
     preds, targets, xyzs = [], [], []
     device_type = device.type
-    use_autocast = device_type in ["cuda", "mps"]
+    use_autocast = device_type == "cuda"
 
     for batch in data_loader:
         ctx_q, p_q, e_n, p_n, mask, has_ephys, y_e, *_ = [
@@ -71,7 +72,7 @@ def run_base_inference(model, data_loader, device: torch.device, output_dir: Pat
 @dataclass
 class RunConfig:
     data_dir: Path = Path(".")
-    model_base_dir: Path = Path(".")
+    model_base_dir: Path = Path("./encoding_models")
 
     project: str = "ea_active"
     agg: str = "agg_full"
@@ -101,16 +102,18 @@ class RunConfig:
     conf_batch_size: int = 16
     conf_samples_per_probe: int = 8
 
-    device: torch.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device: torch.device = get_device()
     seed: int = 0
 
 
 def main():
-    cfg = RunConfig()
+    cfg = RunConfig(train_models=True)
     torch.manual_seed(cfg.seed)
     np.random.seed(cfg.seed)
 
     cfg.model_base_dir.mkdir(parents=True, exist_ok=True)
+    (cfg.model_base_dir / f"{cfg.vintage}").mkdir(parents=True, exist_ok=True)
+
     device = cfg.device
     print(f"Using device: {device}")
 
@@ -118,14 +121,14 @@ def main():
 
     if not cfg.train_models:
         from ephysatlas.regionclassifier import download_model
-        model_path = download_model(cfg.model_base_dir, f"encoding_models/{cfg.vintage}", one=one)
+        model_path = download_model(cfg.model_base_dir, f"{cfg.vintage}", one=one)
 
     # ------------------------- data/context -------------------------
     ctx_cfg = AtlasPCAConfig(n_cell_pcs=cfg.n_cell_pcs, n_gene_pcs=cfg.n_gene_pcs)
     ctx_manager = ContextAtlasManager(
         ctx_cfg,
         regenerate_context=cfg.train_models,
-        output_dir=cfg.model_base_dir / f"encoding_models/{cfg.vintage}",
+        output_dir=cfg.model_base_dir / f"{cfg.vintage}",
     )
 
     pid_names, ephys, probe_positions, probe_planned_positions = LoadInsertionData(
@@ -251,9 +254,18 @@ def main():
             title="Validation synthetic probe confidence",
         )
         torch.save(conf_eval, cfg.model_base_dir / "probe_confidence_val_eval.pt")
+    else:
+        base_ckpt = torch.load(
+            model_path / f"SE_model_{cfg.vintage}.pt",
+            map_location=device,
+        )
+        conf_ckpt = torch.load(
+            model_path / f"Confidence_model_{cfg.vintage}.pt",
+            map_location=device,
+        )
 
-    base_model.load_state_dict(torch.load(model_path / f"SE_model_{cfg.vintage}.pt")['model_state'])
-    conf_model.load_state_dict(torch.load(model_path / f"Confidence_model_{cfg.vintage}.pt")['model_state'])
+        base_model.load_state_dict(base_ckpt["model_state"])
+        conf_model.load_state_dict(conf_ckpt["model_state"])
 
     # Evaluation
     r2 = evaluate_r2_per_feature(base_model, test_loader, e_mean, e_std, device=device)
