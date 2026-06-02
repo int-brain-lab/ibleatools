@@ -228,8 +228,8 @@ def train_hybrid(
     model.to(device)
     pos_radius_m = pos_radius_um * 1e-6
     meters = {"train/sup":[], "train/ctr":[], "train/total":[], "val/sup":[], "val/corr":[]}
-    use_grad_scaler = device_type in ['cuda', 'mps']
-    scaler = torch.amp.GradScaler(device_type, enabled=use_grad_scaler)
+    use_amp = device_type == "cuda"
+    scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
 
     # Early stopping state
     if mode not in ("min", "max"):
@@ -255,7 +255,7 @@ def train_hybrid(
                 x.to(device) if torch.is_tensor(x) else x for x in batch
             ]
             optimizer.zero_grad(set_to_none=True)
-            with torch.amp.autocast(device_type=device_type, enabled=use_grad_scaler):
+            with torch.amp.autocast(device_type=device_type, enabled=use_amp):
                 mask_dropped = mask.clone()
                 n_drop = int(ephys_drop * mask.shape[0])
                 if n_drop > 0:
@@ -302,16 +302,13 @@ def train_hybrid(
             model.eval()
             vs = vc = 0.0
             m = 0
-            with (torch.no_grad(), torch.amp.autocast(device_type=device_type, enabled=use_grad_scaler)):
+            with (torch.no_grad(), torch.amp.autocast(device_type=device_type, enabled=use_amp)):
                 for batch in val_dl:
                     (ctx_q, p_q, e_n, p_n, mask, has_ephys, y_e, *_) = [
                         x.to(device) if torch.is_tensor(x) else x for x in batch
                     ]
                     h_q, mu = model(ctx_q, p_q, e_n, p_n, mask)
                     val_sup = F.mse_loss(mu[has_ephys], y_e[has_ephys], reduction="mean")
-
-                    with torch.no_grad():
-                        err = ((mu - y_e) ** 2).mean(dim=1)  # [B]
 
                     vs += val_sup.item()
                     vc += mean_feature_corr(mu, y_e, has_ephys).item()
@@ -686,8 +683,8 @@ def train_probe_confidence_model(
     )
 
     device_type = device.type
-    use_autocast = device_type in ["cuda", "mps"]
-    scaler = torch.amp.GradScaler(device_type, enabled=use_autocast)
+    use_autocast = device_type == "cuda"
+    scaler = torch.amp.GradScaler("cuda", enabled=use_autocast)
 
     best_val = math.inf
     best_state = None
@@ -885,9 +882,6 @@ def visualize_probe_confidence_prediction(
     e_std: Optional[torch.Tensor | np.ndarray] = None,
     figsize=(14, 8),
 ):
-    import numpy as np
-    import matplotlib.pyplot as plt
-
     def _to_torch(x, dtype=torch.float32):
         if torch.is_tensor(x):
             return x.detach().cpu().to(dtype=dtype)
@@ -961,7 +955,7 @@ def visualize_probe_confidence_prediction(
     ax_rec, ax_pred, ax_cls, ax_prob = axes
     extent = (0, F_e, C - 1, 0)
 
-    im0 = ax_rec.imshow(
+    ax_rec.imshow(
         rec_disp_plot,
         aspect="auto",
         interpolation="nearest",
@@ -1084,7 +1078,7 @@ def evaluate_r2_per_feature(model, test_dl, ephys_mean, ephys_std, device=torch.
 
     model.eval()
     device_type = device.type
-    use_autocast = device_type in ["cuda", "mps"]
+    use_autocast = device_type == "cuda"
 
     ephys_mean = ephys_mean.to(device)
     ephys_std = ephys_std.to(device)

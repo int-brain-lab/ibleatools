@@ -1,8 +1,7 @@
 import numpy as np
 
-import pandas as pd
 from pathlib import Path
-from typing import Tuple, Any, Optional
+from typing import Tuple, Any
 from dataclasses import dataclass
 
 from sklearn.decomposition import PCA
@@ -19,7 +18,6 @@ from iblatlas.atlas import AllenAtlas
 
 from one.api import ONE
 
-import matplotlib.pyplot as plt
 from tqdm import tqdm
 import scipy.interpolate
 
@@ -33,6 +31,13 @@ FEATURE_LIST = [
     'recovery_slope', 'depolarisation_slope', 'repolarisation_slope', 'polarity',
      #'channel_labels'
 ]
+
+def get_device():
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    if torch.backends.mps.is_available():
+        return torch.device("mps")
+    return torch.device("cpu")
 
 # ============================= data handling =============================
 @dataclass
@@ -708,37 +713,6 @@ class NeighborCollate:
         batch = (ctx_q, p_q, e_n, p_n, mask, has_ephys, y_e, pids)
         return batch
 
-def build_channel_catalog(ephys_np: np.ndarray, probe_xyz_np: np.ndarray):
-    """
-    ephys_np: [P, C, F], probe_xyz_np: [P, C, 3], good_idx: [Pg]
-    Returns flat arrays:
-      ch_xyz: [Nch,3] (meters), ch_feat: [Nch,F], ch_pid: [Nch] int
-    Filters out channels whose xyz are all-zero.
-    """
-    feats, xyzs, pids = [], [], []
-    for p in range(probe_xyz_np.shape[0]):
-        xyz = probe_xyz_np[p]          # [C,3]
-        ef  = ephys_np[p]              # [C,F]
-        valid = ~(np.all(xyz == 0.0, axis=1))
-        if not valid.any():
-            continue
-        xyzs.append(xyz[valid])
-        feats.append(ef[valid])
-        pids.append(np.full(valid.sum(), p, dtype=np.int32))
-
-    if len(xyzs) == 0:
-        return (np.zeros((0,3), np.float32),
-                np.zeros((0, ephys_np.shape[-1]), np.float32),
-                np.zeros((0,), np.int32))
-
-    ch_xyz = np.concatenate(xyzs, axis=0).astype(np.float32)
-    ch_feat = np.concatenate(feats, axis=0).astype(np.float32)
-    ch_pid = np.concatenate(pids, axis=0).astype(np.int32)
-
-    ch_xyz = mirror_xyz_to_left(ch_xyz)  # <<< add
-
-    return ch_xyz, ch_feat, ch_pid
-
 # ============================================================
 # Synthetic sample generation
 # ============================================================
@@ -1175,7 +1149,7 @@ def _predict_ctx_and_ephys_for_xyz(
 
     mu_all = []
     device_type = device.type
-    use_autocast = device_type in ["cuda", "mps"]
+    use_autocast = device_type == "cuda"
 
     for batch in dl:
         (ctx_b, p_b, e_n, p_n, mask, has_ephys, y_e, *_) = [
@@ -1190,57 +1164,6 @@ def _predict_ctx_and_ephys_for_xyz(
     ctx[~valid] = 0.0
     return ctx.astype(np.float32), pred.astype(np.float32)
 
-# ============================================================
-# Histology trace construction
-# ============================================================
-def _fit_endpoint_direction(xyz_rows: np.ndarray, side: str, k: int = 12) -> np.ndarray:
-    """
-    Estimate a stable endpoint tangent direction from multiple nearby points using
-    a local linear fit versus row index.
-
-    Returns
-    -------
-    dir_vec : [3] unit vector
-        Outward direction from the chosen endpoint.
-    """
-    xyz_rows = np.asarray(xyz_rows, dtype=np.float64)
-    N = xyz_rows.shape[0]
-    if N < 2:
-        raise ValueError(f"Need at least 2 points, got {N}")
-
-    k = int(max(3, min(k, N)))
-
-    if side == "start":
-        pts = xyz_rows[:k].copy()
-        t = np.arange(k, dtype=np.float64)
-        # inward reference: from start into the curve
-        inward_ref = pts[min(1, k - 1)] - pts[0]
-    elif side == "end":
-        pts = xyz_rows[-k:].copy()
-        t = np.arange(k, dtype=np.float64)
-        # inward reference: from end back into the curve
-        inward_ref = pts[max(0, k - 2)] - pts[-1]
-    else:
-        raise ValueError(f"side must be 'start' or 'end', got {side}")
-
-    # linear fit xyz(t) = a*t + b
-    dir_vec = np.zeros(3, dtype=np.float64)
-    t0 = t - t.mean()
-    denom = np.dot(t0, t0) + 1e-12
-    for d in range(3):
-        y0 = pts[:, d] - pts[:, d].mean()
-        dir_vec[d] = np.dot(t0, y0) / denom
-
-    # dir_vec currently points roughly from earlier t -> later t, i.e. inward for start, outward for end
-    if side == "start":
-        dir_vec = -dir_vec
-
-    # make sure it really points outward
-    if np.dot(dir_vec, inward_ref) > 0:
-        dir_vec = -dir_vec
-
-    dir_vec = dir_vec / (np.linalg.norm(dir_vec) + 1e-12)
-    return dir_vec
 
 def _build_histology_trace_extended_and_aligned_window(
     one,
