@@ -19,6 +19,7 @@ from ephysatlas.spatial_encoder.utils import (
     _make_histology_probe_bank,
 )
 
+
 # =========================== prediction model ============================
 def mlp(d_in, d_hidden, d_out, n_layers=2, drop=0.0):
     layers = [nn.Linear(d_in, d_hidden), nn.GELU()]
@@ -27,8 +28,10 @@ def mlp(d_in, d_hidden, d_out, n_layers=2, drop=0.0):
     layers += [nn.Linear(d_hidden, d_out)]
     return nn.Sequential(*layers)
 
+
 class PosEnc3D(nn.Module):
     """Encode absolute and relative 3D positions."""
+
     def __init__(self, d_out):
         super().__init__()
         self.pe = mlp(6, max(64, d_out), d_out)  # [xyz_abs(3), xyz_rel(3)] -> d_out
@@ -38,6 +41,7 @@ class PosEnc3D(nn.Module):
         x = torch.cat([p_abs, p_rel], dim=-1)
         return self.pe(x)
 
+
 class NeighborEncoder(nn.Module):
     def __init__(self, f_ephys, d_model, d_pos=64, drop=0.1):
         super().__init__()
@@ -45,11 +49,12 @@ class NeighborEncoder(nn.Module):
         self.embed = mlp(f_ephys + d_pos, d_model, d_model, n_layers=2, drop=drop)
 
     def forward(self, e_n, p_n_abs, p_n_rel, mask):  # e_n: [B,M,Fe]
-        pos = self.pos(p_n_abs, p_n_rel)                     # [B,M,d_pos]
+        pos = self.pos(p_n_abs, p_n_rel)  # [B,M,d_pos]
         x = torch.cat([e_n, pos], dim=-1)
-        h = self.embed(x)                                    # [B,M,d_model]
-        h = h * mask[..., None]                              # zero out pads
+        h = self.embed(x)  # [B,M,d_model]
+        h = h * mask[..., None]  # zero out pads
         return h
+
 
 class QueryEncoder(nn.Module):
     def __init__(self, f_ctx, d_model, d_pos=64, drop=0.1):
@@ -62,68 +67,91 @@ class QueryEncoder(nn.Module):
         B = ctx_q.size(0)
         p_rel0 = torch.zeros(B, 1, 3, device=ctx_q.device, dtype=ctx_q.dtype)
         p_abs = p_q_abs[:, None, :]
-        pos = self.pos(p_abs, p_rel0)                        # [B,1,d_pos]
+        pos = self.pos(p_abs, p_rel0)  # [B,1,d_pos]
         x = torch.cat([ctx_q[:, None, :], pos], dim=-1)
-        h = self.embed(x)                                    # [B,1,d_model]
+        h = self.embed(x)  # [B,1,d_model]
         return h
+
 
 class CrossBlock(nn.Module):
     """Optional neighbor self-attn, then query->neighbor cross-attn."""
+
     def __init__(self, d_model, nhead=8, drop=0.1):
         super().__init__()
-        self.cross = nn.MultiheadAttention(d_model, nhead, dropout=drop, batch_first=True)
-        self.ff = mlp(d_model, 4*d_model, d_model, n_layers=2, drop=drop)
+        self.cross = nn.MultiheadAttention(
+            d_model, nhead, dropout=drop, batch_first=True
+        )
+        self.ff = mlp(d_model, 4 * d_model, d_model, n_layers=2, drop=drop)
         self.norm_q1 = nn.LayerNorm(d_model)
         self.norm_q2 = nn.LayerNorm(d_model)
 
     def forward(self, h_q, h_n, mask_nei):
         # h_q: [B,1,D], h_n: [B,M,D], mask_nei: [B,M] (True=real, False=pad)
         B, M, D = h_n.shape
-        no_nei = ~mask_nei.any(dim=1)          # [B]
+        no_nei = ~mask_nei.any(dim=1)  # [B]
         if no_nei.any():
             # append a dummy zero neighbor and mark it valid ONLY for empty rows
             dummy = h_n.new_zeros(B, 1, D)
-            h_n = torch.cat([h_n, dummy], dim=1)               # [B, M+1, D]
+            h_n = torch.cat([h_n, dummy], dim=1)  # [B, M+1, D]
             pad = mask_nei.new_zeros(B, 1)
             pad[no_nei, 0] = True
-            mask_nei = torch.cat([mask_nei, pad], dim=1)       # [B, M+1]
+            mask_nei = torch.cat([mask_nei, pad], dim=1)  # [B, M+1]
 
         # query <- neighbors cross-attn
-        key_padding_mask = (~mask_nei.bool())
+        key_padding_mask = ~mask_nei.bool()
         h_q2, _ = self.cross(h_q, h_n, h_n, key_padding_mask=key_padding_mask)
         h_q = self.norm_q1(h_q + h_q2)
         h_q = self.norm_q2(h_q + self.ff(h_q))
         return h_q
 
+
 class EphysPredictor(nn.Module):
     def __init__(self, d_model, f_out):
         super().__init__()
-        self.mu_head = mlp(d_model, 2*d_model, f_out, n_layers=2, drop=0.0)
+        self.mu_head = mlp(d_model, 2 * d_model, f_out, n_layers=2, drop=0.0)
 
     def forward(self, h_q):  # [B,1,D]
-        h = h_q.squeeze(1)   # [B,D]
+        h = h_q.squeeze(1)  # [B,D]
         mu = self.mu_head(h)
         return mu
+
 
 class NeighborInpaintingModel(nn.Module):
     """
     Predict ephys for a single query channel using context of that channel
     and a variable-size set of neighbor ephys from *other* probes.
     """
+
     def __init__(
-        self, f_ctx, f_ephys, f_out,
-        e_mean=None, e_std=None, ctx_mean=None, ctx_std=None,
-        d_model=256, nhead=8, depth=2, drop=0.1,
+        self,
+        f_ctx,
+        f_ephys,
+        f_out,
+        e_mean=None,
+        e_std=None,
+        ctx_mean=None,
+        ctx_std=None,
+        d_model=256,
+        nhead=8,
+        depth=2,
+        drop=0.1,
     ):
         super().__init__()
         self.qenc = QueryEncoder(f_ctx, d_model, drop=drop)
         self.nenc = NeighborEncoder(f_ephys, d_model, drop=drop)
-        self.blocks = nn.ModuleList([CrossBlock(d_model, nhead=nhead, drop=drop) for _ in range(depth)])
+        self.blocks = nn.ModuleList(
+            [CrossBlock(d_model, nhead=nhead, drop=drop) for _ in range(depth)]
+        )
         self.pred = EphysPredictor(d_model, f_out)
 
-        if (e_mean is not None and e_std is not None and ctx_mean is not None and ctx_std is not None):
+        if (
+            e_mean is not None
+            and e_std is not None
+            and ctx_mean is not None
+            and ctx_std is not None
+        ):
             self.register_buffer("e_mean", e_mean.clone().detach())
-            self.register_buffer("e_std",  e_std.clone().detach())
+            self.register_buffer("e_std", e_std.clone().detach())
             self.register_buffer("ctx_mean", ctx_mean.clone().detach())
             self.register_buffer("ctx_std", ctx_std.clone().detach())
 
@@ -132,27 +160,29 @@ class NeighborInpaintingModel(nn.Module):
         p_q_b = p_q[:, None, :].expand_as(p_n)
         p_rel = p_n - p_q_b
 
-        h_q = self.qenc(ctx_q, p_q)                   # [B,1,D]
-        h_n = self.nenc(e_n, p_n, p_rel, mask_nei)    # [B,M,D]
+        h_q = self.qenc(ctx_q, p_q)  # [B,1,D]
+        h_n = self.nenc(e_n, p_n, p_rel, mask_nei)  # [B,M,D]
         for blk in self.blocks:
             h_q = blk(h_q, h_n, mask_nei)
 
-        mu = self.pred(h_q)                          # [B,F_out], [B,F_out]
+        mu = self.pred(h_q)  # [B,F_out], [B,F_out]
 
         return h_q.squeeze(1), mu
+
 
 @torch.no_grad()
 def mean_feature_corr(mu, y, mask=None):
     if mask is not None:
         mu = mu[mask]
         y = y[mask]
-    if mu.numel()==0:
-        return mu.new_tensor(float('nan'))
+    if mu.numel() == 0:
+        return mu.new_tensor(float("nan"))
     mu = mu - mu.mean(dim=1, keepdim=True)
-    y  = y  - y.mean(dim=1, keepdim=True)
+    y = y - y.mean(dim=1, keepdim=True)
     mu = F.normalize(mu, dim=1)
     y = F.normalize(y, dim=1)
-    return (mu*y).sum(dim=1).mean()
+    return (mu * y).sum(dim=1).mean()
+
 
 def info_nce_multi_positive(z, xyz, pos_radius_m: float, tau: float = 0.2):
     """
@@ -178,7 +208,9 @@ def info_nce_multi_positive(z, xyz, pos_radius_m: float, tau: float = 0.2):
     with torch.no_grad():
         diffs = xyz[:, None, :] - xyz[None, :, :]
         dist = torch.linalg.norm(diffs, dim=-1)  # [N,N]
-        pos_mask = (dist <= pos_radius_m) & (~torch.eye(N, dtype=torch.bool, device=z.device))  # exclude self
+        pos_mask = (dist <= pos_radius_m) & (
+            ~torch.eye(N, dtype=torch.bool, device=z.device)
+        )  # exclude self
         # We will use ALL other samples (except self) as the denominator
         denom_mask = ~torch.eye(N, dtype=torch.bool, device=z.device)
 
@@ -189,31 +221,44 @@ def info_nce_multi_positive(z, xyz, pos_radius_m: float, tau: float = 0.2):
         return torch.tensor(0.0, device=z.device), 0
 
     # For numerical stability, subtract row-wise max over the denominator set
-    sim_denom = sim.masked_fill(~denom_mask, float('-inf'))
+    sim_denom = sim.masked_fill(~denom_mask, float("-inf"))
     row_max, _ = torch.max(sim_denom, dim=1, keepdim=True)
     sim = sim - row_max  # [N,N]
 
     # Numerator: sum over positives
-    num = torch.logsumexp(sim.masked_fill(~pos_mask, float('-inf')), dim=1)  # [N]
+    num = torch.logsumexp(sim.masked_fill(~pos_mask, float("-inf")), dim=1)  # [N]
     # Denominator: sum over all j != i
-    den = torch.logsumexp(sim.masked_fill(~denom_mask, float('-inf')), dim=1)  # [N]
+    den = torch.logsumexp(sim.masked_fill(~denom_mask, float("-inf")), dim=1)  # [N]
 
     loss_vec = -(num - den)  # [N]
     loss = loss_vec[has_pos].mean()
     return loss, int(has_pos.sum().item())
 
+
 def train_hybrid(
-    model, train_dl, val_dl, optimizer, epochs=10, device=torch.device("cuda"),
-    lambda_sup=1.0, lambda_ctr=0.2, tau=0.2, pos_radius_um=600.0, grad_clip=1.0, log_every=50,
+    model,
+    train_dl,
+    val_dl,
+    optimizer,
+    epochs=10,
+    device=torch.device("cuda"),
+    lambda_sup=1.0,
+    lambda_ctr=0.2,
+    tau=0.2,
+    pos_radius_um=600.0,
+    grad_clip=1.0,
+    log_every=50,
     *,
     # Early stopping knobs
     early_stopping=True,
     patience: int = 10,
     min_delta: float = 0.0,
     ephys_drop: float = 0.0,
-    monitor: str = "val/sup",     # "val/sup" (min) or "val/corr" (max) etc.
-    mode: str = "min",            # "min" or "max"
-    checkpoint_path: Optional[str] = None,  # if set, saves best state dict here on improvement
+    monitor: str = "val/sup",  # "val/sup" (min) or "val/corr" (max) etc.
+    mode: str = "min",  # "min" or "max"
+    checkpoint_path: Optional[
+        str
+    ] = None,  # if set, saves best state dict here on improvement
 ):
     """
     Trains with supervised + contrastive losses and early stopping on a validation metric.
@@ -227,7 +272,13 @@ def train_hybrid(
     device_type = device.type
     model.to(device)
     pos_radius_m = pos_radius_um * 1e-6
-    meters = {"train/sup":[], "train/ctr":[], "train/total":[], "val/sup":[], "val/corr":[]}
+    meters = {
+        "train/sup": [],
+        "train/ctr": [],
+        "train/total": [],
+        "val/sup": [],
+        "val/corr": [],
+    }
     use_amp = device_type == "cuda"
     scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
 
@@ -242,7 +293,11 @@ def train_hybrid(
     def _is_improvement(current, best):
         if current is None or math.isnan(current):
             return False
-        return (current < best - min_delta) if mode == "min" else (current > best + min_delta)
+        return (
+            (current < best - min_delta)
+            if mode == "min"
+            else (current > best + min_delta)
+        )
 
     for ep in range(1, epochs + 1):
         # -------------------- Train --------------------
@@ -259,7 +314,9 @@ def train_hybrid(
                 mask_dropped = mask.clone()
                 n_drop = int(ephys_drop * mask.shape[0])
                 if n_drop > 0:
-                    drop_idx = torch.randperm(mask.shape[0], device=mask.device)[:n_drop]
+                    drop_idx = torch.randperm(mask.shape[0], device=mask.device)[
+                        :n_drop
+                    ]
                     mask_dropped[drop_idx] = False
                 h_q, mu = model(ctx_q, p_q, e_n, p_n, mask_dropped)
 
@@ -290,7 +347,9 @@ def train_hybrid(
             r_tot += loss.item()
             n_steps += 1
             if (step % log_every) == 0:
-                print(f"[ep {ep} step {step}] sup={r_sup/n_steps:.4f} ctr={r_ctr/n_steps:.4f} tot={r_tot/n_steps:.4f}")
+                print(
+                    f"[ep {ep} step {step}] sup={r_sup / n_steps:.4f} ctr={r_ctr / n_steps:.4f} tot={r_tot / n_steps:.4f}"
+                )
 
         meters["train/sup"].append(r_sup / max(1, n_steps))
         meters["train/ctr"].append(r_ctr / max(1, n_steps))
@@ -302,13 +361,18 @@ def train_hybrid(
             model.eval()
             vs = vc = 0.0
             m = 0
-            with (torch.no_grad(), torch.amp.autocast(device_type=device_type, enabled=use_amp)):
+            with (
+                torch.no_grad(),
+                torch.amp.autocast(device_type=device_type, enabled=use_amp),
+            ):
                 for batch in val_dl:
                     (ctx_q, p_q, e_n, p_n, mask, has_ephys, y_e, *_) = [
                         x.to(device) if torch.is_tensor(x) else x for x in batch
                     ]
                     h_q, mu = model(ctx_q, p_q, e_n, p_n, mask)
-                    val_sup = F.mse_loss(mu[has_ephys], y_e[has_ephys], reduction="mean")
+                    val_sup = F.mse_loss(
+                        mu[has_ephys], y_e[has_ephys], reduction="mean"
+                    )
 
                     vs += val_sup.item()
                     vc += mean_feature_corr(mu, y_e, has_ephys).item()
@@ -338,27 +402,36 @@ def train_hybrid(
                 best_epoch = ep
                 num_bad_epochs = 0
                 if checkpoint_path is not None:
-                    torch.save({"epoch": ep,
-                                "model_state": best_state,
-                                "optimizer_state": optimizer.state_dict(),
-                                "meters": meters,
-                                "best_value": best_val,
-                                "monitor": monitor,
-                                "mode": mode},
-                               checkpoint_path)
+                    torch.save(
+                        {
+                            "epoch": ep,
+                            "model_state": best_state,
+                            "optimizer_state": optimizer.state_dict(),
+                            "meters": meters,
+                            "best_value": best_val,
+                            "monitor": monitor,
+                            "mode": mode,
+                        },
+                        checkpoint_path,
+                    )
                 print(f"✓ Improvement on {monitor}: {best_val:.6f} (epoch {ep})")
             else:
                 num_bad_epochs += 1
                 if num_bad_epochs >= patience:
-                    print(f"⏹ Early stopping at epoch {ep} (no improvement in {patience} epochs).")
+                    print(
+                        f"⏹ Early stopping at epoch {ep} (no improvement in {patience} epochs)."
+                    )
                     break
 
     # Restore best weights (if any) at the end
     if early_stopping and (val_dl is not None) and (best_state is not None):
         model.load_state_dict(best_state)
-        print(f"Restored best model from epoch {best_epoch} with {monitor}={best_val:.6f}")
+        print(
+            f"Restored best model from epoch {best_epoch} with {monitor}={best_val:.6f}"
+        )
 
     return model, meters, best_epoch, best_val
+
 
 # ============================================================
 # Config
@@ -410,6 +483,7 @@ class ProbeConfidenceTrainConfig:
     perturb_smooth_kernel_max: int = 31
     perturb_taper_frac: float = 0.20
 
+
 # ============================================================
 # Dataset
 # ============================================================
@@ -419,6 +493,7 @@ class SyntheticProbeConfidenceDataset(Dataset):
 
     samples_per_probe = how many random candidate shifts we sample per probe.
     """
+
     def __init__(
         self,
         bank: list[dict],
@@ -460,11 +535,11 @@ class SyntheticProbeConfidenceDataset(Dataset):
         )
 
         return {
-            "rec": torch.from_numpy(rec).float(),           # [C,F_e]
-            "ctx": torch.from_numpy(ctx).float(),           # [C,F_ctx]
-            "pred": torch.from_numpy(pred).float(),         # [C,F_e]
-            "labels": torch.from_numpy(labels).long(),      # [C]
-            "valid": torch.from_numpy(valid).bool(),        # [C]
+            "rec": torch.from_numpy(rec).float(),  # [C,F_e]
+            "ctx": torch.from_numpy(ctx).float(),  # [C,F_ctx]
+            "pred": torch.from_numpy(pred).float(),  # [C,F_e]
+            "labels": torch.from_numpy(labels).long(),  # [C]
+            "valid": torch.from_numpy(valid).bool(),  # [C]
         }
 
 
@@ -490,7 +565,11 @@ def build_probe_confidence_datasets(
     while the lower-level histology-bank construction lives in utils.py.
     """
     train_ids = list(split_info["p_tr_ids"])
-    val_ids = list(split_info["p_va_ids"]) if len(split_info["p_va_ids"]) > 0 else list(split_info["p_te_ids"])
+    val_ids = (
+        list(split_info["p_va_ids"])
+        if len(split_info["p_va_ids"]) > 0
+        else list(split_info["p_te_ids"])
+    )
 
     train_bank = _make_histology_probe_bank(
         one=one,
@@ -542,11 +621,14 @@ def build_probe_confidence_datasets(
     }
     return train_ds, val_ds, info
 
+
 # ============================================================
 # Probe-level transformer confidence model
 # ============================================================
 class TransformerBlock(nn.Module):
-    def __init__(self, d_model: int, nhead: int, mlp_ratio: float = 2.0, drop: float = 0.1):
+    def __init__(
+        self, d_model: int, nhead: int, mlp_ratio: float = 2.0, drop: float = 0.1
+    ):
         super().__init__()
         self.norm1 = nn.LayerNorm(d_model)
         self.attn = nn.MultiheadAttention(
@@ -572,6 +654,7 @@ class TransformerBlock(nn.Module):
         x = x + self.mlp(self.norm2(x))
         return x
 
+
 class ProbeSequenceConfidenceTransformer(nn.Module):
     """
     Inputs per channel:
@@ -584,6 +667,7 @@ class ProbeSequenceConfidenceTransformer(nn.Module):
         0 = good
         1 = suspicious
     """
+
     def __init__(
         self,
         *,
@@ -609,10 +693,12 @@ class ProbeSequenceConfidenceTransformer(nn.Module):
             nn.Linear(d_model, d_model),
         )
 
-        self.blocks = nn.ModuleList([
-            TransformerBlock(d_model, nhead, mlp_ratio=mlp_ratio, drop=drop)
-            for _ in range(depth)
-        ])
+        self.blocks = nn.ModuleList(
+            [
+                TransformerBlock(d_model, nhead, mlp_ratio=mlp_ratio, drop=drop)
+                for _ in range(depth)
+            ]
+        )
 
         self.head = nn.Sequential(
             nn.LayerNorm(d_model),
@@ -625,10 +711,10 @@ class ProbeSequenceConfidenceTransformer(nn.Module):
     def forward(
         self,
         *,
-        rec: torch.Tensor,      # [B,C,F_e]
-        pred: torch.Tensor,     # [B,C,F_e]
-        ctx: torch.Tensor,      # [B,C,F_ctx]
-        valid: torch.Tensor,    # [B,C] bool
+        rec: torch.Tensor,  # [B,C,F_e]
+        pred: torch.Tensor,  # [B,C,F_e]
+        ctx: torch.Tensor,  # [B,C,F_ctx]
+        valid: torch.Tensor,  # [B,C] bool
     ):
         diff = pred - rec
         x = torch.cat([rec, pred, diff, torch.abs(diff), ctx], dim=-1)
@@ -638,17 +724,21 @@ class ProbeSequenceConfidenceTransformer(nn.Module):
         for blk in self.blocks:
             x = blk(x, pad_mask=pad_mask)
 
-        logits = self.head(x)   # [B,C,2]
+        logits = self.head(x)  # [B,C,2]
         return logits
+
 
 # ============================================================
 # Training / evaluation
 # ============================================================
-def _flatten_valid_logits_and_labels(logits: torch.Tensor, labels: torch.Tensor, valid: torch.Tensor):
+def _flatten_valid_logits_and_labels(
+    logits: torch.Tensor, labels: torch.Tensor, valid: torch.Tensor
+):
     m = valid.bool().reshape(-1)
     logits_f = logits.reshape(-1, logits.shape[-1])[m]
     labels_f = labels.reshape(-1)[m]
     return logits_f, labels_f
+
 
 def train_probe_confidence_model(
     conf_model,
@@ -750,7 +840,9 @@ def train_probe_confidence_model(
 
             with torch.amp.autocast(device_type=device_type, enabled=use_autocast):
                 logits = conf_model(rec=rec, pred=pred, ctx=ctx, valid=valid)
-                logits_f, labels_f = _flatten_valid_logits_and_labels(logits, labels, valid)
+                logits_f, labels_f = _flatten_valid_logits_and_labels(
+                    logits, labels, valid
+                )
                 if logits_f.numel() == 0:
                     continue
                 loss = criterion(logits_f.float(), labels_f)
@@ -773,7 +865,9 @@ def train_probe_confidence_model(
         meters["val/loss"].append(va)
         meters["val/acc"].append(va_acc)
 
-        print(f"[probe-conf ep {ep}] train_loss={tr:.5f} val_loss={va:.5f} val_acc={va_acc:.4f}")
+        print(
+            f"[probe-conf ep {ep}] train_loss={tr:.5f} val_loss={va:.5f} val_acc={va_acc:.4f}"
+        )
 
         if va < best_val - cfg.min_delta:
             best_val = va
@@ -793,7 +887,9 @@ def train_probe_confidence_model(
         else:
             bad += 1
             if bad >= cfg.patience:
-                print(f"[probe-conf] Early stopping at ep={ep} (no improvement {cfg.patience} epochs)")
+                print(
+                    f"[probe-conf] Early stopping at ep={ep} (no improvement {cfg.patience} epochs)"
+                )
                 break
 
     if best_state is not None:
@@ -802,6 +898,7 @@ def train_probe_confidence_model(
     conf_model.eval()
     info = {"best_val": best_val}
     return conf_model, info, meters
+
 
 @torch.no_grad()
 def evaluate_probe_confidence_model(
@@ -856,7 +953,9 @@ def evaluate_probe_confidence_model(
     for k, name in enumerate(class_names):
         m = y == k
         if m.any():
-            print(f"class={name:10s} n={m.sum():6d} mean_pred_prob={prob[m, k].mean():.4f}")
+            print(
+                f"class={name:10s} n={m.sum():6d} mean_pred_prob={prob[m, k].mean():.4f}"
+            )
 
     return {
         "labels": y,
@@ -866,13 +965,14 @@ def evaluate_probe_confidence_model(
         "acc": acc,
     }
 
+
 @torch.no_grad()
 def visualize_probe_confidence_prediction(
     *,
     conf_model,
-    rec_std: torch.Tensor | np.ndarray,     # [C, F_e]
-    pred_std: torch.Tensor | np.ndarray,    # [C, F_e]
-    ctx_std: torch.Tensor | np.ndarray,     # [C, F_ctx]
+    rec_std: torch.Tensor | np.ndarray,  # [C, F_e]
+    pred_std: torch.Tensor | np.ndarray,  # [C, F_e]
+    ctx_std: torch.Tensor | np.ndarray,  # [C, F_ctx]
     valid_mask: torch.Tensor | np.ndarray,  # [C] bool
     device: torch.device,
     title: str = "Probe confidence prediction",
@@ -909,9 +1009,9 @@ def visualize_probe_confidence_prediction(
     ctx_b = ctx_std_t[None].to(device)
     valid_b = valid_t[None].to(device)
 
-    logits = conf_model(rec=rec_b, pred=pred_b, ctx=ctx_b, valid=valid_b)[0]   # [C,2]
-    probs = torch.softmax(logits, dim=-1).detach().cpu().numpy()                # [C,2]
-    pred_cls = probs.argmax(axis=-1).astype(int)                                # [C]
+    logits = conf_model(rec=rec_b, pred=pred_b, ctx=ctx_b, valid=valid_b)[0]  # [C,2]
+    probs = torch.softmax(logits, dim=-1).detach().cpu().numpy()  # [C,2]
+    pred_cls = probs.argmax(axis=-1).astype(int)  # [C]
 
     # confidence = p(good)
     conf_scalar = probs[:, 0]
@@ -921,7 +1021,9 @@ def visualize_probe_confidence_prediction(
 
     if unstandardize:
         if e_mean is None or e_std is None:
-            raise ValueError("If unstandardize=True, you must provide e_mean and e_std.")
+            raise ValueError(
+                "If unstandardize=True, you must provide e_mean and e_std."
+            )
         e_mean_np = _to_torch(e_mean, torch.float32).numpy().reshape(1, -1)
         e_std_np = _to_torch(e_std, torch.float32).numpy().reshape(1, -1)
         rec_disp = rec_disp * (e_std_np + 1e-8) + e_mean_np
@@ -933,10 +1035,12 @@ def visualize_probe_confidence_prediction(
     rec_disp_plot[~valid_np] = np.nan
     pred_disp_plot[~valid_np] = np.nan
 
-    finite_vals = np.concatenate([
-        rec_disp_plot[np.isfinite(rec_disp_plot)],
-        pred_disp_plot[np.isfinite(pred_disp_plot)],
-    ])
+    finite_vals = np.concatenate(
+        [
+            rec_disp_plot[np.isfinite(rec_disp_plot)],
+            pred_disp_plot[np.isfinite(pred_disp_plot)],
+        ]
+    )
     if finite_vals.size > 0:
         vmin = np.percentile(finite_vals, 1)
         vmax = np.percentile(finite_vals, 99)
@@ -946,10 +1050,11 @@ def visualize_probe_confidence_prediction(
         vmin, vmax = None, None
 
     fig, axes = plt.subplots(
-        1, 4,
+        1,
+        4,
         figsize=figsize,
         sharey=True,
-        gridspec_kw={"width_ratios": [2.4, 2.4, 1.0, 1.4]}
+        gridspec_kw={"width_ratios": [2.4, 2.4, 1.0, 1.4]},
     )
 
     ax_rec, ax_pred, ax_cls, ax_prob = axes
@@ -1025,7 +1130,9 @@ def visualize_probe_confidence_prediction(
             for ch in invalid_idx:
                 ax.axhline(ch, linewidth=0.3, alpha=0.15)
 
-    mean_conf = float(np.nanmean(conf_scalar[valid_np])) if valid_np.any() else float("nan")
+    mean_conf = (
+        float(np.nanmean(conf_scalar[valid_np])) if valid_np.any() else float("nan")
+    )
     fig.suptitle(f"{title}\nmean good probability = {mean_conf:.3f}", y=0.98)
     plt.tight_layout()
     plt.show()
@@ -1037,6 +1144,7 @@ def visualize_probe_confidence_prediction(
         "conf_scalar": conf_scalar,
     }
 
+
 # ============================================================
 # Inference helper for real probes
 # ============================================================
@@ -1044,9 +1152,9 @@ def visualize_probe_confidence_prediction(
 def predict_probe_confidence_classes(
     *,
     conf_model,
-    rec_std: torch.Tensor,     # [C,F_e]
-    pred_std: torch.Tensor,    # [C,F_e]
-    ctx_std: torch.Tensor,     # [C,F_ctx]
+    rec_std: torch.Tensor,  # [C,F_e]
+    pred_std: torch.Tensor,  # [C,F_e]
+    ctx_std: torch.Tensor,  # [C,F_ctx]
     valid_mask: torch.Tensor,  # [C] bool
     device: torch.device,
 ):
@@ -1071,9 +1179,12 @@ def predict_probe_confidence_classes(
 
     return logits.detach().cpu(), probs.detach().cpu(), conf_scalar.detach().cpu()
 
+
 # ============================== evaluation ===============================
 @torch.no_grad()
-def evaluate_r2_per_feature(model, test_dl, ephys_mean, ephys_std, device=torch.device("cuda")):
+def evaluate_r2_per_feature(
+    model, test_dl, ephys_mean, ephys_std, device=torch.device("cuda")
+):
     print("Evaluating R2 for each feature")
 
     model.eval()
@@ -1110,16 +1221,17 @@ def evaluate_r2_per_feature(model, test_dl, ephys_mean, ephys_std, device=torch.
 
         ss_res += ((y_m - mu_m) ** 2).sum(dim=0)
         sum_y += y_m.sum(dim=0)
-        sum_y2 += (y_m ** 2).sum(dim=0)
+        sum_y2 += (y_m**2).sum(dim=0)
         n_obs += y_m.shape[0]
 
     if n_obs == 0:
         return torch.full((F_dim,), float("nan"))
 
-    ss_tot = sum_y2 - (sum_y ** 2) / n_obs
+    ss_tot = sum_y2 - (sum_y**2) / n_obs
     r2 = 1.0 - ss_res / ss_tot.clamp_min(1e-12)
 
     return r2.detach().cpu()
+
 
 def unstandardize(X: torch.Tensor, mean: torch.Tensor, std: torch.Tensor):
     return X * std + mean
