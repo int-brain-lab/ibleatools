@@ -104,15 +104,21 @@ def _make_probe_details(n=3):
 
 
 def _make_cluster_aggregates(path, n=10):
-    """Write synthetic cell-aggregate files to path/cell_aggregates/."""
+    """Write synthetic cell-aggregate files to path/cells_aggregates/."""
     import ephysatlas.cells
 
-    agg_path = path / "cell_aggregates"
+    agg_path = path / "cells_aggregates"
     agg_path.mkdir(parents=True, exist_ok=True)
     df = _schema_example(ephysatlas.cells.ModelClusters, n=n)
-    df.to_parquet(agg_path / "good_clusters.pqt")
-    np.save(agg_path / "good_stpc.npy", np.zeros((n, 1000), dtype=np.float32))
-    np.save(agg_path / "good_stlfp.npy", np.zeros((n, 250), dtype=np.float32))
+    df.to_parquet(agg_path / "clusters.table.pqt")
+    df.to_parquet(agg_path / "clusters_good.table.pqt")
+    np.save(agg_path / "clusters.acgs_log.npy", np.zeros((n, 128), dtype=np.float16))
+    np.save(agg_path / "acgs_log.times.npy", np.linspace(1e-3, 2.0, 128))
+    np.save(
+        agg_path / "clusters.waveforms_peak.npy", np.zeros((n, 128), dtype=np.float16)
+    )
+    np.save(agg_path / "clusters_good.stpc.npy", np.zeros((n, 1000), dtype=np.float16))
+    np.save(agg_path / "clusters_good.stlfp.npy", np.zeros((n, 250), dtype=np.float16))
     return agg_path
 
 
@@ -135,13 +141,33 @@ class TestProjectDataIO(unittest.TestCase):
         self.assertIn("pid", df.columns)
         self.assertIn("bwm", df.columns)
 
-    def test_read_cell_features(self):
-        df_clusters, stpc, stlfp = ephysatlas.data.read_cell_features(
-            self.project_path, strict=True
+    def test_read_cells_features(self):
+        r = ephysatlas.data.read_cells_features(self.project_path)
+        self.assertEqual(r["df_clusters"].shape[0], 10)
+        self.assertEqual(r["stpc"].shape, (10, 1000))
+        self.assertEqual(r["stlfp"].shape, (10, 250))
+        # waveforms not present unless large_files=True was passed to download
+        self.assertNotIn("waveforms", r)
+        self.assertNotIn("df_waveforms", r)
+
+    def test_read_cells_features_with_waveforms(self):
+        n_traces = 50
+        agg_path = self.project_path / "cells_aggregates"
+        np.save(
+            agg_path / "waveforms.voltage.npy",
+            np.zeros((n_traces, 128), dtype=np.float16),
         )
-        self.assertEqual(df_clusters.shape[0], 10)
-        self.assertEqual(stpc.shape, (10, 1000))
-        self.assertEqual(stlfp.shape, (10, 250))
+        pd.DataFrame(
+            {
+                "pid": ["x"] * n_traces,
+                "cluster_id": range(n_traces),
+                "abs_channel": range(n_traces),
+            }
+        ).to_parquet(agg_path / "waveforms.table.pqt")
+        r = ephysatlas.data.read_cells_features(self.project_path)
+        self.assertIn("waveforms", r)
+        self.assertEqual(r["waveforms"].shape, (n_traces, 128))
+        self.assertIn("df_waveforms", r)
 
     def test_download_probe_details(self):
         mock_s3 = MagicMock()
@@ -158,25 +184,47 @@ class TestProjectDataIO(unittest.TestCase):
         self.assertIn("df_probe_details.pqt", args[0])  # S3 key
         self.assertIn("df_probe_details.pqt", args[1])  # local path
 
-    def test_download_cell_features(self):
+    def test_download_cells_features(self):
         mock_one = MagicMock()
         mock_one.alyx = MagicMock()
         with patch("ephysatlas.data.aws") as mock_aws:
             mock_aws.get_s3_from_alyx.return_value = (MagicMock(), "test-bucket")
-            mock_aws.s3_download_folder.return_value = ["file1", "file2"]
-            ephysatlas.data.download_cell_features(
+            mock_aws.s3_download_file.return_value = Path("file1")
+            ephysatlas.data.download_cells_features(
                 self.tmp / "dl", project=self.project, one=mock_one
             )
-        mock_aws.s3_download_folder.assert_called_once()
-        call_kwargs = mock_aws.s3_download_folder.call_args
-        self.assertIn("cell_aggregates", call_kwargs[0][0])
+        # standard files only — no waveform files by default
+        calls = mock_aws.s3_download_file.call_args_list
+        s3_keys = [c[0][0] for c in calls]
+        self.assertEqual(
+            mock_aws.s3_download_file.call_count,
+            len(ephysatlas.data._CELLS_AGGREGATES_FILES),
+        )
+        self.assertFalse(any("waveforms.voltage" in k for k in s3_keys))
+        self.assertTrue(all("cells_aggregates" in k for k in s3_keys))
+
+    def test_download_cells_features_large_files(self):
+        mock_one = MagicMock()
+        mock_one.alyx = MagicMock()
+        with patch("ephysatlas.data.aws") as mock_aws:
+            mock_aws.get_s3_from_alyx.return_value = (MagicMock(), "test-bucket")
+            mock_aws.s3_download_file.return_value = Path("file1")
+            ephysatlas.data.download_cells_features(
+                self.tmp / "dl", project=self.project, one=mock_one, large_files=True
+            )
+        s3_keys = [c[0][0] for c in mock_aws.s3_download_file.call_args_list]
+        n_expected = len(ephysatlas.data._CELLS_AGGREGATES_FILES) + len(
+            ephysatlas.data._WAVEFORMS_FILES
+        )
+        self.assertEqual(mock_aws.s3_download_file.call_count, n_expected)
+        self.assertTrue(any("waveforms.voltage" in k for k in s3_keys))
 
     def test_download_project_data(self):
         mock_one = MagicMock()
         mock_one.alyx = MagicMock()
         with (
             patch("ephysatlas.data.download_probe_details") as mock_pd,
-            patch("ephysatlas.data.download_cell_features") as mock_cf,
+            patch("ephysatlas.data.download_cells_features") as mock_cf,
         ):
             result = ephysatlas.data.download_project_data(
                 self.tmp / "dl", project=self.project, one=mock_one
@@ -185,6 +233,10 @@ class TestProjectDataIO(unittest.TestCase):
             self.tmp / "dl", project=self.project, one=mock_one, overwrite=False
         )
         mock_cf.assert_called_once_with(
-            self.tmp / "dl", project=self.project, one=mock_one, overwrite=False
+            self.tmp / "dl",
+            project=self.project,
+            one=mock_one,
+            overwrite=False,
+            large_files=False,
         )
         self.assertEqual(result, self.tmp / "dl" / self.project)
