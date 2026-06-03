@@ -3,14 +3,22 @@
 This file documents the changes to the features for supported feature versions.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [0.6.0] - 2026-05-22
+## [0.6.0] - UNRELEASED
 
 ### Added
-- Added `ModelClusters` pandera schema in `ephysatlas.cells` for cluster-level features (good_clusters.pqt / all_clusters.pqt)
-- Added `ModelProbeDetails` pandera schema in `ephysatlas.features` for probe insertion metadata (df_probe_details.pqt)
-- Added `download_probe_details()`, `download_cell_features()`, and `download_project_data()` in `ephysatlas.data` for fetching project data from S3; probe details and cell aggregates are separate calls to avoid downloading ~1 GB unnecessarily
-- Added `read_probe_details()` and `read_cell_features()` in `ephysatlas.data` for loading project data from disk with optional pandera validation
-- Added `TestProjectDataIO` test class with synthetic fixtures generated from pandera schemas
+**Cells Features***
+- Unit tests for `compute_burstiness_and_memory` in `tests/test_cells.py`
+- `compute_log_acg`: simplified implementation using `np.geomspace` directly in time-space; removed `log_start` parameter; output length is now exactly `n_log_bins` (previously variable after trimming)
+
+**Schemas**
+- `ModelClusters` pandera schema in `ephysatlas.cells` for cluster-level features (good_clusters.pqt / all_clusters.pqt)
+- `ModelProbeDetails` pandera schema in `ephysatlas.features` for probe insertion metadata (df_probe_details.pqt)
+
+**Data access**
+- `download_probe_details()`, `download_cell_features()`, and `download_project_data()` in `ephysatlas.data` for fetching project data from S3; probe details and cell aggregates are separate calls to avoid downloading ~1 GB unnecessarily
+- `download_cells_features` and `download_project_data` gain a `large_files=False` parameter; `waveforms.voltage.npy` and `waveforms.table.pqt` (~8 GB) are now opt-in and excluded by default
+- `read_cells_features` returns `waveforms` / `df_waveforms` keys only when the files are present on disk (downloaded with `large_files=True`), avoiding a hard crash for the common case
+- `read_probe_details()` and `read_cell_features()` in `ephysatlas.data` for loading project data from disk with optional pandera validation
 
 ### Fixed
 - Fixed `Series[T]` annotations in all pandera `DataFrameModel` subclasses (`ChannelDataFrameSchema`, `ModelLfFeatures`, `ModelCsdFeatures`, `ModelApFeatures`, `ModelSpikeFeatures`, `ModelChannelLayout`, `ModelHistologyResolved`) to use plain Python types, required by pandera 0.25.0

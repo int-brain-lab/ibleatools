@@ -21,6 +21,22 @@ CLUSTERS_ATTRIBUTES = ["channels", "depths", "metrics"]
 
 EXTRACT_RADIUS_UM = 200  # for localisation , the default extraction radius in um
 
+# Files in cells_aggregates/ that are always downloaded (standard set, ~1 GB)
+_CELLS_AGGREGATES_FILES = [
+    "clusters.table.pqt",
+    "clusters_good.table.pqt",
+    "clusters.acgs_log.npy",
+    "acgs_log.times.npy",
+    "clusters.waveforms_peak.npy",
+    "clusters_good.stpc.npy",
+    "clusters_good.stlfp.npy",
+]
+# Large neighbourhood-waveform files (~8 GB combined) — opt-in only
+_WAVEFORMS_FILES = [
+    "waveforms.voltage.npy",
+    "waveforms.table.pqt",
+]
+
 
 def get_waveforms_coordinates(
     trace_indices,
@@ -542,56 +558,80 @@ def download_probe_details(
     return local_file
 
 
-def download_cell_features(
-    local_path, project="ibl_neuropixel_brainwide_01", one=None, overwrite=False
+def download_cells_features(
+    local_path,
+    project="ibl_neuropixel_brainwide_01",
+    one=None,
+    overwrite=False,
+    large_files=False,
 ):
-    """Download cell-level aggregates (good_clusters.pqt, good_stpc.npy, good_stlfp.npy) from S3.
+    """Download cluster-level aggregates from S3 (``cells_aggregates/`` subfolder, ~1 GB).
 
-    This downloads the full cell_aggregates/ subfolder (~1 GB). Use download_probe_details()
-    if you only need probe metadata.
+    Downloads the standard cluster files. The large waveform files
+    (``waveforms.voltage.npy`` and ``waveforms.table.pqt``, ~8 GB combined) are only
+    downloaded when ``large_files=True``.
+
+    Use :func:`download_probe_details` if you only need probe metadata, or
+    :func:`download_project_data` to get both in one call.
 
     Args:
-        local_path (Path): Local root; files are placed under local_path/project/cell_aggregates/.
+        local_path (Path): Local root; files are placed under local_path/project/cells_aggregates/.
         project (str): Project name.
         one (one.api.ONE, optional): ONE instance for AWS credentials.
         overwrite (bool): Re-download files that already exist locally.
+        large_files (bool): If True, also download waveforms.voltage.npy and waveforms.table.pqt
+            (~8 GB). Defaults to False.
 
     Returns:
-        Path: local_path/project/cell_aggregates/ directory.
+        Path: local_path/project/cells_aggregates/ directory.
     """
     s3, bucket_name, local_project_path = _project_s3(local_path, project, one)
-    dest = local_project_path / "cell_aggregates"
-    local_files = aws.s3_download_folder(
-        f"aggregates/atlas/projects/{project}/cell_aggregates",
-        dest,
-        s3=s3,
-        bucket_name=bucket_name,
-        overwrite=overwrite,
+    dest = local_project_path / "cells_aggregates"
+    dest.mkdir(parents=True, exist_ok=True)
+    s3_prefix = f"aggregates/atlas/projects/{project}/cells_aggregates"
+    files_to_download = _CELLS_AGGREGATES_FILES + (
+        _WAVEFORMS_FILES if large_files else []
     )
-    assert len(local_files), (
-        f"aggregates/atlas/projects/{project}/cell_aggregates not found on AWS"
-    )
+    for fname in files_to_download:
+        aws.s3_download_file(
+            f"{s3_prefix}/{fname}",
+            dest / fname,
+            s3=s3,
+            bucket_name=bucket_name,
+            overwrite=overwrite,
+        )
     return dest
 
 
 def download_project_data(
-    local_path, project="ibl_neuropixel_brainwide_01", one=None, overwrite=False
+    local_path,
+    project="ibl_neuropixel_brainwide_01",
+    one=None,
+    overwrite=False,
+    large_files=False,
 ):
     """Download all project data (probe details + cell aggregates) from S3.
 
-    Convenience wrapper that calls download_probe_details() and download_cell_features().
+    Convenience wrapper that calls download_probe_details() and download_cells_features().
 
     Args:
         local_path (Path): Local root; files are placed under local_path/project/.
         project (str): Project name.
         one (one.api.ONE, optional): ONE instance for AWS credentials.
         overwrite (bool): Re-download files that already exist locally.
+        large_files (bool): If True, also download the large waveform files (~8 GB). Defaults to False.
 
     Returns:
         Path: local_path/project directory.
     """
     download_probe_details(local_path, project=project, one=one, overwrite=overwrite)
-    download_cell_features(local_path, project=project, one=one, overwrite=overwrite)
+    download_cells_features(
+        local_path,
+        project=project,
+        one=one,
+        overwrite=overwrite,
+        large_files=large_files,
+    )
     return Path(local_path) / project
 
 
@@ -613,28 +653,43 @@ def read_probe_details(path_project, strict=True):
     return df
 
 
-def read_cell_features(path_project, strict=True):
-    """Read cluster-level features and associated arrays from disk.
+def read_cells_features(path_project):
+    """Read cluster-level features and associated arrays from cells_aggregates/.
 
-    Args:
-        path_project (Path): Path to the project folder (containing cell_aggregates/).
-        strict (bool): Validate df_clusters against ModelClusters schema if True.
+    Parameters
+    ----------
+    path_project : Path
+        Path to the project folder (parent of cells_aggregates/).
 
-    Returns:
-        tuple: (df_clusters, stpc, stlfp)
-            - df_clusters: DataFrame with one row per good unit
-            - stpc: (n_units, 1000) memory-mapped numpy array of spike template PCs
-            - stlfp: (n_units, 250) memory-mapped numpy array of LFP features
+    Returns
+    -------
+    dict
+        Always present: df_clusters, df_clusters_good, acgs_log, acgs_log_times,
+        waveforms_peak, stpc, stlfp.
+        Present only if downloaded with ``large_files=True``: waveforms, df_waveforms.
+
+    See Also
+    --------
+    docs/source/how-to/load-cells-features.rst : full file reference, shapes and dtypes.
     """
-    import ephysatlas.cells
-
-    path = Path(path_project) / "cell_aggregates"
-    df_clusters = pd.read_parquet(path / "good_clusters.pqt")
-    if strict:
-        df_clusters = pd.DataFrame(ephysatlas.cells.ModelClusters.validate(df_clusters))
-    stpc = np.load(path / "good_stpc.npy", mmap_mode="r")
-    stlfp = np.load(path / "good_stlfp.npy", mmap_mode="r")
-    return df_clusters, stpc, stlfp
+    path = Path(path_project) / "cells_aggregates"
+    result = {
+        "df_clusters": pd.read_parquet(path / "clusters.table.pqt"),
+        "df_clusters_good": pd.read_parquet(path / "clusters_good.table.pqt"),
+        "acgs_log": np.load(path / "clusters.acgs_log.npy", mmap_mode="r").astype(
+            np.float32
+        ),
+        "acgs_log_times": np.load(path / "acgs_log.times.npy"),
+        "waveforms_peak": np.load(
+            path / "clusters.waveforms_peak.npy", mmap_mode="r"
+        ).astype(np.float32),
+        "stpc": np.load(path / "clusters_good.stpc.npy", mmap_mode="r"),
+        "stlfp": np.load(path / "clusters_good.stlfp.npy", mmap_mode="r"),
+    }
+    if (path / "waveforms.voltage.npy").exists():
+        result["waveforms"] = np.load(path / "waveforms.voltage.npy", mmap_mode="r")
+        result["df_waveforms"] = pd.read_parquet(path / "waveforms.table.pqt")
+    return result
 
 
 def compute_depth_dataframe(df_raw_features, df_clusters, df_channels):

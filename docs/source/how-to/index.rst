@@ -9,6 +9,9 @@ Getting Started
 .. toctree::
    :maxdepth: 2
 
+   s3-architecture
+   load-channel-features
+   load-cells-features
    basic-feature-extraction
 
 Overview

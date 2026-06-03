@@ -11,6 +11,8 @@ import scipy.signal
 import tqdm
 import matplotlib.pyplot as plt
 
+import phylib.stats
+
 import ibldsp.voltage
 import ibldsp.utils
 import spikeglx
@@ -318,3 +320,148 @@ class ModelClusters(pa.DataFrameModel):
     lateral_um: float = pa.Field(coerce=True, nullable=True)
     coupling_delay: Optional[float] = pa.Field(coerce=True, nullable=True)
     coupling_strength: Optional[float] = pa.Field(coerce=True, nullable=True)
+
+
+def compute_burstiness_and_memory(spike_train):
+    """
+    Computes the burstiness (B) and memory (M) metrics from a neuronal spike train.
+
+    Metrics Summary:
+    - Burstiness (B): Reflects the variability of a unit's inter-spike intervals (ISIs)[cite: 195].
+      It solely describes the distribution of ISI durations, normalized to a range between
+      -1 (completely regular) and 1 (maximally bursty)[cite: 195, 996].
+    - Memory (M): Reflects the temporal ordering of ISIs[cite: 195]. It is defined as the
+      Pearson correlation coefficient between subsequent ISIs[cite: 195, 1002].
+
+    Args:
+        spike_train (array-like): A sequence of timestamps representing action potentials (spikes).
+
+    Returns:
+        tuple: (burstiness, memory). Returns (np.nan, np.nan) if there are fewer
+               than 6 spikes, as reliable estimation requires sufficient data[cite: 1005].
+    """
+    # Convert input to a numpy array
+    spikes = np.asarray(spike_train)
+
+    # Metrics are only computed in epochs with at least six spikes available[cite: 1005].
+    if len(spikes) < 6:
+        return np.nan, np.nan
+
+    # Calculate Inter-Spike Intervals (ISIs)
+    isis = np.diff(spikes)
+
+    # ----------------------------------------------------
+    # 1. Compute Burstiness (B)
+    # ----------------------------------------------------
+    mean_isi = np.mean(isis)
+    std_isi = np.std(isis, ddof=1)  # Sample standard deviation
+
+    # Prevent division by zero
+    if (std_isi + mean_isi) == 0:
+        burstiness = np.nan
+    else:
+        burstiness = (std_isi - mean_isi) / (std_isi + mean_isi)
+
+    # ----------------------------------------------------
+    # 2. Compute Memory (M)
+    # ----------------------------------------------------
+    isis_current = isis[:-1]
+    isis_next = isis[1:]
+
+    # Prevent Pearson correlation errors if the ISIs are entirely constant
+    if np.std(isis_current, ddof=1) == 0 or np.std(isis_next, ddof=1) == 0:
+        memory = np.nan
+    else:
+        # np.corrcoef returns a 2x2 correlation matrix; we want the off-diagonal value
+        memory = np.corrcoef(isis_current, isis_next)[0, 1]
+
+    return burstiness, memory
+
+
+def compute_log_acg(
+    spike_times,
+    fs,
+    spike_clusters=None,
+    bin_size=0.2e-3,
+    win_size=2.0,
+    n_log_bins=512,
+    log_trim=1e-3,
+):
+    """
+    Compute a long autocorrelogram with log-spaced bins.
+
+    Parameters
+    ----------
+    spike_times : numpy.ndarray
+        Spike times in seconds.
+    fs : float
+        Sampling rate of the recording in Hz.
+    spike_clusters : numpy.ndarray, optional
+        Cluster label for each spike. If provided, the function computes one ACG per
+        unique cluster and returns a 2-D array whose rows are ordered by
+        ``np.unique(spike_clusters)``. If None (default), ``spike_times`` is treated as a
+        single cluster and a 1-D array is returned.
+    bin_size : float, optional
+        Base bin resolution in seconds. Default 0.2e-3 s.
+    win_size : float, optional
+        One-sided window length in seconds. Default 2.0 s.
+    n_log_bins : int, optional
+        Number of log-spaced output bins between ``log_trim`` and ``win_size``. Default 512.
+        Bins narrower than ``bin_size`` (near ``log_trim``) will be zero due to the
+        refractory period, which is physically correct.
+    log_trim : float, optional
+        Start of the output lag axis in seconds; bins below this lag are excluded.
+        Default 1e-3 s (refractory period).
+
+    Returns
+    -------
+    acg_log : numpy.ndarray
+        Log-binned ACG in **spike pairs · s⁻¹** (raw coincident pair counts divided
+        by log-bin width; not normalised by recording duration or firing rate).
+        The asymptotic value at long lags (τ ≫ any temporal correlation) is
+        λ² × T = λ × n_spikes, where λ is the firing rate and T the recording duration.
+        To obtain sp/s units with an asymptote equal to the firing rate, divide by
+        ``n_spikes``; to obtain a dimensionless ACG, divide by ``n_spikes × λ``.
+        Shape ``(n_log_bins,)`` when ``spike_clusters`` is None, or
+        ``(n_unique_clusters, n_log_bins)`` otherwise.
+    t_log : numpy.ndarray
+        Geometric centre of each log bin in seconds, shape ``(n_log_bins,)``.
+    """
+    n_bins = int(win_size / bin_size) + 1
+    t_bins = np.arange(n_bins) * bin_size
+
+    # log bin structure in time-space — computed once, n_log_bins guaranteed
+    t_edges = np.geomspace(log_trim, win_size, n_log_bins + 1)
+    t_log = np.sqrt(t_edges[:-1] * t_edges[1:])  # geometric bin centres
+    bin_widths = np.diff(t_edges)
+    log_bin_idx = np.searchsorted(t_edges, t_bins, side="right") - 1
+    valid = (log_bin_idx >= 0) & (log_bin_idx < n_log_bins)
+    idx_v = log_bin_idx[valid]
+
+    def _single_acg(st):
+        if st.size < 2:
+            return np.zeros(n_log_bins)
+        autocorr = phylib.stats.correlograms(
+            st,
+            np.zeros(st.size, dtype=int),
+            np.array([0], dtype=int),
+            sample_rate=fs,
+            bin_size=bin_size,
+            window_size=2 * win_size,
+            symmetrize=False,
+        ).squeeze()
+        return (
+            np.bincount(
+                idx_v, weights=autocorr[valid].astype(float), minlength=n_log_bins
+            )
+            / bin_widths
+        )
+
+    if spike_clusters is None:
+        return _single_acg(spike_times), t_log
+
+    cluster_ids = np.unique(spike_clusters)
+    acg_log = np.array(
+        [_single_acg(spike_times[spike_clusters == cid]) for cid in cluster_ids]
+    )
+    return acg_log, t_log
