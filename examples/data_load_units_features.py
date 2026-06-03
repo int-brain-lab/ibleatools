@@ -16,130 +16,150 @@ clusters.table.pqt            (n_clusters, ~59 cols)           – all clusters:
 clusters_good.table.pqt       (n_good, ~61 cols)               – good clusters (bitwise_fail==0): same + coupling_delay/coupling_strength
 waveforms.table.pqt           (n_traces_total, 3 cols)         – pid / cluster_id / abs_channel index into waveforms.voltage.npy
 """
+
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
 import seaborn as sns
+from iblatlas.regions import BrainRegions
+from iblutil.numerical import ismember
+from mpl_toolkits.axes_grid1 import make_axes_locatable
+from rastermap import Rastermap
 
 from viewephys.gui import viewephys
 import addcopyfighandler  # noqa: F401
+import ephysatlas.data
 
-sns.set_theme(context='notebook')
+sns.set_theme(context="notebook")
 
-CELLS_AGG_PATH = Path('/datadisk/ephys-atlas/cells_aggregates')
-CELLS_AGG_PATH = Path('/Users/olivier/Documents/datadisk/paper-ephys-atlas/cells_aggregates')
+PROJECT = "ibl_neuropixel_brainwide_01"
+ROOT_PATH = Path("/Users/olivier/Documents/datadisk/paper-ephys-atlas")
+PATH_PROJECT = ROOT_PATH.joinpath(PROJECT)
+CELLS_AGG_PATH = PATH_PROJECT.joinpath("cells_aggregates")
 SAMPLING_RATE = 30_000  # Hz
-FIGURES_PATH = Path.home().joinpath('Documents', 'figures')
+FIGURES_PATH = Path.home().joinpath("Documents", "figures")
+
+# %% Download data if not yet available
+if not CELLS_AGG_PATH.joinpath("clusters.table.pqt").exists():
+    from one.api import ONE
+
+    one = ONE(base_url="https://alyx.internationalbrainlab.org", mode="remote")
+    ephysatlas.data.download_cells_features(ROOT_PATH, project=PROJECT, one=one)
 
 # %% Load tables and small arrays
-df_clusters = pd.read_parquet(CELLS_AGG_PATH.joinpath('clusters.table.pqt'))
-df_clusters_good = pd.read_parquet(CELLS_AGG_PATH.joinpath('clusters_good.table.pqt'))
-acgs_log = np.load(CELLS_AGG_PATH.joinpath('clusters.acgs_log.npy')).astype(np.float32)
-acgs_log_times = np.load(CELLS_AGG_PATH.joinpath('acgs_log.times.npy'))
-waveforms_peak = np.load(CELLS_AGG_PATH.joinpath('clusters.waveforms_peak.npy')).astype(np.float32)
+data = ephysatlas.data.read_cells_features(PATH_PROJECT)
+df_clusters = data["df_clusters"]
+df_clusters_good = data["df_clusters_good"]
+acgs_log = data["acgs_log"]
+acgs_log_times = data["acgs_log_times"]
+waveforms_peak = data["waveforms_peak"]
 
-print(f'n_clusters              {df_clusters.shape[0]:,}')
-print(f'n_good_clusters         {df_clusters_good.shape[0]:,}')
-print(f'waveforms_peak          {waveforms_peak.shape}')
-print(f'acgs_log                {acgs_log.shape}')
-print(f'clusters.table columns:\n  {list(df_clusters.columns)}')
+good_pos = np.where(df_clusters["bitwise_fail"] == 0)[0]
+waveforms_peak_good = waveforms_peak[good_pos]
+acgs_log_good = acgs_log[good_pos]
+
+print(f"n_clusters              {df_clusters.shape[0]:,}")
+print(f"n_good_clusters         {df_clusters_good.shape[0]:,}")
+print(f"waveforms_peak          {waveforms_peak.shape}")
+print(f"acgs_log                {acgs_log.shape}")
+print(f"clusters.table columns:\n  {list(df_clusters.columns)}")
 
 # %% Visualise waveforms and ACGs for a handful of good units
 rng = np.random.default_rng()
-good_mask = df_clusters['bitwise_fail'] == 0
-good_idx = np.where(good_mask)[0]
-sample_idx = rng.choice(good_idx, size=6, replace=False)
+sample_idx = rng.choice(len(df_clusters_good), size=6, replace=False)
 
 fig, axs = plt.subplots(2, 6, figsize=(14, 7))
-ns = waveforms_peak.shape[1]
+ns = waveforms_peak_good.shape[1]
 t_wf = np.arange(ns) / SAMPLING_RATE * 1e3  # ms
 
 for col, idx in enumerate(sample_idx):
-    cid = df_clusters.index[idx]
+    cid = df_clusters_good.index[idx]
 
     ax_wf = axs[0, col]
-    ax_wf.plot(t_wf, waveforms_peak[idx] * 1e6, color='steelblue', lw=1)
-    ax_wf.set(title=f'cid {cid}', xlabel='ms' if col == 0 else '', ylabel='µV' if col == 0 else '')
-    ax_wf.axhline(0, color='k', lw=0.5, ls='--')
+    ax_wf.plot(t_wf, waveforms_peak_good[idx] * 1e6, color="steelblue", lw=1)
+    ax_wf.set(
+        title=f"cid {cid}",
+        xlabel="ms" if col == 0 else "",
+        ylabel="µV" if col == 0 else "",
+    )
+    ax_wf.axhline(0, color="k", lw=0.5, ls="--")
 
     ax_acg = axs[1, col]
-    ax_acg.semilogx(acgs_log_times * 1e3, acgs_log[idx], color='coral', lw=1)
-    ax_acg.set(xlabel='lag (ms)' if col == 0 else '', ylabel='sp/s' if col == 0 else '')
+    ax_acg.semilogx(acgs_log_times * 1e3, acgs_log_good[idx], color="coral", lw=1)
+    ax_acg.set(xlabel="lag (ms)" if col == 0 else "", ylabel="sp/s" if col == 0 else "")
 
-axs[0, 0].set_ylabel('waveform (µV)')
-axs[1, 0].set_ylabel('ACG (sp/s)')
-fig.suptitle('Example units — peak-channel waveform (top) and log-ACG (bottom)')
+axs[0, 0].set_ylabel("waveform (µV)")
+axs[1, 0].set_ylabel("ACG (sp/s)")
+fig.suptitle("Example units — peak-channel waveform (top) and log-ACG (bottom)")
 fig.tight_layout()
-fig.savefig(FIGURES_PATH.joinpath('2026-05-29_units_waveforms_acgs.png'), dpi=150)
+fig.savefig(FIGURES_PATH.joinpath("2026-05-29_units_waveforms_acgs.png"), dpi=150)
 
-# %% Feature distributions across good units — waveform features and burstiness/memory are all in clusters.table
-features_to_plot = ['peak_to_trough_ratio', 'half_width', 'repolarisation_slope',
-                    'recovery_slope', 'tip_ratio', 'burstiness', 'memory']
-features_to_plot = [f for f in features_to_plot if f in df_clusters_good.columns]
-
-n = len(features_to_plot)
-ncols = (n + 1) // 2
-fig, axs = plt.subplots(2, ncols, figsize=(3 * ncols, 6))
-for i, (ax, feat) in enumerate(zip(axs.flatten(), features_to_plot)):
-    vals = df_clusters_good[feat].dropna()
-    ax.hist(vals, bins=100, color='steelblue', edgecolor='none')
-    ax.set(xlabel=feat, ylabel='count' if i % ncols == 0 else '')
-for ax in axs.flatten()[n:]:
-    ax.set_visible(False)
-
-fig.suptitle('Waveform feature + burstiness/memory distributions (good units)')
-fig.tight_layout()
-fig.savefig(FIGURES_PATH.joinpath('2026-05-29_units_feature_distributions.png'), dpi=150)
 
 # %%
-eqc = viewephys(waveforms_peak, fs=SAMPLING_RATE)
-
-# %% Burstiness vs memory cross-plot per Cosmos region (Allen atlas colours, good units)
-from iblatlas.regions import BrainRegions
-
 br = BrainRegions()
+_, rids = ismember(df_clusters_good["atlas_id"].values, br.id)
+sort_idx = np.argsort(br.order[rids])
+eqcs = {}
+eqcs["waveforms"] = viewephys(
+    waveforms_peak_good[sort_idx],
+    fs=SAMPLING_RATE,
+    title="waveforms by region",
+    br=br,
+    channels=df_clusters_good.iloc[sort_idx],
+)
 
-df_plot = df_clusters_good[['burstiness', 'memory', 'atlas_id']].dropna().copy()
-atlas_ids = df_plot['atlas_id'].values
 
-# Map each cell to its Cosmos parent and keep its Allen atlas RGB
-# colour
-cosmos_ids = br.id2id(atlas_ids, mapping='Cosmos')
-rgb = br.get(atlas_ids).rgb / 255.0  # (N, 3) float, Allen colours per cell
+# %% Rastermap sort
+model = Rastermap(
+    n_PCs=64,
+    n_clusters=100,
+    grid_upsample=0,
+    locality=0.75,
+    time_lag_window=0,
+    bin_size=1,
+    symmetric=False,
+).fit(waveforms_peak_good)
 
-# Unique Cosmos regions, dropping void / root
-void_root = set(br.acronym2id(['void', 'root']).tolist())
-cosmos_unique = np.array([c for c in np.unique(cosmos_ids) if c not in void_root])
-cosmos_info = br.get(cosmos_unique)
+# %% Matplotlib: region sort vs region-primary + rastermap-secondary
+rastermap_rank = np.argsort(model.isort)
+cosmos_ids = br.remap(
+    df_clusters_good["atlas_id"].values, source_map="Allen", target_map="Cosmos"
+)
+_, cosmos_rids = ismember(cosmos_ids, br.id)
+cosmos_order = br.order[cosmos_rids]
+sort_idx_cosmos_rm = np.lexsort((rastermap_rank, cosmos_order))
 
-n = len(cosmos_unique)
-ncols = int(np.ceil(np.sqrt(n)))
-nrows = int(np.ceil(n / ncols))
+image_region = br.rgb[rids].astype(np.uint8)
+t_ms = np.arange(waveforms_peak_good.shape[1]) / (SAMPLING_RATE / 1000)
+vmax = np.nanpercentile(np.abs(waveforms_peak_good), 99)
 
-fig, axs = plt.subplots(nrows, ncols, figsize=(3 * ncols, 3 * nrows), sharex=True, sharey=True)
-for ax in axs.flatten():
-    ax.set_visible(False)
-
-for i, (cid, acronym, color) in enumerate(zip(cosmos_unique, cosmos_info.acronym, cosmos_info.rgb)):
-    ax = axs.flatten()[i]
-    ax.set_visible(True)
-    mask = cosmos_ids == cid
-    ax.scatter(
-        df_plot['burstiness'].values[mask],
-        df_plot['memory'].values[mask],
-        c=rgb[mask],
-        s=1, alpha=0.5, linewidths=0, rasterized=True,
+fig, axs = plt.subplots(
+    4, 1, figsize=(22, 10), gridspec_kw={"height_ratios": [0.2, 3, 0.2, 3]}
+)
+titles = ["Allen region order", "Rastermap within Cosmos regions"]
+for col, (sidx, title) in enumerate(zip([sort_idx, sort_idx_cosmos_rm], titles)):
+    axr, axw = axs[col * 2], axs[col * 2 + 1]
+    axr.imshow(image_region[np.newaxis, sidx], aspect="auto")
+    axr.axis("off")
+    axr.set_title(title)
+    im = axw.imshow(
+        waveforms_peak_good[sidx].T,
+        aspect="auto",
+        cmap="RdBu_r",
+        vmin=-vmax,
+        vmax=vmax,
+        extent=[0, sidx.size, t_ms[-1], t_ms[0]],
     )
-    ax.set_title(acronym, color=color / 255.0, fontweight='bold', fontsize=9)
-    ax.set_xlim(-1, 1)
-    ax.set_ylim(-1, 1)
-    ax.axhline(0, color='k', lw=0.3, ls='--')
-    ax.axvline(0, color='k', lw=0.3, ls='--')
+    axw.set(xlabel="Unit #" if col == 1 else "", ylabel="Time (ms)")
+    for ax, visible in ((axr, False), (axw, col == 1)):
+        cax = make_axes_locatable(ax).append_axes("right", size="1%", pad=0.05)
+        if visible:
+            fig.colorbar(im, cax=cax, label="Amplitude (V)")
+        else:
+            cax.axis("off")
 
-fig.supxlabel('burstiness')
-fig.supylabel('memory')
-fig.suptitle('Burstiness vs memory by Cosmos region — Allen atlas colours (good units, Cosmos mapping)')
 fig.tight_layout()
-fig.savefig(FIGURES_PATH.joinpath('2026-06-01_burstiness_memory_cosmos.png'), dpi=150)
+fig.savefig(
+    FIGURES_PATH.joinpath("2026-06-03_waveforms_region_vs_rastermap.png"), dpi=150
+)
