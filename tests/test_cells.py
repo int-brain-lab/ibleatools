@@ -58,7 +58,9 @@ class TestComputeLogAcg(unittest.TestCase):
     def test_n_log_bins_exact(self):
         """n_log_bins controls the exact output length."""
         for n in (64, 256, 512):
-            acg, t_log = compute_log_acg(self._poisson_spikes(), fs=self.FS, n_log_bins=n)
+            acg, t_log = compute_log_acg(
+                self._poisson_spikes(), fs=self.FS, n_log_bins=n
+            )
             self.assertEqual(acg.size, n)
             self.assertEqual(t_log.size, n)
 
@@ -87,7 +89,9 @@ class TestComputeLogAcg(unittest.TestCase):
         n_spikes = 600
         spike_times = np.sort(rng.uniform(0, 30, n_spikes))
         spike_clusters = rng.integers(0, 3, n_spikes)
-        acg, t_log = compute_log_acg(spike_times, fs=self.FS, spike_clusters=spike_clusters)
+        acg, t_log = compute_log_acg(
+            spike_times, fs=self.FS, spike_clusters=spike_clusters
+        )
         self.assertEqual(acg.ndim, 2)
         self.assertEqual(acg.shape[0], 3)
         self.assertEqual(acg.shape[1], t_log.size)
@@ -98,7 +102,9 @@ class TestComputeLogAcg(unittest.TestCase):
         spike_times = np.sort(rng.uniform(0, 60, 1000))
         spike_clusters = np.zeros(1000, dtype=int)
         spike_clusters[500:] = 1
-        acg_multi, t_log = compute_log_acg(spike_times, self.FS, spike_clusters=spike_clusters)
+        acg_multi, t_log = compute_log_acg(
+            spike_times, self.FS, spike_clusters=spike_clusters
+        )
         for i, cid in enumerate([0, 1]):
             acg_single, _ = compute_log_acg(spike_times[spike_clusters == cid], self.FS)
             np.testing.assert_array_equal(acg_multi[i], acg_single)

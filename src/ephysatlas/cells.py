@@ -451,7 +451,9 @@ def compute_log_acg(
             symmetrize=False,
         ).squeeze()
         return (
-            np.bincount(idx_v, weights=autocorr[valid].astype(float), minlength=n_log_bins)
+            np.bincount(
+                idx_v, weights=autocorr[valid].astype(float), minlength=n_log_bins
+            )
             / bin_widths
         )
 
@@ -459,5 +461,7 @@ def compute_log_acg(
         return _single_acg(spike_times), t_log
 
     cluster_ids = np.unique(spike_clusters)
-    acg_log = np.array([_single_acg(spike_times[spike_clusters == cid]) for cid in cluster_ids])
+    acg_log = np.array(
+        [_single_acg(spike_times[spike_clusters == cid]) for cid in cluster_ids]
+    )
     return acg_log, t_log
