@@ -7,11 +7,28 @@ the snippet-level feature files, denoises the aggregated features, and writes th
 same final per-probe parquet artifact used by the legacy inference script.
 
 The script is split into ``# %%`` cells so it can be run interactively.
+
+Example
+-------
+Run the default five snippets for one local SpikeGLX recording:
+
+.. code-block:: bash
+
+    python examples/cazettes_lab/oop_compute_cazettes_denoised_features.py \
+        --ap-file /path/to/recording.ap.cbin \
+        --lf-file /path/to/recording.lf.cbin \
+        --output-dir /path/to/output \
+        --alf-probe-path /path/to/alf/probe00
+
+The denoised feature table is written to
+``<output-dir>/<name>/<name>_denoised_features.pqt``. The optional ALF path is
+used only to append channel locations and atlas labels to that table.
 """
 
 # %% Imports
 from __future__ import annotations
 
+import argparse
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,7 +52,7 @@ LOGGER = logging.getLogger(__name__)
 
 # %% Module-level constants
 def _examples_dir() -> Path:
-    """Return the examples directory when run as a script or from a cell."""
+    """Return the Cazettes example directory when run as a script or cell."""
     try:
         return Path(__file__).resolve().parent
     except NameError:
@@ -390,5 +407,129 @@ def main(
     return df_results
 
 
+def _default_probe_name(ap_file: Path) -> str:
+    """Derive a concise recording name from a SpikeGLX AP filename."""
+    name = Path(ap_file).name
+    for suffix in (".cbin", ".bin"):
+        if name.endswith(suffix):
+            name = name.removesuffix(suffix)
+            break
+    return name.removesuffix(".ap")
+
+
+def _build_argument_parser() -> argparse.ArgumentParser:
+    """Create the command-line parser for one local SpikeGLX recording."""
+    parser = argparse.ArgumentParser(
+        description=(
+            "Compute, aggregate, and denoise OOP electrophysiology features "
+            "from five local SpikeGLX snippets."
+        )
+    )
+    parser.add_argument(
+        "--ap-file",
+        type=Path,
+        required=True,
+        help="Path to the AP-band .bin or .cbin file.",
+    )
+    parser.add_argument(
+        "--lf-file",
+        type=Path,
+        required=True,
+        help="Path to the LF-band .bin or .cbin file.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        required=True,
+        help="Directory where the per-recording output folder will be created.",
+    )
+    parser.add_argument(
+        "--name",
+        help="Recording name used in output paths; defaults to the AP filename.",
+    )
+    parser.add_argument(
+        "--alf-probe-path",
+        type=Path,
+        help=(
+            "Optional ALF probe directory containing channel_locations.json. "
+            "It is used to append channel coordinates and atlas labels."
+        ),
+    )
+    parser.add_argument(
+        "--t-starts",
+        type=float,
+        nargs="+",
+        default=SNIPPET_T_STARTS,
+        metavar="SECONDS",
+        help=(
+            "Snippet start times in seconds "
+            f"(default: {' '.join(str(value) for value in SNIPPET_T_STARTS)})."
+        ),
+    )
+    parser.add_argument(
+        "--duration-ap",
+        type=float,
+        default=DURATION_AP,
+        help=f"AP duration per snippet in seconds (default: {DURATION_AP}).",
+    )
+    parser.add_argument(
+        "--duration-lf",
+        type=float,
+        default=DURATION_LF,
+        help=f"LF duration per snippet in seconds (default: {DURATION_LF}).",
+    )
+    parser.add_argument(
+        "--features",
+        nargs="+",
+        choices=DEFAULT_FEATURES_TO_COMPUTE,
+        default=DEFAULT_FEATURES_TO_COMPUTE,
+        metavar="FEATURE",
+        help=(
+            "Feature families to compute from: "
+            f"{', '.join(DEFAULT_FEATURES_TO_COMPUTE)} "
+            f"(default: {', '.join(DEFAULT_FEATURES_TO_COMPUTE)})."
+        ),
+    )
+    parser.add_argument(
+        "--skip-saved-computation",
+        action="store_true",
+        help="Reuse snippet feature files that are already present.",
+    )
+    return parser
+
+
+def cli(argv: Sequence[str] | None = None) -> dict[str, object]:
+    """Run the five-snippet OOP workflow for one command-line recording.
+
+    Args:
+        argv (Sequence[str] | None): Optional command-line arguments. When
+            omitted, arguments are read from ``sys.argv``.
+
+    Returns:
+        dict[str, object]: Summary containing the manifest and denoised feature
+            output paths.
+    """
+    args = _build_argument_parser().parse_args(argv)
+    _configure_logging("INFO")
+
+    config = ProbeConfig(
+        name=args.name or _default_probe_name(args.ap_file),
+        ap_file=args.ap_file,
+        lf_file=args.lf_file,
+        alf_probe_path=args.alf_probe_path,
+    )
+    summary, _df_features = run_probe(
+        config=config,
+        output_dir=args.output_dir,
+        t_starts=args.t_starts,
+        duration_ap=args.duration_ap,
+        duration_lf=args.duration_lf,
+        features_to_compute=args.features,
+        skip_saved_computation=args.skip_saved_computation,
+    )
+    LOGGER.info("Completed OOP feature computation: %s", summary["features"])
+    return summary
+
+
 if __name__ == "__main__":
-    main()
+    cli()
