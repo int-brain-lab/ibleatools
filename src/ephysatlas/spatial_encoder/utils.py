@@ -208,6 +208,7 @@ def LoadInsertionData(
     agg: str = "agg_full",
     VINTAGE: str = "",
     path_data: Path = Path("."),
+    one=None,
 ):
     """
     Loads table-based ephys features and concatenates per-channel averaged waveform latents
@@ -219,11 +220,20 @@ def LoadInsertionData(
     """
 
     print("Loading ephys features")
-    one = ONE(base_url="https://alyx.internationalbrainlab.org")
-    # path_data = Path('../ephys-atlas-decoding/features')
-    path_data = download_tables(
-        path_data, label=VINTAGE, project=project, one=one, agg_level=agg
-    )
+    # If the aggregated tables already exist locally, read them directly and skip all network /
+    # ONE access (offline use). download_tables lays them out as
+    # <path_data>/<project>/<label>/<agg_level>, with an agg_full -> <label> fallback, so check both.
+    local_agg = Path(path_data).joinpath(project, VINTAGE, agg)
+    local_fallback = Path(path_data).joinpath(project, VINTAGE)
+    if any(local_agg.glob("*.pqt")):
+        path_data = local_agg
+    elif agg == "agg_full" and any(local_fallback.glob("*.pqt")):
+        path_data = local_fallback
+    else:
+        one = one or ONE(base_url="https://alyx.internationalbrainlab.org")
+        path_data = download_tables(
+            path_data, label=VINTAGE, project=project, one=one, agg_level=agg
+        )
     df_features = read_features_from_disk(path_data, strict=False)
 
     # Pre-allocate containers
