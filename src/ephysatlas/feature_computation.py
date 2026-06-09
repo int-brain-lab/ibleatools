@@ -7,6 +7,7 @@ import iblatlas
 
 from brainbox.io.one import SpikeSortingLoader
 import ibldsp.voltage
+import ibldsp.utils
 
 from iblatlas.atlas import Insertion, NeedlesAtlas, AllenAtlas
 from ibllib.pipes.histology import interpolate_along_track
@@ -288,6 +289,7 @@ def online_feature_computation(
         output_dir=output_dir,
         scratch_dir=scratch_dir,
         lf_k_filter=lf_k_filter,
+        probe_meta=sr_ap.meta if sr_ap is not None else sr_lf.meta,
         **kwargs,
     )
 
@@ -971,6 +973,7 @@ def compute_features_from_raw(
     output_dir=Path("."),
     scratch_dir=None,
     lf_k_filter=False,
+    probe_meta=None,
     **kwargs,
 ):
     """Compute electrophysiological features from raw numpy arrays of AP and LF data.
@@ -1234,6 +1237,37 @@ def compute_features_from_raw(
                 )
                 # Save spike information
                 waveforms["df_spikes"].to_parquet(waveforms_dir / "spikes.pqt")
+        
+        #Add an elif condition here
+        elif feature_name == "lf":
+            df[feature_name] = config["func"](**config["args"], **config["kwargs"])
+            # Add the new columns to the lf dataframe here. rms no car, and also tip distance.
+            # Get the no car version of the raw data.
+            des_lf_nocar = ibldsp.voltage.destripe_lfp(
+                            raw_lf,
+                            fs=fs_lf,
+                            h=geometry,
+                            neuropixel_version=neuropixel_version,
+                            channel_labels=channel_labels,
+                            k_filter=None,
+                            )
+            # Assert that the number of rows in df[feature_name] is same as 
+            df[feature_name]["rms_lf_no_car"] = ibldsp.utils.rms(des_lf_nocar, axis=-1)
+
+            # Add the tip distance column here from the meta file information.
+            assert probe_meta is not None, "Probe meta information is required for tip distance calculation"
+            from neuropixel import load_spike_glx_probe_table
+            df_probe_info, probe_dict = load_spike_glx_probe_table()
+            part_number = probe_meta.get("imDatPrb_pn")
+            tip_length_um = float(df_probe_info.loc[part_number, "tip_length_um"])
+            BOTTOM_ELECTRODE_AXIAL_UM = 20.0
+            distance_to_tip_um = tip_length_um/2 + (geometry["y"] - BOTTOM_ELECTRODE_AXIAL_UM)
+
+            assert df[feature_name].shape[0] == len(distance_to_tip_um), "Length of distance to tip array must match number of channels"
+            df[feature_name]["distance_to_tip_um"] = distance_to_tip_um
+
+
+
         else:
             # Standard feature computation
             df[feature_name] = config["func"](**config["args"], **config["kwargs"])

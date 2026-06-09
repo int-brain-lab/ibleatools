@@ -409,6 +409,22 @@ class ModelLfFeatures(BaseChannelFeatures):
         description="Number of peaks detected in the residual plot after removing the linear fit of the psd decay in log-log space",
         metadata={"raw_unit": "count"},
     )
+    rms_lf_no_car: Optional[float] = pa.Field(
+        coerce=True,
+        nullable=True,
+        description="Root mean square of LFP signal in V. The value is transformed to dB using 20 * np.log10(x)",
+        metadata={
+            "raw_unit": "V",
+            "transformed_unit": "dB rel. V",
+            "transform": lambda x: 20 * np.log10(x),
+        },
+    )
+    distance_to_tip_um: Optional[float] = pa.Field(
+        coerce=True,
+        nullable=True,
+        description="Distance from the electrode to the tip of the probe in micrometers",
+        metadata={"raw_unit": "µm"},
+    )
 
 
 class ModelCsdFeatures(BaseChannelFeatures):
