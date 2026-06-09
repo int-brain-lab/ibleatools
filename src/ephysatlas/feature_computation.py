@@ -1259,7 +1259,14 @@ def compute_features_from_raw(
             from neuropixel import load_spike_glx_probe_table
             df_probe_info, probe_dict = load_spike_glx_probe_table()
             part_number = probe_meta.get("imDatPrb_pn")
-            tip_length_um = float(df_probe_info.loc[part_number, "tip_length_um"])
+            if part_number in df_probe_info.index:
+                tip_length_um = float(df_probe_info.loc[part_number, "tip_length_um"])
+            else:
+                # Phase 3A recordings have no part number; tip length depends only on the
+                # probe generation, so read the major version from the meta instead.
+                import spikeglx
+                major = spikeglx._get_neuropixel_major_version_from_meta(probe_meta)
+                tip_length_um = 209.0 if major == 1 else 206.0
             BOTTOM_ELECTRODE_AXIAL_UM = 20.0
             distance_to_tip_um = tip_length_um/2 + (geometry["y"] - BOTTOM_ELECTRODE_AXIAL_UM)
 
