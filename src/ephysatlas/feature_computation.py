@@ -812,6 +812,201 @@ def compute_features_from_pid(
         )
 
 
+def compute_simulated_np2_features(
+    pid=None,
+    eid=None,
+    probe_name=None,
+    t_start=None,
+    duration=None,
+    duration_ap=5,
+    duration_lf=25,
+    one=None,
+    features_to_compute=None,
+    output_dir=None,
+    recompute_channels=False,
+    scratch_dir=None,
+    start_channel=0,
+    end_channel=80,
+    **kwargs,
+):
+    """Simulate NP2-probe features from an NP1 recording via channel subsetting + tip referencing.
+
+    A depth-sorted window of NP1 channels ``[start_channel, end_channel)`` is taken to roughly
+    mimic one NP2 shank (an NP2 shank spans ~705 um; the default 80-channel window spans ~780 um).
+    The LF trace of ``start_channel`` (the bottom / "tip" channel of the window) is subtracted from
+    every OTHER channel in the window -- simulating a tip-referencing scheme -- and LF/CSD features
+    are computed on the result. Each run is tagged with a synthetic
+    ``fake_pid = f"{pid}_{start_channel}_{end_channel}"`` so multiple simulations from the same
+    probe can be told apart.
+
+    All arguments match :func:`compute_features_from_pid`, with two additions:
+
+    Args:
+        start_channel (int): First channel of the window (depth-sorted order). It is the tip
+            reference: its trace is subtracted from the other channels. It is KEPT in the output
+            (with its own trace left un-referenced) so the channel count stays valid for CSD.
+        end_channel (int): One past the last channel of the window (exclusive). The window size
+            ``end_channel - start_channel`` must be a CSD-valid count (32 + 16k, e.g. 64/80/96)
+            whenever ``csd`` is requested, because ``cadzow_np1`` tiles the probe in fixed
+            spatial windows. The default window is 80 channels.
+        (see :func:`compute_features_from_pid` for the remaining arguments)
+
+    Returns:
+        pd.DataFrame: Simulated features, one row per channel in the window
+            (``end_channel - start_channel`` rows), tagged with ``pid == fake_pid``. Channel 0 is
+            the (un-referenced) tip reference and can be ignored in analysis.
+
+    Notes:
+        - Tip referencing is an LF-band operation. If AP/waveform features are requested the same
+          window is used, but AP is NOT referenced.
+        - ``lf_k_filter=False`` is forced so the CAR'd ``rms_lf`` and the no-CAR
+          ``rms_lf_no_car`` stay distinct. Because CAR removes the common-mode tip reference,
+          the tip-referencing effect is carried by ``rms_lf_no_car`` only; ``rms_lf``,
+          ``psd_*`` and the CSD columns are ~invariant to it.
+        - ``distance_to_tip_um`` is redefined here as the axial distance from the reference
+          channel (the simulated "tip"), not the absolute physical-probe-tip distance.
+    """
+    # Handle the deprecated single-duration parameter (mirror compute_features_from_pid).
+    if duration is not None:
+        logger.warning(
+            "The 'duration' parameter is deprecated; use 'duration_ap'/'duration_lf' instead."
+        )
+        duration_ap = duration_lf = duration
+
+    # Tip referencing is an LF-band simulation, so default to the LF-based feature sets.
+    if features_to_compute is None:
+        features_to_compute = ["lf", "csd"]
+
+    # Synthetic pid so multiple simulated windows from the same probe stay distinct.
+    fake_pid = f"{pid}_{start_channel}_{end_channel}"
+
+    # Output dirs keyed on the FAKE pid so simulations don't overwrite each other.
+    params = {
+        "pid": fake_pid,
+        "t_start": t_start,
+        "duration_ap": duration_ap,
+        "duration_lf": duration_lf,
+        "output_dir": output_dir,
+    }
+    probe_level_dir, snippet_level_dir = setup_output_directory(params)
+
+    # Validate ONE client (mirror compute_features_from_pid).
+    if one is None:
+        raise ValueError("ONE client instance is required when using PID")
+    elif one.__class__.__name__ == "OneSdsc":
+        assert pid is not None, "PID is required when using SDSC"
+        assert eid is not None, "EID is required when using SDSC"
+        assert probe_name is not None, "Probe name is required when using SDSC"
+
+    # Load readers using the REAL pid (the data lives under the real probe insertion).
+    sr_ap, sr_lf, _channels = load_data_from_pid(
+        pid, one, probe_level_dir, recompute_channels, eid=eid, probe_name=probe_name
+    )
+
+    # Resolve the time window (mirror compute_features_from_pid).
+    t_start = float(t_start) if t_start is not None else 0.0
+    max_time_ap = sr_ap.ns / sr_ap.fs
+    max_time_lf = sr_lf.ns / sr_lf.fs
+    duration_ap = (
+        (max_time_ap - t_start) if duration_ap is None else float(duration_ap)
+    )
+    duration_lf = (
+        (min(max_time_ap, max_time_lf) - t_start)
+        if duration_lf is None
+        else float(duration_lf)
+    )
+
+    # Channel window. The reference (start_channel) is KEPT in the output but left un-referenced
+    # (we subtract it only from the OTHER channels). This avoids an exactly-zero row (-> rms=0,
+    # psd=-inf) AND keeps the channel count == window size, which CSD requires.
+    win = slice(start_channel, end_channel)
+    window_size = end_channel - start_channel
+    # CSD (cadzow_np1, default ovx=16/nswx=32) tiles the probe in fixed spatial windows and needs
+    # (window_size - 32) to be a multiple of 16, i.e. window_size in {32, 48, 64, 80, 96, ...}.
+    if "csd" in features_to_compute and (window_size - 32) % 16 != 0:
+        raise ValueError(
+            f"window_size={window_size} is not valid for CSD; use a count in "
+            f"{{32, 48, 64, 80, 96, ...}} (32 + 16k) or drop 'csd' from features_to_compute."
+        )
+
+    # --- LF: stream the snippet, take the window, subtract the tip (start) channel -----------
+    # Mirrors online_feature_computation; raw_lf rows are in sr_lf.geometry order, so the
+    # channel slice and the geometry slice below stay aligned.
+    ns_lf = scipy.fft.next_fast_len(int(sr_lf.fs * duration_lf), real=True)
+    n0_lf = int(sr_lf.fs * t_start + 3)  # 3-sample LF latency offset
+    n_channels_lf = sr_lf.nc - sr_lf.nsync
+    raw_lf = sr_lf[slice(n0_lf, n0_lf + ns_lf), :n_channels_lf].T
+    raw_lf_sim = raw_lf[win].copy()
+    # Tip-reference: subtract the start channel from all the OTHER channels (row 0 stays raw).
+    raw_lf_sim[1:] = raw_lf_sim[1:] - raw_lf_sim[0]
+
+    # Geometry subset (same depth-sorted order as raw_lf), shared by every band below.
+    geom_sim = {k: np.asarray(v)[win] for k, v in sr_lf.geometry.items()}
+
+    # --- AP: only when AP-band features are requested; same window but NO referencing --------
+    need_ap = any(f in features_to_compute for f in ("ap", "waveforms"))
+    if need_ap:
+        ns_ap = scipy.fft.next_fast_len(int(sr_ap.fs * duration_ap), real=True)
+        n0_ap = int(sr_ap.fs * t_start)
+        n_channels_ap = sr_ap.nc - sr_ap.nsync
+        raw_ap = sr_ap[slice(n0_ap, n0_ap + ns_ap), :n_channels_ap].T
+        raw_ap_sim = raw_ap[win]  # same window; AP is not tip-referenced
+        channel_labels, _ = ibldsp.voltage.detect_bad_channels(raw_ap_sim, fs=sr_ap.fs)
+    else:
+        raw_ap_sim = None
+        channel_labels = None
+
+    # --- Compute features on the simulated probe ---------------------------------------------
+    df = compute_features_from_raw(
+        raw_ap=raw_ap_sim,
+        raw_lf=raw_lf_sim,
+        fs_ap=sr_ap.fs if need_ap else None,
+        fs_lf=sr_lf.fs,
+        geometry=geom_sim,
+        channel_labels=channel_labels,
+        features_to_compute=features_to_compute,
+        output_dir=snippet_level_dir,
+        scratch_dir=scratch_dir,
+        lf_k_filter=False,  # keep CAR so rms_lf (CAR) and rms_lf_no_car (no-CAR) differ
+        probe_meta=sr_lf.meta,
+        **kwargs,
+    )
+
+    # --- Tag identity + simulated channel geometry (from geom_sim, aligned with raw_lf_sim) ---
+    # Output has one row per window channel; channel 0 is the (un-referenced) tip reference.
+    sim_channels = pd.DataFrame(
+        {
+            "channel": np.arange(window_size),
+            "orig_channel": np.arange(start_channel, end_channel),
+            "axial_um": geom_sim["y"],
+            "lateral_um": geom_sim["x"],
+            "pid": fake_pid,
+        }
+    )
+    df = df.merge(sim_channels, on="channel", how="inner")
+
+    # Redefine distance-to-tip as the axial distance from the reference channel (the simulated
+    # "tip"), overriding the absolute physical-tip distance from compute_features_from_raw.
+    ref_y = float(np.asarray(sr_lf.geometry["y"])[start_channel])
+    df["distance_to_tip_um"] = df["axial_um"] - ref_y
+
+    # Provenance metadata on the saved parquet files (records the source pid + window).
+    if output_dir is not None:
+        add_metadata_to_parquet_files(
+            pid=fake_pid,
+            source_pid=pid,
+            start_channel=start_channel,
+            end_channel=end_channel,
+            t_start=t_start,
+            duration_ap=duration_ap,
+            duration_lf=duration_lf,
+            base_level_dir=output_dir.as_posix(),
+            snippet_level_dir=snippet_level_dir.relative_to(output_dir).as_posix(),
+        )
+
+    return df
+
+
 def compute_features_from_file(
     ap_file=None,
     lf_file=None,
