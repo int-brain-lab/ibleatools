@@ -826,35 +826,38 @@ def compute_simulated_np2_features(
     recompute_channels=False,
     scratch_dir=None,
     start_channel=0,
-    end_channel=80,
+    end_channel=81,
     **kwargs,
 ):
     """Simulate NP2-probe features from an NP1 recording via channel subsetting + tip referencing.
 
     A depth-sorted window of NP1 channels ``[start_channel, end_channel)`` is taken to roughly
-    mimic one NP2 shank (an NP2 shank spans ~705 um; the default 80-channel window spans ~780 um).
-    The LF trace of ``start_channel`` (the bottom / "tip" channel of the window) is subtracted from
-    every OTHER channel in the window -- simulating a tip-referencing scheme -- and LF/CSD features
-    are computed on the result. Each run is tagged with a synthetic
-    ``fake_pid = f"{pid}_{start_channel}_{end_channel}"`` so multiple simulations from the same
-    probe can be told apart.
+    mimic one NP2 shank. The LF trace of ``start_channel`` (the bottom / "tip" channel of the
+    window) is subtracted from every OTHER channel -- simulating a tip-referencing scheme -- and
+    only those referenced channels are passed on; the reference channel itself is NOT included in
+    the data given to ``compute_features_from_raw`` (so it can never leak into CAR / cadzow / CSD).
+    LF/CSD features are then computed on the referenced channels. Each run is tagged with a
+    synthetic ``fake_pid = f"{pid}_{start_channel}_{end_channel}"`` so multiple simulations from
+    the same probe can be told apart.
 
     All arguments match :func:`compute_features_from_pid`, with two additions:
 
     Args:
         start_channel (int): First channel of the window (depth-sorted order). It is the tip
-            reference: its trace is subtracted from the other channels. It is KEPT in the output
-            (with its own trace left un-referenced) so the channel count stays valid for CSD.
-        end_channel (int): One past the last channel of the window (exclusive). The window size
-            ``end_channel - start_channel`` must be a CSD-valid count (32 + 16k, e.g. 64/80/96)
+            reference: its trace is subtracted from the other channels and it is then excluded --
+            it is NOT passed to ``compute_features_from_raw`` and is absent from the output.
+        end_channel (int): One past the last channel of the window (exclusive). The OUTPUT count
+            ``end_channel - start_channel - 1`` must be a CSD-valid count (32 + 16k, e.g. 64/80/96)
             whenever ``csd`` is requested, because ``cadzow_np1`` tiles the probe in fixed
-            spatial windows. The default window is 80 channels.
+            spatial windows. The default 81-channel window yields 80 referenced output channels.
         (see :func:`compute_features_from_pid` for the remaining arguments)
 
     Returns:
-        pd.DataFrame: Simulated features, one row per channel in the window
-            (``end_channel - start_channel`` rows), tagged with ``pid == fake_pid``. Channel 0 is
-            the (un-referenced) tip reference and can be ignored in analysis.
+        pd.DataFrame: Simulated features, tagged with ``pid == fake_pid``. One row per referenced
+            output channel (``end_channel - start_channel - 1`` rows; default 81-channel window ->
+            80 channels). The tip-reference channel is excluded. ``channel`` is 0-based over the
+            output channels, with ``orig_channel`` (= ``start_channel + 1 .. end_channel - 1``)
+            preserved for provenance.
 
     Notes:
         - Tip referencing is an LF-band operation. If AP/waveform features are requested the same
@@ -916,17 +919,17 @@ def compute_simulated_np2_features(
         else float(duration_lf)
     )
 
-    # Channel window. The reference (start_channel) is KEPT in the output but left un-referenced
-    # (we subtract it only from the OTHER channels). This avoids an exactly-zero row (-> rms=0,
-    # psd=-inf) AND keeps the channel count == window size, which CSD requires.
-    win = slice(start_channel, end_channel)
-    window_size = end_channel - start_channel
+    # Output channels = the window EXCLUDING the reference (start_channel). The reference is used
+    # only for the subtraction below; it is never passed to compute_features_from_raw, so it cannot
+    # leak into CAR (median over channels) / cadzow / CSD (spatial neighbourhoods).
+    other = slice(start_channel + 1, end_channel)
+    n_out = end_channel - start_channel - 1
     # CSD (cadzow_np1, default ovx=16/nswx=32) tiles the probe in fixed spatial windows and needs
-    # (window_size - 32) to be a multiple of 16, i.e. window_size in {32, 48, 64, 80, 96, ...}.
-    if "csd" in features_to_compute and (window_size - 32) % 16 != 0:
+    # the OUTPUT count (n_out) to be 32 + 16k, i.e. in {32, 48, 64, 80, 96, ...}.
+    if "csd" in features_to_compute and (n_out - 32) % 16 != 0:
         raise ValueError(
-            f"window_size={window_size} is not valid for CSD; use a count in "
-            f"{{32, 48, 64, 80, 96, ...}} (32 + 16k) or drop 'csd' from features_to_compute."
+            f"output channel count (end-start-1)={n_out} is not valid for CSD; choose end_channel "
+            f"so that end-start-1 is in {{32, 48, 64, 80, 96, ...}} (32 + 16k), or drop 'csd'."
         )
 
     # --- LF: stream the snippet, take the window, subtract the tip (start) channel -----------
@@ -936,12 +939,11 @@ def compute_simulated_np2_features(
     n0_lf = int(sr_lf.fs * t_start + 3)  # 3-sample LF latency offset
     n_channels_lf = sr_lf.nc - sr_lf.nsync
     raw_lf = sr_lf[slice(n0_lf, n0_lf + ns_lf), :n_channels_lf].T
-    raw_lf_sim = raw_lf[win].copy()
-    # Tip-reference: subtract the start channel from all the OTHER channels (row 0 stays raw).
-    raw_lf_sim[1:] = raw_lf_sim[1:] - raw_lf_sim[0]
+    ref_trace = raw_lf[start_channel]  # reference, used ONLY for the subtraction (not passed on)
+    raw_lf_sim = raw_lf[other] - ref_trace  # the referenced output channels; reference excluded
 
     # Geometry subset (same depth-sorted order as raw_lf), shared by every band below.
-    geom_sim = {k: np.asarray(v)[win] for k, v in sr_lf.geometry.items()}
+    geom_sim = {k: np.asarray(v)[other] for k, v in sr_lf.geometry.items()}
 
     # --- AP: only when AP-band features are requested; same window but NO referencing --------
     need_ap = any(f in features_to_compute for f in ("ap", "waveforms"))
@@ -950,7 +952,7 @@ def compute_simulated_np2_features(
         n0_ap = int(sr_ap.fs * t_start)
         n_channels_ap = sr_ap.nc - sr_ap.nsync
         raw_ap = sr_ap[slice(n0_ap, n0_ap + ns_ap), :n_channels_ap].T
-        raw_ap_sim = raw_ap[win]  # same window; AP is not tip-referenced
+        raw_ap_sim = raw_ap[other]  # same output channels; AP is not tip-referenced
         channel_labels, _ = ibldsp.voltage.detect_bad_channels(raw_ap_sim, fs=sr_ap.fs)
     else:
         raw_ap_sim = None
@@ -973,11 +975,11 @@ def compute_simulated_np2_features(
     )
 
     # --- Tag identity + simulated channel geometry (from geom_sim, aligned with raw_lf_sim) ---
-    # Output has one row per window channel; channel 0 is the (un-referenced) tip reference.
+    # One row per referenced output channel; the reference (start_channel) is not present.
     sim_channels = pd.DataFrame(
         {
-            "channel": np.arange(window_size),
-            "orig_channel": np.arange(start_channel, end_channel),
+            "channel": np.arange(n_out),
+            "orig_channel": np.arange(start_channel + 1, end_channel),
             "axial_um": geom_sim["y"],
             "lateral_um": geom_sim["x"],
             "pid": fake_pid,
