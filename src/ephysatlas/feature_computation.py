@@ -983,6 +983,7 @@ def compute_simulated_np2_features(
             "axial_um": geom_sim["y"],
             "lateral_um": geom_sim["x"],
             "pid": fake_pid,
+            "source_pid": pid,  # original probe-insertion id this simulation was derived from
         }
     )
     df = df.merge(sim_channels, on="channel", how="inner")
