@@ -1734,9 +1734,9 @@ class EphysDenoiser(_EphysTransformerInterface):
         channel_labels = self._get_channel_labels(X)
         ns = X.shape[0]
         for feature_name in self._get_feature_names(X):
-            if (
-                feature_name == "channel_labels"
-            ):  # we do not want to apply any denoising to this feature
+            if feature_name in ("channel_labels", "distance_to_tip_um"):
+                # channel_labels is a quality annotation and distance_to_tip_um is a
+                # geometric/positional column; neither should be spatially denoised.
                 continue
             fval = np.copy(X[feature_name].to_numpy()).astype(float)
             fval[channel_labels != 0] = np.nan
