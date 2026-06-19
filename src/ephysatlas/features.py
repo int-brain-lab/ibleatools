@@ -1067,8 +1067,15 @@ def csd(data, fs, geometry, bands=None, decimate=10):
     """
     data_rs = scipy.signal.decimate(data, decimate, axis=1, ftype="fir")
     data_rs = ibldsp.cadzow.cadzow_denoiser(
-        data_rs, rank=5, fs=fs / decimate, niter=1, fmax=125,
-        nswx=64, gap_threshold=2.0, ppca_k=2.0, h=geometry
+        data_rs,
+        rank=5,
+        fs=fs / decimate,
+        niter=1,
+        fmax=125,
+        nswx=64,
+        gap_threshold=2.0,
+        ppca_k=2.0,
+        h=geometry,
     )
     # Calculate the CSD features
     data_rs_diff2 = ibldsp.voltage.current_source_density(data_rs, h=geometry, n=2)
