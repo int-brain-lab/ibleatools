@@ -13,24 +13,46 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
 ]
 dynamic = ["version"]
+# Lite by default: data download (S3), model download + region inference, lf/csd/ap
+# feature computation, aggregation/denoising, and the torch-based spatial encoder.
+# No git dependencies — the git/spike-sorting deps (dartsort, dredge, iblscripts) live
+# in the optional [full] extra below. (spikeinterface is still pulled in transitively
+# by ibl-neuropixel, which is fine; the dartsort spike path is the part gated by [full].)
 dependencies = [
-    "dartsort @ git+https://github.com/cwindolf/dartsort@iblsorter",
-    "dredge @ git+https://github.com/evarol/dredge@v0.2.2",
-    "h5py==3.15.1", #Some dartsort error arises in the unit tests, if I don't fix this.
-    "hdbscan>=0.8.40",
-    "ibllib>=3.3.1",
-    "ibl-neuropixel>=1.11.0",
-    "linear-operator>=0.6",
-    "mock>=5.2.0",
-    "opt-einsum>=3.4.0",
+    "ibllib>=3.3.1",          # brainbox, ibllib.pipes, ONE-api (one.api/one.remote.aws), iblutil
+    "ibl-neuropixel>=1.11.0", # ibldsp, neuropixel, spikeglx
+    "iblatlas",               # iblatlas.atlas/regions/genomics
+    "xgboost>=3.0.1",         # regionclassifier (top-level import)
+    "specparam==2.0.0rc3",    # features.lf() lazy import
+    "scikit-image",           # features.py top-level (skimage.restoration)
+    "scikit-learn",           # features/outliers/plots/reveal/spatial_encoder
+    "filelock",               # feature_computation.py, feature_calculators/base.py
+    "pyyaml",                 # data.py, regionclassifier.py
     "pandera>=0.24.0",
     "pydantic>=2.11.4",
-    "specparam==2.0.0rc3",
+    "joblib>=1.5",            # relaxed from ==1.5.1 to reduce resolver conflicts
+    "torch",                  # spatial_encoder
+    "numpy",
+    "pandas",
+    "scipy",
+]
+
+[project.optional-dependencies]
+# Explicit alias so `pip install ibleatools[lite]` (e.g. the GUI dependency line) is
+# valid. Adds nothing — the base install is already the lite set.
+lite = []
+# Full install: the base (lite) plus the spike/waveform-computation stack AND the
+# SDSC supercomputing-pipeline deps (luigi, iblscripts).
+full = [
+    "dartsort @ git+https://github.com/cwindolf/dartsort@iblsorter",
+    "dredge @ git+https://github.com/evarol/dredge@v0.2.2",
     "spikeinterface>=0.101.2",
-    "xgboost>=3.0.1",
-    "joblib==1.5.1",
-    "iblscripts @ git+https://github.com/int-brain-lab/iblscripts.git",
+    "hdbscan>=0.8.40",
+    "h5py==3.15.1", #Some dartsort error arises in the unit tests, if I don't fix this.
+    "linear-operator>=0.6",
+    "opt-einsum>=3.4.0",
     "luigi>=3.6.0",
+    "iblscripts @ git+https://github.com/int-brain-lab/iblscripts.git",
 ]
 
 [build-system]

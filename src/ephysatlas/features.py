@@ -1162,10 +1162,17 @@ def dart_subtraction_numpy(data, fs, geometry, **params):
     """
 
     params = DartParameters() if params is None else DartParameters(**params)
-    # pip install ephys-atlas[gpu]
-    import dartsort  # 04a23714d77f28c1bbf3351ed9e21601395d1bca is a working commit
-    import spikeinterface.core as sc
-    import h5py
+    # The spike/waveform stack is an optional dependency: pip install ibleatools[full]
+    try:
+        import dartsort  # 04a23714d77f28c1bbf3351ed9e21601395d1bca is a working commit
+        import spikeinterface.core as sc
+        import h5py
+    except ImportError as e:
+        raise ImportError(
+            "Spike/waveform feature computation requires the optional spike-sorting "
+            "stack (dartsort, dredge, spikeinterface, ...). Install it with: "
+            "pip install ibleatools[full]"
+        ) from e
 
     dart_xy = np.c_[geometry["x"], geometry["y"]]
 
@@ -1305,7 +1312,8 @@ def _spikes_spikeinterface(data, fs: int, geometry: dict, scratch_dir=None, **pa
         from spikeinterface.core.node_pipeline import run_node_pipeline, PeakRetriever
     except ImportError as e:
         raise ImportError(
-            f"SpikeInterface not installed. Please install with: pip install spikeinterface. Error: {e}"
+            f"SpikeInterface not installed. Please install the optional spike-sorting "
+            f"stack with: pip install ibleatools[full]. Error: {e}"
         )
 
     logger.info("Starting spike detection with SpikeInterface backend")
