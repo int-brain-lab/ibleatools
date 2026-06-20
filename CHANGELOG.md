@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [0.6.0] - UNRELEASED
 
 ### Changed
-- Cadzow denoising updated to `cadzow_denoiser` (replaces deprecated `cadzow_np1`): uses batched SVD, geometry-agnostic; `rank=5`, `fmax=125`, `nswx=64`, `gap_threshold=2.0`, `ppca_k=2.0`
+- Cadzow denoising updated to `cadzow_denoiser` (replaces deprecated `cadzow_np1`): uses batched SVD, geometry-agnostic; `rank=5`, `fmax=125`, `nswx=64`, `ovx=32`, `gap_threshold=2.0`, `ppca_k=2.0`
 - Bumped `ibl-neuropixel` requirement to `>=1.11.0`
 
 ### Added
