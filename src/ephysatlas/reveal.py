@@ -559,8 +559,15 @@ class AtlasReveal:
             butt, fs=self.sr_lf.fs, channel_labels=channel_labels, k_filter=None
         )
         csd = scipy.signal.decimate(preproc, q=5, zero_phase=True)
-        csd = ibldsp.cadzow.cadzow_np1(
-            csd, fs=self.sr_lf.fs / 5, fmax=200, rank=4, h=self.sr_lf.geometry
+        csd = ibldsp.cadzow.cadzow_denoiser(
+            csd,
+            rank=5,
+            fs=self.sr_lf.fs / 5,
+            fmax=125,
+            nswx=64,
+            gap_threshold=2.0,
+            ppca_k=2.0,
+            h=self.sr_lf.geometry,
         )
         csd = ibldsp.voltage.current_source_density(csd, h=self.sr_lf.geometry)
 
