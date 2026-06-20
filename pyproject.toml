@@ -25,7 +25,7 @@ dependencies = [
     "xgboost>=3.0.1",         # regionclassifier (top-level import)
     "specparam==2.0.0rc3",    # features.lf() lazy import
     "scikit-image",           # features.py top-level (skimage.restoration)
-    "scikit-learn",           # features/outliers/plots/reveal/spatial_encoder
+    "scikit-learn<1.9",       # 1.9.0 broke OneToOneFeatureMixin.get_feature_names_out (NotFittedError in EphysTransformer); 1.6-1.8 OK
     "filelock",               # feature_computation.py, feature_calculators/base.py
     "pyyaml",                 # data.py, regionclassifier.py
     "pandera>=0.24.0",
@@ -107,6 +107,7 @@ docs = [
 ]
 lint = ["ruff>=0.7.3"]
 test = [
+    "coverage",       # CI runs `uv run coverage ...` directly (declare it explicitly)
     "pytest-cov>=4.0.0",
     "coveralls",
 ]
