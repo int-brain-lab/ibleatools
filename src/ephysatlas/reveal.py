@@ -565,6 +565,7 @@ class AtlasReveal:
             fs=self.sr_lf.fs / 5,
             fmax=125,
             nswx=64,
+            ovx=32,
             gap_threshold=2.0,
             ppca_k=2.0,
             h=self.sr_lf.geometry,

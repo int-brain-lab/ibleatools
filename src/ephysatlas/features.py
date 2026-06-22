@@ -1073,6 +1073,7 @@ def csd(data, fs, geometry, bands=None, decimate=10):
         niter=1,
         fmax=125,
         nswx=64,
+        ovx=32,
         gap_threshold=2.0,
         ppca_k=2.0,
         h=geometry,
