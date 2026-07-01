@@ -240,3 +240,24 @@ class TestProjectDataIO(unittest.TestCase):
             large_files=False,
         )
         self.assertEqual(result, self.tmp / "dl" / self.project)
+
+    def test_download_lfp_features(self):
+        mock_one = MagicMock()
+        mock_one.alyx = MagicMock()
+        with patch("ephysatlas.data.aws") as mock_aws:
+            mock_aws.get_s3_from_alyx.return_value = (MagicMock(), "test-bucket")
+            ephysatlas.data.download_lfp_features(
+                self.tmp / "dl", project=self.project, one=mock_one
+            )
+        s3_key = mock_aws.s3_download_file.call_args[0][0]
+        self.assertEqual(
+            s3_key,
+            f"aggregates/atlas/projects/{self.project}/lfp_aggregates/lf_compressed_all.h5",
+        )
+
+    def test_read_lfp_features(self):
+        with patch("lfpack.LFPackReader") as mock_reader_cls:
+            ephysatlas.data.read_lfp_features(self.project_path, "pid123")
+        args, kwargs = mock_reader_cls.call_args
+        self.assertTrue(str(args[0]).endswith("lf_compressed_all.h5"))
+        self.assertEqual(kwargs["recording"], "pid123")

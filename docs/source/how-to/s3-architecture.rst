@@ -30,18 +30,21 @@ Folder Layout
     │   ├── model.ubj
     │   └── meta.yaml
     │
-    └── projects/{project}/                      ← per-project cluster aggregates
+    └── projects/{project}/                      ← per-project cluster/LFP aggregates
         ├── df_probe_details.pqt                 one row per probe insertion
-        └── cells_aggregates/
-            ├── clusters.table.pqt               all clusters (n_clusters × ~59)
-            ├── clusters_good.table.pqt          QC-passing clusters (n_good × ~61)
-            ├── clusters.acgs_log.npy            log-binned ACGs, normalised  (n_clusters × 128) float16
-            ├── acgs_log.times.npy               ACG bin centres in seconds   (128,) float64
-            ├── clusters.waveforms_peak.npy      peak-channel waveform        (n_clusters × 128) float16
-            ├── clusters_good.stpc.npy           spike-triggered population coupling  (n_good × 1000) float16
-            ├── clusters_good.stlfp.npy          spike-triggered LFP                  (n_good × 250)  float16
-            ├── waveforms.voltage.npy            neighbourhood traces (~8 GB)         (n_traces × 128) float16
-            └── waveforms.table.pqt              pid/cluster_id/abs_channel index     (n_traces × 3)
+        ├── cells_aggregates/
+        │   ├── clusters.table.pqt               all clusters (n_clusters × ~59)
+        │   ├── clusters_good.table.pqt          QC-passing clusters (n_good × ~61)
+        │   ├── clusters.acgs_log.npy            log-binned ACGs, normalised  (n_clusters × 128) float16
+        │   ├── acgs_log.times.npy               ACG bin centres in seconds   (128,) float64
+        │   ├── clusters.waveforms_peak.npy      peak-channel waveform        (n_clusters × 128) float16
+        │   ├── clusters_good.stpc.npy           spike-triggered population coupling  (n_good × 1000) float16
+        │   ├── clusters_good.stlfp.npy          spike-triggered LFP                  (n_good × 250)  float16
+        │   ├── waveforms.voltage.npy            neighbourhood traces (~8 GB)         (n_traces × 128) float16
+        │   └── waveforms.table.pqt              pid/cluster_id/abs_channel index     (n_traces × 3)
+        └── lfp_aggregates/                      ← merged LFP archives, one group per pid (lfpack)
+            ├── lf_compressed_all.h5             default level    (ε=150, α=28)  ~23 GB
+            └── lf_compressed_aggressive_all.h5  aggressive level (ε=450, α=96)  ~12 GB
 
 Versioning
 ----------
@@ -85,9 +88,12 @@ Download Functions
      - ``projects/{project}/cells_aggregates/``
    * - :func:`ephysatlas.data.download_project_data`
      - probe details + cell aggregates (convenience wrapper)
+   * - :func:`ephysatlas.data.download_lfp_features`
+     - ``projects/{project}/lfp_aggregates/``
 
 See also
 --------
 
 * :doc:`load-channel-features` — load channel-level features
 * :doc:`load-cells-features` — load cells features (stPC, stLFP)
+* :doc:`load-lfp-features` — load full-recording compressed LFP (lfpack)
