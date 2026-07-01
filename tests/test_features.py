@@ -17,9 +17,9 @@ print(f"Torch number of threads = {torch.get_num_threads()}")
 
 class TestFeatureSets(unittest.TestCase):
     def test_sets(self):
-        self.assertEqual(len(ephysatlas.features.voltage_features_set("all")), 52)
+        self.assertEqual(len(ephysatlas.features.voltage_features_set("all")), 53)
         self.assertEqual(len(ephysatlas.features.voltage_features_set(["raw_ap"])), 3)
-        self.assertEqual(len(ephysatlas.features.voltage_features_set()), 35)
+        self.assertEqual(len(ephysatlas.features.voltage_features_set()), 36)
 
 
 class TestLFPFeatures(unittest.TestCase):
