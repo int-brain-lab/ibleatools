@@ -7,6 +7,7 @@ import iblatlas
 
 from brainbox.io.one import SpikeSortingLoader
 import ibldsp.voltage
+import ibldsp.utils
 
 from iblatlas.atlas import Insertion, NeedlesAtlas, AllenAtlas
 from ibllib.pipes.histology import interpolate_along_track
@@ -971,6 +972,7 @@ def compute_features_from_raw(
     output_dir=Path("."),
     scratch_dir=None,
     lf_k_filter=False,
+    feature_params=None,
     **kwargs,
 ):
     """Compute electrophysiological features from raw numpy arrays of AP and LF data.
@@ -1010,6 +1012,12 @@ def compute_features_from_raw(
             :func:`ibldsp.voltage.destripe_lfp`. The default ``False`` preserves
             the current CAR behavior; use ``None`` to bypass LF spatial
             filtering.
+        feature_params (optional): Optional ``FeatureParams``-like object used to
+            override the per-feature kwargs. Read duck-typed (``.lf`` / ``.csd``
+            attributes) so this module carries no dependency on the
+            ``feature_calculators`` package. When ``None`` the defaults reproduce
+            today's behavior exactly. A truthy ``feature_params.lf.compute_rms_no_car``
+            additionally enables the ``rms_lf_no_car`` LF feature.
         **kwargs: Extra options controlling the workflow, such as
             ``skip_saved_computation`` or ``save_waveforms``.
 
@@ -1164,17 +1172,42 @@ def compute_features_from_raw(
 
     logger.info(f"Starting {features_to_compute} computation")
 
+    # Derive the per-feature kwargs from an optional FeatureParams-like object.
+    # This is duck-typed (reads feature_params.lf/.csd attributes if present) so this
+    # module does NOT import the feature_calculators package (avoids a circular import).
+    # The defaults below reproduce today's kwargs exactly when feature_params is None.
+    lf_kwargs = {}
+    csd_kwargs = {"decimate": 10}
+    ap_kwargs = {}
+    waveforms_kwargs = {"scratch_dir": scratch_dir}
+    # Engine-level toggle for the no-CAR RMS. Not a features.lf kwarg (see the lf branch
+    # of compute_and_save_feature below); default False keeps today's behavior.
+    compute_rms_no_car = False
+    if feature_params is not None:
+        lf_p = getattr(feature_params, "lf", None)
+        if lf_p is not None:
+            lf_kwargs = {"bands": lf_p.bands, "decay_features": lf_p.decay_features}
+            compute_rms_no_car = getattr(lf_p, "compute_rms_no_car", False)
+        csd_p = getattr(feature_params, "csd", None)
+        if csd_p is not None:
+            csd_kwargs = {
+                "bands": csd_p.bands,
+                "decimate": csd_p.decimate,
+                "scale": csd_p.scale,
+            }
+        # ap / waveforms typed params are placeholders for now; keep today's kwargs.
+
     # Define configuration for each feature type with their computation functions and parameters
     feature_configs = {
         "lf": {
             "func": features.lf,
             "args": {"data": des_lf, "fs": fs_lf},
-            "kwargs": {},
+            "kwargs": lf_kwargs,
         },
         "csd": {
             "func": features.csd,
             "args": {"data": des_lf, "fs": fs_lf, "geometry": geometry},
-            "kwargs": {"decimate": 10},
+            "kwargs": csd_kwargs,
         },
         "ap": {
             "func": features.ap,
@@ -1183,12 +1216,12 @@ def compute_features_from_raw(
                 "geometry": geometry,
                 "channel_labels": channel_labels,
             },
-            "kwargs": {},
+            "kwargs": ap_kwargs,
         },
         "waveforms": {
             "func": features.spikes,
             "args": {"data": des_ap, "fs": fs_ap, "geometry": geometry},
-            "kwargs": {"scratch_dir": scratch_dir},
+            "kwargs": waveforms_kwargs,
         },
     }
 
@@ -1234,6 +1267,23 @@ def compute_features_from_raw(
                 )
                 # Save spike information
                 waveforms["df_spikes"].to_parquet(waveforms_dir / "spikes.pqt")
+        elif feature_name == "lf":
+            # Standard lf computation, then optionally append the no-CAR RMS.
+            df[feature_name] = config["func"](**config["args"], **config["kwargs"])
+            if compute_rms_no_car:
+                # Re-destripe with k_filter=None (no common-average reference) so that
+                # rms_lf (CAR) and rms_lf_no_car (no-CAR) capture distinct information.
+                des_lf_nocar = ibldsp.voltage.destripe_lfp(
+                    raw_lf,
+                    fs=fs_lf,
+                    h=geometry,
+                    neuropixel_version=neuropixel_version,
+                    channel_labels=channel_labels,
+                    k_filter=None,
+                )
+                df[feature_name]["rms_lf_no_car"] = ibldsp.utils.rms(
+                    des_lf_nocar, axis=-1
+                )
         else:
             # Standard feature computation
             df[feature_name] = config["func"](**config["args"], **config["kwargs"])
