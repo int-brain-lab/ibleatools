@@ -12,6 +12,7 @@ Getting Started
    s3-architecture
    load-channel-features
    load-cells-features
+   load-lfp-features
    basic-feature-extraction
 
 Overview

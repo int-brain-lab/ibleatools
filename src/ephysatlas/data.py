@@ -36,6 +36,11 @@ _WAVEFORMS_FILES = [
     "waveforms.voltage.npy",
     "waveforms.table.pqt",
 ]
+# Merged multi-recording LFP archives in lfp_aggregates/, keyed by compression level.
+_LFP_AGGREGATES_FILES = {
+    "default": "lf_compressed_all.h5",  # epsilon=150, alpha=28, ~23 GB
+    "aggressive": "lf_compressed_aggressive_all.h5",  # epsilon=450, alpha=96, ~12 GB
+}
 
 
 def get_waveforms_coordinates(
@@ -690,6 +695,94 @@ def read_cells_features(path_project):
         result["waveforms"] = np.load(path / "waveforms.voltage.npy", mmap_mode="r")
         result["df_waveforms"] = pd.read_parquet(path / "waveforms.table.pqt")
     return result
+
+
+def download_lfp_features(
+    local_path,
+    project="ibl_neuropixel_brainwide_01",
+    one=None,
+    overwrite=False,
+    level="default",
+):
+    """Download the merged LFP-compressed HDF5 archive from AWS S3.
+
+    The archive is a single multi-recording HDF5 file (produced by ``lfpack.merge_h5``)
+    containing one top-level group per insertion (pid). Use :func:`read_lfp_features`
+    to open a reader for a specific pid.
+
+    Parameters
+    ----------
+    local_path : Path
+        Local root; file is placed under ``local_path/project/lfp_aggregates/``.
+    project : str, optional
+        Project name. Defaults to "ibl_neuropixel_brainwide_01".
+    one : one.api.ONE, optional
+        ONE client instance for AWS authentication.
+    overwrite : bool, optional
+        Force re-download if the file already exists locally. Defaults to False.
+    level : {"default", "aggressive"}, optional
+        Compression level to download. "default" (epsilon=150, alpha=28, ~23 GB) is
+        higher fidelity; "aggressive" (epsilon=450, alpha=96, ~12 GB) trades fidelity
+        for size. Defaults to "default".
+
+    Returns
+    -------
+    Path
+        Local path to the downloaded HDF5 file.
+    """
+    assert level in _LFP_AGGREGATES_FILES, (
+        f"level must be one of {list(_LFP_AGGREGATES_FILES)}, got {level!r}"
+    )
+    s3, bucket_name, local_project_path = _project_s3(local_path, project, one)
+    dest = local_project_path.joinpath("lfp_aggregates")
+    dest.mkdir(parents=True, exist_ok=True)
+    fname = _LFP_AGGREGATES_FILES[level]
+    local_file = dest.joinpath(fname)
+    aws.s3_download_file(
+        f"aggregates/atlas/projects/{project}/lfp_aggregates/{fname}",
+        local_file,
+        s3=s3,
+        bucket_name=bucket_name,
+        overwrite=overwrite,
+    )
+    return local_file
+
+
+def read_lfp_features(path_project, pid, level="default", scale=0, bin_channels=1):
+    """Open a decompressed LFP reader for one insertion from the merged HDF5 archive.
+
+    Parameters
+    ----------
+    path_project : Path
+        Path to the project folder (parent of ``lfp_aggregates/``).
+    pid : str
+        Insertion ID; matches the top-level recording key in the merged HDF5 file.
+    level : {"default", "aggressive"}, optional
+        Compression level to read, matching the file downloaded by
+        :func:`download_lfp_features`. Defaults to "default".
+    scale : int, optional
+        Pyramidal resolution level to open, 0 = base full LFP rate. Defaults to 0.
+    bin_channels : int, optional
+        Number of adjacent channels to sum together on every read. Defaults to 1
+        (no binning).
+
+    Returns
+    -------
+    lfpack.LFPackReader
+        Drop-in ``spikeglx.Reader``-like object; chunks are decompressed on demand.
+        ``sr[0:2500, :]`` returns an ``(n_samples, n_channels)`` float32 array in volts.
+    """
+    import lfpack
+
+    assert level in _LFP_AGGREGATES_FILES, (
+        f"level must be one of {list(_LFP_AGGREGATES_FILES)}, got {level!r}"
+    )
+    h5_file = Path(path_project).joinpath(
+        "lfp_aggregates", _LFP_AGGREGATES_FILES[level]
+    )
+    return lfpack.LFPackReader(
+        h5_file, recording=pid, scale=scale, bin_channels=bin_channels
+    )
 
 
 def compute_depth_dataframe(df_raw_features, df_clusters, df_channels):
