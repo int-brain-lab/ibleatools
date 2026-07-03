@@ -811,6 +811,98 @@ def compute_features_from_pid(
         )
 
 
+def compute_features_from_pid_oop(
+    pid=None,
+    eid=None,
+    probe_name=None,
+    t_start=None,
+    duration=None,
+    duration_ap=5,
+    duration_lf=25,
+    one=None,
+    features_to_compute=None,
+    output_dir=None,
+    recompute_channels=False,
+    scratch_dir=None,
+    **kwargs,
+):
+    """OOP twin of :func:`compute_features_from_pid` (identical signature/return).
+
+    Delegates to :class:`ephysatlas.feature_calculators.IBLPIDFeatureCalculator`
+    so the procedural entry point and the OOP layer share one implementation.
+    Behavior, outputs, and the returned DataFrame match
+    :func:`compute_features_from_pid`; parity is pinned by
+    ``tests/test_pid_oop_parity.py``. See that function for full arg docs.
+    """
+    # Lazy import: feature_calculators.base imports compute_features_from_raw from
+    # this module, so importing the package at module scope would be circular.
+    from ephysatlas.feature_calculators import (
+        FeatureComputationOptions,
+        IBLPIDFeatureCalculator,
+        SnippetWindow,
+    )
+
+    # Deprecated single-duration override (matches compute_features_from_pid).
+    if duration is not None:
+        logger.warning(
+            "The 'duration' parameter is deprecated and will be removed in future versions. "
+            "Please use 'duration_ap' and 'duration_lf' instead."
+        )
+        duration_ap = duration_lf = duration
+
+    logger.info(f"ProcessID for the process: {os.getpid()}")
+
+    # Same input validation as the procedural entry point.
+    if one is None:
+        raise ValueError("ONE client instance is required when using PID")
+    elif one.__class__.__name__ == "OneSdsc":
+        assert pid is not None, "PID is required when using SDSC"
+        assert eid is not None, "EID is required when using SDSC"
+        assert probe_name is not None, "Probe name is required when using SDSC"
+
+    calc = IBLPIDFeatureCalculator(pid=pid, one=one, eid=eid, probe_name=probe_name)
+
+    # Resolve the snippet window exactly like compute_features_from_pid: fall back
+    # to the maximum available duration when a duration is not specified.
+    t_start = float(t_start) if t_start is not None else 0.0
+    max_ap, max_lf = calc.available_duration()
+    duration_ap = (max_ap - t_start) if duration_ap is None else float(duration_ap)
+    duration_lf = (
+        (min(max_ap, max_lf) - t_start) if duration_lf is None else float(duration_lf)
+    )
+
+    window = SnippetWindow(
+        t_start=t_start, duration_ap=duration_ap, duration_lf=duration_lf
+    )
+    options = FeatureComputationOptions(
+        features_to_compute=features_to_compute,
+        output_dir=output_dir,
+        scratch_dir=scratch_dir,
+        recompute_channels=recompute_channels,
+        include_trajectory=True,
+        lf_k_filter=False,
+        extra_kwargs=kwargs,
+    )
+    result = calc.compute_snippet(window, options)
+
+    # Preserve the parquet-metadata side effect the aggregation layer relies on
+    # (utils.get_aggregated_snippets_df reads these .attrs to build the manifest).
+    if output_dir is not None and result.snippet_level_dir is not None:
+        snippet_attrs = {
+            "pid": pid,
+            "t_start": t_start,
+            "duration_ap": duration_ap,
+            "duration_lf": duration_lf,
+            "base_level_dir": output_dir.as_posix(),
+            "snippet_level_dir": result.snippet_level_dir.relative_to(
+                output_dir
+            ).as_posix(),
+        }
+        add_metadata_to_parquet_files(**snippet_attrs)
+
+    return result.features
+
+
 def compute_features_from_file(
     ap_file=None,
     lf_file=None,
