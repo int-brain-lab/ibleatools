@@ -290,6 +290,27 @@ class TestPidOopParity(unittest.TestCase):
         m_snip.assert_called_once()
         np.testing.assert_array_equal(labels, np.zeros(N_CH))
 
+    def test_load_geometry_warns_on_missing_key(self):
+        calc = IBLPIDFeatureCalculator(pid=PID, one=mock.MagicMock())
+        reader = _FakeReader(AP_DATA, FS_AP)
+        reader.geometry = {"x": np.zeros(N_CH), "y": np.arange(N_CH, dtype=float)}
+        calc._sr_ap = reader
+        with self.assertLogs(
+            "ephysatlas.feature_calculators.ibl", level="WARNING"
+        ) as cm:
+            geometry = calc.load_geometry()
+        self.assertTrue(any("sample_shift" in message for message in cm.output))
+        np.testing.assert_array_equal(geometry["sample_shift"], np.zeros(N_CH))
+
+    def test_merge_channel_metadata_raises_on_duplicate_channel(self):
+        calc = IBLPIDFeatureCalculator(pid=PID, one=mock.MagicMock())
+        features = pd.DataFrame({"channel": [0, 1], "feat": [1.0, 2.0]})
+        channels = pd.DataFrame(
+            {"channel": [0, 0, 1], "axial_um": [0.0, 0.0, 20.0]}
+        )  # duplicate channel 0 would fan out the left merge
+        with self.assertRaises(ValueError):
+            calc._merge_channel_metadata(features, channels)
+
 
 if __name__ == "__main__":
     unittest.main()

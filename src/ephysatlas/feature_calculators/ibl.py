@@ -136,14 +136,23 @@ class IBLPIDFeatureCalculator(BaseFeatureCalculator):
         reader = self.sr_ap if self.sr_ap is not None else self.sr_lf
         geometry = dict(reader.geometry)
         n_channels = len(geometry["x"])
-        geometry.setdefault("sample_shift", np.zeros(n_channels))
-        geometry.setdefault("shank", np.zeros(n_channels))
-        geometry.setdefault(
-            "col", np.unique(np.asarray(geometry["x"]), return_inverse=True)[1]
-        )
-        geometry.setdefault(
-            "row", np.unique(np.asarray(geometry["y"]), return_inverse=True)[1]
-        )
+        # Fill missing geometry keys with derived defaults, but warn first: a
+        # missing sample_shift/shank silently changes destriping, so a real reader
+        # lacking these usually signals a problem worth surfacing.
+        derived_defaults = {
+            "sample_shift": lambda: np.zeros(n_channels),
+            "shank": lambda: np.zeros(n_channels),
+            "col": lambda: np.unique(np.asarray(geometry["x"]), return_inverse=True)[1],
+            "row": lambda: np.unique(np.asarray(geometry["y"]), return_inverse=True)[1],
+        }
+        for key, make_default in derived_defaults.items():
+            if key not in geometry:
+                LOGGER.warning(
+                    "Geometry missing '%s' for %s; using a derived default",
+                    key,
+                    self.name,
+                )
+                geometry[key] = make_default()
         return {key: np.asarray(value) for key, value in geometry.items()}
 
     def _load_channels_dict(self) -> dict:

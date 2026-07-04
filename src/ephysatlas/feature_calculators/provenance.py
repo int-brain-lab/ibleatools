@@ -177,6 +177,6 @@ def log_reproduction_command(provenance: Mapping[str, Any]) -> None:
     if provenance.get("ibleatools_git_is_dirty"):
         LOGGER.warning(
             "The editable ibleatools checkout had uncommitted changes; commit %s "
-            "alone will not fully reproduce the calculated features.",
+            "alone might not fully reproduce the calculated features.",
             commit_hash,
         )

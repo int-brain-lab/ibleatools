@@ -61,8 +61,8 @@ class BaseFeatureCalculator(abc.ABC):
         neuropixel_version (int): Neuropixels version used for destriping.
 
     Note:
-        This class is intentionally not a Pydantic model. It owns live reader
-        objects, caches, and arrays; validation is handled at method boundaries
+        It owns live reader objects, caches, and arrays; validation is
+        handled at method boundaries
         where the relevant data are available.
     """
 
@@ -451,7 +451,12 @@ class BaseFeatureCalculator(abc.ABC):
             LOGGER.debug("Updated provenance for %s", file_path)
 
     def _normalize_channel_metadata(self, channels: pd.DataFrame) -> pd.DataFrame:
-        """Ensure channel metadata has a numeric ``channel`` column."""
+        """Ensure channel metadata has a numeric ``channel`` column.
+        This function is needed because sometimes channels are
+        loaded from the probe_directory, which has the column
+        "channel" and if it is loaded using ONE, then it
+        contains rawInd.
+        """
         channels = channels.copy()
         if "channel" not in channels.columns:
             if "rawInd" in channels.columns:
@@ -507,7 +512,15 @@ class BaseFeatureCalculator(abc.ABC):
             if column in features.columns and column != "channel"
         ]
         metadata = metadata.drop(columns=overlap)
-        return features.merge(metadata, on="channel", how="left")
+        merged = features.merge(metadata, on="channel", how="left")
+        # A left merge keeps every feature row; a changed row count means the
+        # channel metadata had duplicate "channel" keys that fanned out rows.
+        if len(merged) != len(features):
+            raise ValueError(
+                f"channel merge changed row count {len(features)} -> {len(merged)}; "
+                "channel metadata likely has duplicate 'channel' values"
+            )
+        return merged
 
     def _manifest_record(
         self,
