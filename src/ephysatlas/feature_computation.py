@@ -656,183 +656,9 @@ def compute_features_from_pid(
         - The function automatically determines the maximum available duration if duration is None.
         - Cached channel information is used unless recompute_channels is True.
         - Target coordinates are added to channel information if not already present.
-        - Features are computed using the online_feature_computation pipeline.
+        - Features are computed via ephysatlas.feature_calculators.IBLPIDFeatureCalculator.
         - Metadata is added to all output files for provenance tracking.
         - The function uses file locking to prevent concurrent writes to channel files.
-    """
-    # Create a dictionary with all the function arguments for setup_output_directory
-
-    if duration is not None:
-        logger.warning(
-            "The 'duration' parameter is deprecated and will be removed in future versions. "
-            "Please use 'duration_ap' and 'duration_lf' instead."
-        )
-        duration_ap = duration_lf = duration
-
-    params = {
-        "pid": pid,
-        "t_start": t_start,
-        "duration_ap": duration_ap,
-        "duration_lf": duration_lf,
-        "output_dir": output_dir,
-    }
-
-    # Log the process ID for debugging and monitoring
-    logger.info(f"ProcessID for the process: {os.getpid()}")
-
-    # Setup the output directory structure (probe_level and snippet_level)
-    probe_level_dir, snippet_level_dir = setup_output_directory(params)
-
-    # Validate input parameters based on ONE client type
-    if one is None:
-        raise ValueError("ONE client instance is required when using PID")
-    elif one.__class__.__name__ == "OneSdsc":
-        # Additional validation for SDSC ONE client
-        assert pid is not None, "PID is required when using SDSC"
-        assert eid is not None, "EID is required when using SDSC"
-        assert probe_name is not None, "Probe name is required when using SDSC"
-
-    # Load electrophysiological data (AP and LF) and channel information from ONE
-    sr_ap, sr_lf, channels = load_data_from_pid(
-        pid, one, probe_level_dir, recompute_channels, eid=eid, probe_name=probe_name
-    )
-
-    # Convert time parameters to float and handle default values
-    t_start = float(t_start) if t_start is not None else 0.0
-
-    # Compute both max times unconditionally so each branch below has them available.
-    # Safe because load_data_from_pid asserts sr_ap and sr_lf are non-None.
-    max_time_ap = sr_ap.ns / sr_ap.fs
-    max_time_lf = sr_lf.ns / sr_lf.fs
-
-    # If duration is None, fall back to the maximum available duration for that band.
-    if duration_ap is None:
-        duration_ap = max_time_ap - t_start
-    else:
-        duration_ap = float(duration_ap)
-
-    if duration_lf is None:
-        duration_lf = min(max_time_ap, max_time_lf) - t_start
-    else:
-        duration_lf = float(duration_lf)
-
-    # Add target coordinates to channel information if not already present
-    # Check if the target information is already present in the channels dataset, if yes then skip it.
-    if (
-        "x_target" not in channels.keys()
-        or "y_target" not in channels.keys()
-        or "z_target" not in channels.keys()
-    ):
-        logger.info(f"channels.keys():  {channels.keys()}")
-        channels = add_target_coordinates(pid=pid, one=one, channels=channels)
-
-    # Ensure channel indexing is present (default to 384 channels if not specified)
-    if ("rawInd" not in channels) and ("channel" not in channels):
-        # assert channels["axial_um"].size == 384
-        # Use the same number of channels as in the "axial_um" key
-        channels["rawInd"] = np.arange(channels["axial_um"].size)
-
-    # Set up the channels file path for saving
-    if probe_level_dir is not None:
-        file_channels = probe_level_dir / "channels.pqt"
-
-    # TODO have another condition that checks if the existing channels file has all channels or if it matches the channels dict.
-    # TODO Make a module channel computation function that takes probe_level_dir AND pid(because it should work for non pid case as well) as an input.
-    # Save channel information to file if it doesn't exist or if recomputation is requested
-    # If I don't go inside this if block, then channel contains "rawInd", and if I go inside this if block,
-    # then "rawInd" gets replaced with "channel".
-    # This is a problem because depending on if the channel file already exists or if I am creating the channels
-    # dictionary for the first time, the "rawInd" column will be different.
-    if probe_level_dir is not None and (
-        not file_channels.exists() or (recompute_channels)
-    ):
-        # TODO - There is something wierd and unexpected with this file locking mechanism (Need to investigate more)
-        try:
-            # Use file locking to prevent concurrent writes
-            lock_file = str(file_channels) + ".lock"
-            lock = FileLock(lock_file, timeout=60)
-            with lock:
-                logger.info(
-                    f"{os.getpid()} Acquired lock for writing the channels dataset."
-                )
-                # Create temporary file for atomic write
-                tmp_file = str(file_channels) + ".tmp"
-                # Convert channels dict to DataFrame and add PID information
-                df_channels = pd.DataFrame(channels).rename(
-                    columns={"rawInd": "channel"}
-                )
-                df_channels["pid"] = pid
-                # Remove the labels columns from df_channels if it exists
-                if "labels" in df_channels.columns:
-                    df_channels = df_channels.drop(columns=["labels"])
-                # Save to temporary file first, then atomically replace
-                df_channels.to_parquet(tmp_file)
-                os.replace(tmp_file, file_channels)
-                logger.info(f"{os.getpid()} Finished writing the channels dataset.")
-        except Exception as e:
-            logger.error(f"Failed to export channels file: {str(e)}")
-            logger.debug("Exception details:", exc_info=True)
-
-    # Compute features using the online feature computation pipeline
-    # TODO I need to add a try except here such that if one of the features fails we still have metadata information
-    df = online_feature_computation(
-        sr_ap=sr_ap,
-        sr_lf=sr_lf,
-        t0=t_start,
-        duration_ap=duration_ap,
-        duration_lf=duration_lf,
-        channels=channels,
-        features_to_compute=features_to_compute,
-        output_dir=snippet_level_dir,
-        scratch_dir=scratch_dir,
-        **kwargs,
-    )
-
-    # Add metadata to all parquet files in the output directory for provenance tracking
-    if output_dir is not None:
-        snippet_attrs = {
-            "pid": pid,
-            "t_start": t_start,
-            "duration_ap": duration_ap,
-            "duration_lf": duration_lf,
-            "base_level_dir": output_dir.as_posix(),
-            "snippet_level_dir": snippet_level_dir.relative_to(output_dir).as_posix(),
-        }
-
-        add_metadata_to_parquet_files(**snippet_attrs)
-
-    if "rawInd" in channels:
-        return df.merge(
-            pd.DataFrame(channels), left_on="channel", right_on="rawInd", how="inner"
-        )
-    else:
-        return df.merge(
-            pd.DataFrame(channels), left_on="channel", right_on="channel", how="inner"
-        )
-
-
-def compute_features_from_pid_oop(
-    pid=None,
-    eid=None,
-    probe_name=None,
-    t_start=None,
-    duration=None,
-    duration_ap=5,
-    duration_lf=25,
-    one=None,
-    features_to_compute=None,
-    output_dir=None,
-    recompute_channels=False,
-    scratch_dir=None,
-    **kwargs,
-):
-    """OOP twin of :func:`compute_features_from_pid` (identical signature/return).
-
-    Delegates to :class:`ephysatlas.feature_calculators.IBLPIDFeatureCalculator`
-    so the procedural entry point and the OOP layer share one implementation.
-    Behavior, outputs, and the returned DataFrame match
-    :func:`compute_features_from_pid`; parity is pinned by
-    ``tests/test_pid_oop_parity.py``. See that function for full arg docs.
     """
     # Lazy import: feature_calculators.base imports compute_features_from_raw from
     # this module, so importing the package at module scope would be circular.
@@ -842,7 +668,7 @@ def compute_features_from_pid_oop(
         SnippetWindow,
     )
 
-    # Deprecated single-duration override (matches compute_features_from_pid).
+    # Deprecated single-duration override.
     if duration is not None:
         logger.warning(
             "The 'duration' parameter is deprecated and will be removed in future versions. "
@@ -852,7 +678,7 @@ def compute_features_from_pid_oop(
 
     logger.info(f"ProcessID for the process: {os.getpid()}")
 
-    # Same input validation as the procedural entry point.
+    # Validate input parameters based on ONE client type.
     if one is None:
         raise ValueError("ONE client instance is required when using PID")
     elif one.__class__.__name__ == "OneSdsc":
@@ -862,8 +688,8 @@ def compute_features_from_pid_oop(
 
     calc = IBLPIDFeatureCalculator(pid=pid, one=one, eid=eid, probe_name=probe_name)
 
-    # Resolve the snippet window exactly like compute_features_from_pid: fall back
-    # to the maximum available duration when a duration is not specified.
+    # Resolve the snippet window: fall back to the maximum available duration
+    # when a duration is not specified.
     t_start = float(t_start) if t_start is not None else 0.0
     max_ap, max_lf = calc.available_duration()
     duration_ap = (max_ap - t_start) if duration_ap is None else float(duration_ap)
