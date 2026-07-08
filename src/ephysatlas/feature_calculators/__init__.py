@@ -9,6 +9,8 @@ Classes
 -------
 BaseFeatureCalculator
     Abstract source interface and shared compute workflow.
+SpikeGlxLikeFeatureCalculator
+    Shared reader-contract logic for spikeglx.Reader-backed sources.
 SpikeGLXFileFeatureCalculator
     Calculator for local AP/LF SpikeGLX files.
 IBLPIDFeatureCalculator
@@ -31,6 +33,7 @@ Examples
 from .base import BaseFeatureCalculator
 from .ibl import IBLPIDFeatureCalculator
 from .spikeglx import SpikeGLXFileFeatureCalculator
+from .spikeglx_like import SpikeGlxLikeFeatureCalculator
 from .types import (
     DestripeOptions,
     DestripedSnippet,
@@ -50,4 +53,5 @@ __all__ = [
     "RawSnippet",
     "SnippetWindow",
     "SpikeGLXFileFeatureCalculator",
+    "SpikeGlxLikeFeatureCalculator",
 ]

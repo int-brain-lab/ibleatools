@@ -1,7 +1,9 @@
 """IBL PID-backed feature calculator.
 
 This module implements a concrete calculator for IBL recordings loaded through
-``brainbox.io.one.SpikeSortingLoader`` and a ONE client.
+``brainbox.io.one.SpikeSortingLoader`` and a ONE client. The reader-contract
+logic (raw snippets, geometry, durations, channel labels) is inherited from
+:class:`ephysatlas.feature_calculators.spikeglx_like.SpikeGlxLikeFeatureCalculator`.
 
 Classes
 -------
@@ -13,21 +15,18 @@ from __future__ import annotations
 
 import logging
 
-import ibldsp.voltage
 import numpy as np
 import pandas as pd
-import scipy.fft
 
 from ephysatlas.feature_computation import add_target_coordinates
 
-from .base import BaseFeatureCalculator
-from .spikeglx import LF_LATENCY_SAMPLES
-from .types import FeatureComputationOptions, RawSnippet, SnippetWindow
+from .spikeglx_like import SpikeGlxLikeFeatureCalculator
+from .types import FeatureComputationOptions
 
 LOGGER = logging.getLogger(__name__)
 
 
-class IBLPIDFeatureCalculator(BaseFeatureCalculator):
+class IBLPIDFeatureCalculator(SpikeGlxLikeFeatureCalculator):
     """Feature calculator for an IBL probe insertion loaded through ONE.
 
     Args:
@@ -61,8 +60,6 @@ class IBLPIDFeatureCalculator(BaseFeatureCalculator):
         self.eid = eid
         self.probe_name = probe_name
         self._ssl = None
-        self._sr_ap = None
-        self._sr_lf = None
         self._channels: dict | None = None
 
     @property
@@ -86,74 +83,9 @@ class IBLPIDFeatureCalculator(BaseFeatureCalculator):
         """Return whether raw electrophysiology should be streamed."""
         return self.one.__class__.__name__ != "OneSdsc"
 
-    @property
-    def sr_ap(self):
-        """Return the lazily loaded AP raw electrophysiology reader."""
-        if self._sr_ap is None:
-            self._sr_ap = self.ssl.raw_electrophysiology(band="ap", stream=self.stream)
-        return self._sr_ap
-
-    @property
-    def sr_lf(self):
-        """Return the lazily loaded LF raw electrophysiology reader."""
-        if self._sr_lf is None:
-            self._sr_lf = self.ssl.raw_electrophysiology(band="lf", stream=self.stream)
-        return self._sr_lf
-
-    def load_raw_snippet(self, window: SnippetWindow) -> RawSnippet:
-        """Read AP/LF snippets from IBL raw electrophysiology readers.
-
-        Args:
-            window (SnippetWindow): Snippet time window to read.
-
-        Returns:
-            RawSnippet: Raw AP/LF arrays shaped ``(channels, samples)`` in volts.
-        """
-        raw_ap = raw_lf = fs_ap = fs_lf = None
-
-        if self.sr_ap is not None:
-            fs_ap = float(self.sr_ap.fs)
-            ns_ap = scipy.fft.next_fast_len(int(fs_ap * window.duration_ap), real=True)
-            n0_ap = int(fs_ap * window.t_start)
-            n_channels_ap = self.sr_ap.nc - self.sr_ap.nsync
-            raw_ap = self.sr_ap[slice(n0_ap, n0_ap + ns_ap), :n_channels_ap].T
-
-        if self.sr_lf is not None:
-            fs_lf = float(self.sr_lf.fs)
-            ns_lf = scipy.fft.next_fast_len(int(fs_lf * window.duration_lf), real=True)
-            n0_lf = int(fs_lf * window.t_start) + LF_LATENCY_SAMPLES
-            n_channels_lf = self.sr_lf.nc - self.sr_lf.nsync
-            raw_lf = self.sr_lf[slice(n0_lf, n0_lf + ns_lf), :n_channels_lf].T
-
-        return RawSnippet(raw_ap=raw_ap, raw_lf=raw_lf, fs_ap=fs_ap, fs_lf=fs_lf)
-
-    def load_geometry(self) -> dict[str, np.ndarray]:
-        """Load ibldsp geometry from AP, falling back to LF.
-
-        Returns:
-            dict[str, np.ndarray]: Geometry dictionary compatible with ibldsp.
-        """
-        reader = self.sr_ap if self.sr_ap is not None else self.sr_lf
-        geometry = dict(reader.geometry)
-        n_channels = len(geometry["x"])
-        # Fill missing geometry keys with derived defaults, but warn first: a
-        # missing sample_shift/shank silently changes destriping, so a real reader
-        # lacking these usually signals a problem worth surfacing.
-        derived_defaults = {
-            "sample_shift": lambda: np.zeros(n_channels),
-            "shank": lambda: np.zeros(n_channels),
-            "col": lambda: np.unique(np.asarray(geometry["x"]), return_inverse=True)[1],
-            "row": lambda: np.unique(np.asarray(geometry["y"]), return_inverse=True)[1],
-        }
-        for key, make_default in derived_defaults.items():
-            if key not in geometry:
-                LOGGER.warning(
-                    "Geometry missing '%s' for %s; using a derived default",
-                    key,
-                    self.name,
-                )
-                geometry[key] = make_default()
-        return {key: np.asarray(value) for key, value in geometry.items()}
+    def _open_reader(self, band: str):
+        """Open the IBL raw-electrophysiology reader for a band."""
+        return self.ssl.raw_electrophysiology(band=band, stream=self.stream)
 
     def _load_channels_dict(self) -> dict:
         """Load channels once from ``SpikeSortingLoader`` with geometry fallback."""
@@ -189,12 +121,6 @@ class IBLPIDFeatureCalculator(BaseFeatureCalculator):
         if "channel" not in df_channels.columns and "rawInd" in df_channels.columns:
             df_channels["channel"] = df_channels["rawInd"]
         return df_channels
-
-    def available_duration(self) -> tuple[float | None, float | None]:
-        """Return AP and LF durations from the IBL raw readers."""
-        max_ap = self.sr_ap.ns / self.sr_ap.fs if self.sr_ap is not None else None
-        max_lf = self.sr_lf.ns / self.sr_lf.fs if self.sr_lf is not None else None
-        return max_ap, max_lf
 
     def enrich_channel_metadata(
         self, channels: pd.DataFrame, options: FeatureComputationOptions
@@ -236,30 +162,3 @@ class IBLPIDFeatureCalculator(BaseFeatureCalculator):
             )
             return channels
         return pd.DataFrame(enriched)
-
-    def _resolve_channel_labels(
-        self,
-        raw: RawSnippet,
-        channels: pd.DataFrame,
-        channel_labels: np.ndarray | None = None,
-    ) -> np.ndarray | None:
-        """Resolve bad-channel labels, preferring whole-recording cbin detection.
-
-        Mirrors ``online_feature_computation``: explicit/stored labels win, then
-        ``detect_bad_channels_cbin`` when a local ``.cbin`` is available (e.g.
-        pre-downloaded or SDSC readers whose ``file_bin`` is set), otherwise fall
-        back to the base-class snippet-level detection. Streamed readers have
-        ``file_bin=None`` and therefore keep using the snippet fallback.
-        """
-        has_stored = (
-            channel_labels is not None
-            or "labels" in channels.columns
-            or "channel_labels" in channels.columns
-        )
-        if (
-            not has_stored
-            and self.sr_ap is not None
-            and self.sr_ap.file_bin is not None
-        ):
-            return ibldsp.voltage.detect_bad_channels_cbin(self.sr_ap.file_bin)
-        return super()._resolve_channel_labels(raw, channels, channel_labels)

@@ -90,7 +90,7 @@ class TestIBLFeatureCalculator(unittest.TestCase):
         reader.geometry = {"x": np.zeros(N_CH), "y": np.arange(N_CH, dtype=float)}
         calc._sr_ap = reader
         with self.assertLogs(
-            "ephysatlas.feature_calculators.ibl", level="WARNING"
+            "ephysatlas.feature_calculators.spikeglx_like", level="WARNING"
         ) as cm:
             geometry = calc.load_geometry()
         self.assertTrue(any("sample_shift" in message for message in cm.output))
