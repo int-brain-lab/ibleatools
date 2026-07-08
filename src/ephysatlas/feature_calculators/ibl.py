@@ -105,6 +105,9 @@ class IBLPIDFeatureCalculator(SpikeGlxLikeFeatureCalculator):
             channels["axial_um"] = geometry["y"]
         if "lateral_um" not in channels and "x" in geometry:
             channels["lateral_um"] = geometry["x"]
+        # shank feeds the physical-site channel merge in the base class.
+        if "shank" not in channels and "shank" in geometry:
+            channels["shank"] = geometry["shank"]
         if "rawInd" not in channels and "channel" not in channels:
             channels["rawInd"] = np.arange(len(geometry["x"]))
         self._channels = channels

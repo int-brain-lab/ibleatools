@@ -137,8 +137,23 @@ class TestComputeFeaturesFromPid(unittest.TestCase):
             )
 
             # Channel metadata and trajectory are merged into the returned frame.
-            for col in ("axial_um", "lateral_um", "x_target", "y_target", "z_target"):
+            for col in (
+                "axial_um",
+                "lateral_um",
+                "shank",
+                "x_target",
+                "y_target",
+                "z_target",
+            ):
                 self.assertIn(col, df.columns)
+
+            # Physical-site columns (the merge keys) come from geometry: this is a
+            # single-column probe (lateral_um == 0, shank == 0, axial_um == y).
+            np.testing.assert_allclose(
+                df["axial_um"].to_numpy(), np.arange(N_CH) * 20.0
+            )
+            np.testing.assert_array_equal(df["lateral_um"].to_numpy(), np.zeros(N_CH))
+            np.testing.assert_array_equal(df["shank"].to_numpy(), np.zeros(N_CH))
 
             # Values are populated (not all-NaN).
             self.assertTrue(np.isfinite(df["rms_lf"].to_numpy(float)).all())
@@ -148,7 +163,7 @@ class TestComputeFeaturesFromPid(unittest.TestCase):
             channels_pqt = out / PID / "channels.pqt"
             self.assertTrue(channels_pqt.exists())
             cdf = pd.read_parquet(channels_pqt)
-            for col in ("channel", "axial_um", "lateral_um", "x_target"):
+            for col in ("channel", "axial_um", "lateral_um", "shank", "x_target"):
                 self.assertIn(col, cdf.columns)
 
             # Snippet manifest .attrs the aggregation layer reads.

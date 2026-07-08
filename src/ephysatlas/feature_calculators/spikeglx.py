@@ -84,8 +84,9 @@ class SpikeGLXFileFeatureCalculator(SpikeGlxLikeFeatureCalculator):
         """Build channel metadata from SpikeGLX geometry.
 
         Returns:
-            pd.DataFrame: Columns ``channel``, ``rawInd``, ``axial_um``, and
-            ``lateral_um``.
+            pd.DataFrame: Columns ``channel``, ``rawInd``, ``axial_um``,
+            ``lateral_um``, and ``shank`` (``shank`` feeds the physical-site
+            channel merge in the base class).
         """
         geometry = self.load_geometry()
         n_channels = len(geometry["x"])
@@ -95,6 +96,7 @@ class SpikeGLXFileFeatureCalculator(SpikeGlxLikeFeatureCalculator):
                 "rawInd": np.arange(n_channels),
                 "axial_um": np.asarray(geometry["y"], dtype=float),
                 "lateral_um": np.asarray(geometry["x"], dtype=float),
+                "shank": np.asarray(geometry["shank"], dtype=float),
             }
         )
 

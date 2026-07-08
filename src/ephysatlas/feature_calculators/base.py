@@ -313,6 +313,9 @@ class BaseFeatureCalculator(abc.ABC):
             computed_features=computed_features,
             provenance=provenance,
         )
+        # Stamp physical coordinates from geometry, then merge channel metadata on
+        # the physical site (axial_um, lateral_um, shank)
+        features = self._attach_physical_coordinates(features, geometry)
         features = self._merge_channel_metadata(features, channels)
         manifest_record = self._manifest_record(
             window=window,
@@ -498,29 +501,122 @@ class BaseFeatureCalculator(abc.ABC):
         LOGGER.info("Wrote channels file to %s", file_channels)
         return file_channels
 
+    def _attach_physical_coordinates(
+        self, features: pd.DataFrame, geometry: dict
+    ) -> pd.DataFrame:
+        """Stamp ``axial_um``/``lateral_um``/``shank`` onto the feature table.
+
+        The feature table's ``channel`` column is the positional row index into
+        the destriped snippet (``np.arange`` in ``ephysatlas.features``), which is
+        the same ordering as ``geometry``. We look each row's coordinates up *by
+        its channel value* (not by row position), so a reordered or subset table --
+        e.g. the waveforms family, which returns one row per spiking channel --
+        still receives the correct site.
+
+        Args:
+            features (pd.DataFrame): Feature table with a numeric ``channel`` column.
+            geometry (dict): Reader geometry; ``x``/``y``/``shank`` are indexed by
+                channel.
+
+        Returns:
+            pd.DataFrame: ``features`` with ``axial_um``/``lateral_um``/``shank``.
+
+        Raises:
+            ValueError: If ``features`` has no ``channel`` column, or a ``channel``
+                value cannot index ``geometry``.
+        """
+        # compute_features_from_raw always provides "channel" (it is the merge key
+        # joining the feature families). A missing column means the engine contract
+        # is broken; fail loud rather than silently dropping all channel metadata
+        # downstream (the merge would also no-op).
+        if "channel" not in features.columns:
+            raise ValueError(
+                "feature table is missing the 'channel' column required to map "
+                "onto geometry (compute_features_from_raw should always provide it)"
+            )
+
+        n_channels = len(np.asarray(geometry["x"]))
+        channel = pd.to_numeric(features["channel"], errors="coerce")
+        if channel.isna().any() or ((channel < 0) | (channel >= n_channels)).any():
+            raise ValueError(
+                "feature 'channel' values must be integers in "
+                f"[0, {n_channels}) to map onto geometry"
+            )
+
+        idx = channel.to_numpy(dtype=int)
+        shank = np.asarray(geometry.get("shank", np.zeros(n_channels)))
+        features = features.copy()
+        features["axial_um"] = np.asarray(geometry["y"])[idx]
+        features["lateral_um"] = np.asarray(geometry["x"])[idx]
+        features["shank"] = shank[idx]
+        return features
+
+    @staticmethod
+    def _physical_site_key(channels: pd.DataFrame) -> pd.Series:
+        """Build an integer-um rounded ``(axial_um, lateral_um, shank)`` join key.
+
+        Coordinates from the feature side (reader geometry) and the metadata side
+        (ONE/ALF or geometry) originate from the same probe geometry but may carry
+        tiny float differences; rounding to the nearest micrometre absorbs that
+        without collapsing distinct sites (which are >= ~16 um apart).
+        """
+        axial = np.round(np.asarray(channels["axial_um"], dtype=float)).astype(int)
+        lateral = np.round(np.asarray(channels["lateral_um"], dtype=float)).astype(int)
+        shank = np.asarray(channels["shank"], dtype=float).astype(int)
+        parts = pd.DataFrame(
+            {"axial": axial, "lateral": lateral, "shank": shank}, index=channels.index
+        )
+        return (
+            parts["axial"].astype(str)
+            + "_"
+            + parts["lateral"].astype(str)
+            + "_"
+            + parts["shank"].astype(str)
+        )
+
     def _merge_channel_metadata(
         self, features: pd.DataFrame, channels: pd.DataFrame
     ) -> pd.DataFrame:
-        """Merge channel metadata onto a feature table without overwriting features."""
-        if "channel" not in features.columns or "channel" not in channels.columns:
+        """Merge channel metadata onto a feature table on the physical channel site.
+
+        Channels are matched on ``(axial_um, lateral_um, shank)`` -- the physical
+        identity of a recording site -- instead of on ``channel``/``rawInd``, whose
+        numbering is unreliable across data sources. Feature columns win over
+        metadata columns of the same name; the positional ``channel`` from the
+        feature table is preserved and ``rawInd`` is carried as descriptive
+        metadata only.
+        """
+        keys = ["axial_um", "lateral_um", "shank"]
+        if not all(key in features.columns for key in keys) or not all(
+            key in channels.columns for key in keys
+        ):
+            # Physical coordinates missing on one side: nothing to join on.
             return features
 
+        features = features.copy()
         metadata = channels.copy()
+        features["_site_key"] = self._physical_site_key(features)
+        metadata["_site_key"] = self._physical_site_key(metadata)
+
+        # Drop metadata columns that duplicate feature columns (keep the feature
+        # values); the "_site_key" join column is preserved on both sides.
         overlap = [
             column
             for column in metadata.columns
-            if column in features.columns and column != "channel"
+            if column in features.columns and column != "_site_key"
         ]
         metadata = metadata.drop(columns=overlap)
-        merged = features.merge(metadata, on="channel", how="left")
+
+        merged = features.merge(metadata, on="_site_key", how="left")
         # A left merge keeps every feature row; a changed row count means the
-        # channel metadata had duplicate "channel" keys that fanned out rows.
+        # channel metadata had duplicate physical sites that fanned out rows.
         if len(merged) != len(features):
             raise ValueError(
                 f"channel merge changed row count {len(features)} -> {len(merged)}; "
-                "channel metadata likely has duplicate 'channel' values"
+                "channel metadata likely has duplicate physical sites "
+                "(axial_um, lateral_um, shank)"
             )
-        return merged
+        return merged.drop(columns="_site_key")
 
     def _manifest_record(
         self,

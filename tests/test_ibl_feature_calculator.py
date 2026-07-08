@@ -96,14 +96,113 @@ class TestIBLFeatureCalculator(unittest.TestCase):
         self.assertTrue(any("sample_shift" in message for message in cm.output))
         np.testing.assert_array_equal(geometry["sample_shift"], np.zeros(N_CH))
 
-    def test_merge_channel_metadata_raises_on_duplicate_channel(self):
+    def test_merge_channel_metadata_matches_on_physical_site_not_index(self):
+        # The crux of oliche's review: metadata must land on the physical site
+        # (axial_um, lateral_um, shank), never on channel/rawInd. Here the metadata
+        # rows are permuted and rawInd is deliberately unrelated to the positional
+        # channel, so a positional/rawInd join would mis-align.
         calc = IBLPIDFeatureCalculator(pid=PID, one=mock.MagicMock())
-        features = pd.DataFrame({"channel": [0, 1], "feat": [1.0, 2.0]})
+        features = pd.DataFrame(
+            {
+                "channel": [0, 1, 2, 3],
+                "axial_um": [0.0, 0.0, 20.0, 20.0],
+                "lateral_um": [0.0, 32.0, 0.0, 32.0],
+                "shank": [0, 0, 0, 0],
+                "feat": [10.0, 11.0, 12.0, 13.0],
+            }
+        )
+        # Rows in a different order; sites: (20,32),(0,32),(0,0),(20,0).
         channels = pd.DataFrame(
-            {"channel": [0, 0, 1], "axial_um": [0.0, 0.0, 20.0]}
-        )  # duplicate channel 0 would fan out the left merge
+            {
+                "axial_um": [20.0, 0.0, 0.0, 20.0],
+                "lateral_um": [32.0, 32.0, 0.0, 0.0],
+                "shank": [0, 0, 0, 0],
+                "rawInd": [30, 31, 32, 33],
+                "region": ["d", "b", "a", "c"],
+            }
+        )
+        merged = calc._merge_channel_metadata(features, channels)
+        # Row order and feature values come from the feature table unchanged.
+        np.testing.assert_array_equal(merged["channel"], [0, 1, 2, 3])
+        np.testing.assert_array_equal(merged["feat"], [10.0, 11.0, 12.0, 13.0])
+        # Metadata lands by physical site, not by index: ch0=(0,0)->a, ch1=(0,32)->b,
+        # ch2=(20,0)->c, ch3=(20,32)->d; rawInd is carried but was NOT the join key.
+        self.assertEqual(list(merged["region"]), ["a", "b", "c", "d"])
+        np.testing.assert_array_equal(merged["rawInd"], [32, 31, 33, 30])
+
+    def test_merge_channel_metadata_tolerates_float_jitter(self):
+        # Coordinates from the two sources may differ by sub-micron float jitter;
+        # the rounded site key must still match them.
+        calc = IBLPIDFeatureCalculator(pid=PID, one=mock.MagicMock())
+        features = pd.DataFrame(
+            {
+                "channel": [0, 1],
+                "axial_um": [0.0, 20.0],
+                "lateral_um": [0.0, 0.0],
+                "shank": [0, 0],
+                "feat": [1.0, 2.0],
+            }
+        )
+        channels = pd.DataFrame(
+            {
+                "axial_um": [0.3, 19.8],
+                "lateral_um": [0.1, -0.2],
+                "shank": [0, 0],
+                "rawInd": [7, 8],
+                "region": ["a", "b"],
+            }
+        )
+        merged = calc._merge_channel_metadata(features, channels)
+        self.assertEqual(list(merged["region"]), ["a", "b"])
+        np.testing.assert_array_equal(merged["rawInd"], [7, 8])
+
+    def test_merge_channel_metadata_raises_on_duplicate_site(self):
+        calc = IBLPIDFeatureCalculator(pid=PID, one=mock.MagicMock())
+        features = pd.DataFrame(
+            {
+                "channel": [0, 1],
+                "axial_um": [0.0, 20.0],
+                "lateral_um": [0.0, 0.0],
+                "shank": [0, 0],
+                "feat": [1.0, 2.0],
+            }
+        )
+        # Two metadata rows share the physical site (0, 0, 0) -> fans out the merge.
+        channels = pd.DataFrame(
+            {
+                "axial_um": [0.0, 0.0, 20.0],
+                "lateral_um": [0.0, 0.0, 0.0],
+                "shank": [0, 0, 0],
+                "rawInd": [0, 1, 2],
+            }
+        )
         with self.assertRaises(ValueError):
             calc._merge_channel_metadata(features, channels)
+
+    def test_attach_physical_coordinates_handles_waveforms_subset(self):
+        # features.spikes() returns one row per spiking channel in groupby order --
+        # a reordered subset. Coordinates must be looked up by channel value.
+        calc = IBLPIDFeatureCalculator(pid=PID, one=mock.MagicMock())
+        geometry = _geometry()  # 4 channels
+        features = pd.DataFrame({"channel": [3, 1, 2], "spike_count": [5, 7, 9]})
+        stamped = calc._attach_physical_coordinates(features, geometry)
+        np.testing.assert_array_equal(stamped["axial_um"], geometry["y"][[3, 1, 2]])
+        np.testing.assert_array_equal(stamped["lateral_um"], geometry["x"][[3, 1, 2]])
+        np.testing.assert_array_equal(stamped["shank"], [0, 0, 0])
+
+    def test_attach_physical_coordinates_rejects_out_of_range_channel(self):
+        calc = IBLPIDFeatureCalculator(pid=PID, one=mock.MagicMock())
+        features = pd.DataFrame({"channel": [0, 99]})  # 99 exceeds geometry size
+        with self.assertRaises(ValueError):
+            calc._attach_physical_coordinates(features, _geometry())
+
+    def test_attach_physical_coordinates_raises_without_channel(self):
+        # A missing 'channel' column means the engine contract is broken; fail loud
+        # rather than silently dropping all channel metadata downstream.
+        calc = IBLPIDFeatureCalculator(pid=PID, one=mock.MagicMock())
+        features = pd.DataFrame({"feat": [1.0, 2.0]})  # no 'channel' column
+        with self.assertRaises(ValueError):
+            calc._attach_physical_coordinates(features, _geometry())
 
 
 if __name__ == "__main__":

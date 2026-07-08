@@ -75,11 +75,13 @@ class TestSpikeGLXFileFeatureCalculator(unittest.TestCase):
         calc._sr_ap = _FakeReader()
         metadata = calc.load_channel_metadata()
         self.assertEqual(
-            list(metadata.columns), ["channel", "rawInd", "axial_um", "lateral_um"]
+            list(metadata.columns),
+            ["channel", "rawInd", "axial_um", "lateral_um", "shank"],
         )
         np.testing.assert_array_equal(metadata["channel"], np.arange(N_CH))
         np.testing.assert_array_equal(metadata["axial_um"], _geometry()["y"])
         np.testing.assert_array_equal(metadata["lateral_um"], _geometry()["x"])
+        np.testing.assert_array_equal(metadata["shank"], _geometry()["shank"])
 
     def test_enrich_skipped_when_not_included(self):
         calc = SpikeGLXFileFeatureCalculator(ap_file="probe.ap.bin", traj_dict=None)
