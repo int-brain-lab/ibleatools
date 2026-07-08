@@ -745,6 +745,12 @@ def compute_features_from_file(
 ):
     """Compute features from .cbin files.
 
+    Features are computed via
+    :class:`ephysatlas.feature_calculators.SpikeGLXFileFeatureCalculator`, which
+    reads the AP/LF ``.cbin`` files through ``spikeglx.Reader`` and shares the
+    computation engine (:func:`compute_features_from_raw`) with
+    :func:`compute_features_from_pid`.
+
     Args:
         ap_file (str, optional): Path to an AP `.cbin` file. Must be supplied if
             ``lf_file`` is ``None``.
@@ -760,7 +766,7 @@ def compute_features_from_file(
             ``y``, ``z``, ``depth``, ``theta``, ``phi`` for adding target
             coordinate columns.
         features_to_compute (list, optional): Feature families to compute. ``None``
-            defers to :func:`online_feature_computation`.
+            lets the feature calculator pick defaults from the available bands.
         output_dir (Path, optional): Root directory for cached outputs. A
             snippet-level directory is created beneath it.
         scratch_dir (Path, optional): Location for temporary scratch files
@@ -770,147 +776,22 @@ def compute_features_from_file(
             the current CAR-style LF destriping; use ``None`` to disable LF
             spatial filtering.
         **kwargs: Additional keyword arguments forwarded to
-            :func:`online_feature_computation`.
+            :func:`compute_features_from_raw`.
 
     Returns:
         pd.DataFrame: Aggregated feature table for the requested time range.
 
     Raises:
         ValueError: If neither AP nor LF file is provided.
-    """
-
-    # Validate input
-    if (ap_file is None) and (lf_file is None):
-        raise ValueError("Both AP and LF .cbin files must be provided")
-
-    if duration is not None:
-        logger.warning(
-            "The 'duration' parameter is deprecated and will be removed in future versions. "
-            "Please use 'duration_ap' and 'duration_lf' instead."
-        )
-        duration_ap = duration_lf = duration
-
-    # Create a dictionary with all the function arguments
-    params = {
-        "filename": ap_file if ap_file is not None else lf_file,
-        "t_start": t_start,
-        "duration_ap": duration_ap,
-        "duration_lf": duration_lf,
-        "output_dir": output_dir,
-    }
-
-    # Log the process ID for debugging and monitoring
-    logger.info(f"ProcessID for the process: {os.getpid()}")
-
-    # Setup the output directory structure (probe_level and snippet_level)
-    probe_level_dir, snippet_level_dir = setup_output_directory(params)
-
-    # Load data from files
-    sr_ap, sr_lf, channels = load_data_from_files(ap_file, lf_file)
-
-    # Convert time parameters to float
-    t_start = float(t_start) if t_start is not None else 0.0
-
-    # If duration is None, calculate the maximum available duration from both AP and LF data
-    if duration_ap is None:
-        max_time_ap = sr_ap.ns / sr_ap.fs
-        duration_ap = max_time_ap - t_start
-    if duration_lf is None:
-        max_time_lf = sr_lf.ns / sr_lf.fs
-        duration_lf = min(max_time_ap, max_time_lf) - t_start
-    else:
-        duration_ap = float(duration_ap)
-        duration_lf = float(duration_lf)
-
-    # Compute features
-    df = online_feature_computation(
-        sr_ap=sr_ap,
-        sr_lf=sr_lf,
-        t0=t_start,
-        duration_ap=duration_ap,
-        duration_lf=duration_lf,
-        channels=channels,
-        features_to_compute=features_to_compute,
-        output_dir=snippet_level_dir,
-        scratch_dir=scratch_dir,
-        lf_k_filter=lf_k_filter,
-        **kwargs,
-    )
-
-    # Add xyz target information if trajectory dictionary is provided
-    if traj_dict is not None:
-        channels = add_target_coordinates(traj_dict=traj_dict, channels=channels)
-    else:
-        logger.warning(
-            "No trajectory information available, skipping xyz target addition"
-        )
-
-    # Export the channels file
-    # Note - this is different from the compute_features_from_pid case because we overwrite the channels file every time.
-    if probe_level_dir is not None:
-        file_channels = probe_level_dir / "channels.pqt"
-        df_channels = pd.DataFrame(channels).rename(columns={"rawInd": "channel"})
-        df_channels.to_parquet(file_channels)
-    else:
-        df_channels = pd.DataFrame(channels).rename(columns={"rawInd": "channel"})
-
-    # Add metadata to all parquet files in the output directory for provenance tracking
-    if output_dir is not None:
-        snippet_attrs = {
-            "filename": ap_file if ap_file is not None else lf_file,
-            "t_start": t_start,
-            "duration_ap": duration_ap,
-            "duration_lf": duration_lf,
-            "base_level_dir": output_dir.as_posix(),
-            "snippet_level_dir": snippet_level_dir.relative_to(output_dir).as_posix(),
-        }
-
-        add_metadata_to_parquet_files(**snippet_attrs)
-
-    if "rawInd" in channels:
-        return df.merge(
-            pd.DataFrame(channels), left_on="channel", right_on="rawInd", how="inner"
-        )
-    else:
-        return df.merge(
-            pd.DataFrame(channels), left_on="channel", right_on="channel", how="inner"
-        )
-
-
-def compute_features_from_file_oop(
-    ap_file=None,
-    lf_file=None,
-    t_start=None,
-    duration=None,
-    duration_ap=5,
-    duration_lf=25,
-    traj_dict=None,
-    features_to_compute=None,
-    output_dir=None,
-    scratch_dir=None,
-    lf_k_filter=False,
-    **kwargs,
-):
-    """OOP twin of :func:`compute_features_from_file` (identical signature/return).
-
-    Delegates to
-    :class:`ephysatlas.feature_calculators.SpikeGLXFileFeatureCalculator` so the
-    procedural entry point and the OOP layer share one implementation. The
-    returned DataFrame matches :func:`compute_features_from_file`; parity is
-    pinned by ``tests/test_file_oop_parity.py``. See that function for full arg
-    docs.
 
     Note:
-        The on-disk directory *layout* differs from the procedural function. The
-        OOP calculator names the probe directory after the AP/LF file stem
-        (``pid = calculator.name``) via ``setup_output_directory``, whereas
-        :func:`compute_features_from_file` uses an md5 hash of the filename and a
-        ``probe_unknown_pid_*`` snippet directory. The returned DataFrame, the
-        ``channels.pqt`` contents, and the per-snippet parquet ``.attrs`` the
-        aggregation layer reads (``filename``/``t_start``/``duration_ap``/
-        ``duration_lf``) are equivalent; only the directory names differ.
-        Reconciling the layout is deferred to the PR that swaps the procedural
-        body onto this implementation (the file path has no Python callers).
+        The on-disk output layout is named after the AP/LF file stem
+        (``pid = calculator.name``) via
+        :func:`ephysatlas.utils.setup_output_directory`. This replaces the
+        earlier md5-hash probe directory and ``probe_unknown_pid_*`` snippet
+        directory; the returned DataFrame, the ``channels.pqt`` contents, and the
+        per-snippet parquet ``.attrs`` the aggregation layer reads
+        (``filename``/``t_start``/``duration_ap``/``duration_lf``) are unchanged.
     """
     # Lazy import: feature_calculators.base imports compute_features_from_raw from
     # this module, so importing the package at module scope would be circular.
@@ -920,11 +801,11 @@ def compute_features_from_file_oop(
         SpikeGLXFileFeatureCalculator,
     )
 
-    # Same input validation as the procedural entry point.
+    # Validate input.
     if (ap_file is None) and (lf_file is None):
         raise ValueError("Both AP and LF .cbin files must be provided")
 
-    # Deprecated single-duration override (matches compute_features_from_file).
+    # Deprecated single-duration override.
     if duration is not None:
         logger.warning(
             "The 'duration' parameter is deprecated and will be removed in future versions. "
@@ -935,14 +816,13 @@ def compute_features_from_file_oop(
     logger.info(f"ProcessID for the process: {os.getpid()}")
 
     # The trajectory dict is supplied to the calculator (not per snippet call);
-    # include_trajectory mirrors the procedural behavior of only adding target
-    # coordinates when a trajectory dict is provided.
+    # include_trajectory below only adds target coordinates when it is provided.
     calc = SpikeGLXFileFeatureCalculator(
         ap_file=ap_file, lf_file=lf_file, traj_dict=traj_dict
     )
 
-    # Resolve the snippet window exactly like compute_features_from_file: fall back
-    # to the maximum available duration when a duration is not specified.
+    # Resolve the snippet window: fall back to the maximum available duration
+    # when a duration is not specified.
     t_start = float(t_start) if t_start is not None else 0.0
     max_ap, max_lf = calc.available_duration()
     duration_ap = (max_ap - t_start) if duration_ap is None else float(duration_ap)
@@ -957,8 +837,8 @@ def compute_features_from_file_oop(
         features_to_compute=features_to_compute,
         output_dir=output_dir,
         scratch_dir=scratch_dir,
-        # compute_features_from_file overwrites channels.pqt on every call, so force
-        # a rewrite rather than the base class's conditional (keep-if-exists) write.
+        # The file path overwrites channels.pqt on every call, so force a rewrite
+        # rather than the base class's conditional (keep-if-exists) write.
         recompute_channels=True,
         include_trajectory=traj_dict is not None,
         lf_k_filter=lf_k_filter,
@@ -968,7 +848,7 @@ def compute_features_from_file_oop(
 
     # Preserve the parquet-metadata side effect the aggregation layer relies on
     # (utils.get_aggregated_snippets_df reads these .attrs to build the manifest).
-    # The file path stamps "filename" (not "pid"), matching compute_features_from_file.
+    # The file path stamps "filename" (compute_features_from_pid stamps "pid").
     if output_dir is not None and result.snippet_level_dir is not None:
         snippet_attrs = {
             "filename": ap_file if ap_file is not None else lf_file,
