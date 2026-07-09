@@ -25,7 +25,7 @@ import numpy as np
 import pandas as pd
 from filelock import FileLock
 
-from ephysatlas.feature_computation import compute_features_from_raw
+from ephysatlas.feature_computation import compute_features_from_raw, destripe_ap_lf
 from ephysatlas.utils import setup_output_directory
 
 from .provenance import collect_ibleatools_provenance, log_reproduction_command
@@ -188,29 +188,20 @@ class BaseFeatureCalculator(abc.ABC):
         labels = self._resolve_channel_labels(raw, channels, channel_labels)
         np_version = options.neuropixel_version or self.neuropixel_version
 
-        des_ap = None
-        if raw.raw_ap is not None:
-            des_ap = ibldsp.voltage.destripe(
-                raw.raw_ap,
-                fs=raw.fs_ap,
-                h=geometry,
-                neuropixel_version=np_version,
-                channel_labels=labels,
-                k_filter=options.ap_k_filter,
-                nshank=options.nshank,
-            )
-
-        des_lf = None
-        if raw.raw_lf is not None:
-            des_lf = ibldsp.voltage.destripe_lfp(
-                raw.raw_lf,
-                fs=raw.fs_lf,
-                h=geometry,
-                neuropixel_version=np_version,
-                channel_labels=labels,
-                k_filter=options.lf_k_filter,
-                nshank=options.nshank,
-            )
+        # Delegate to the shared destriping primitive so this debug/inspection path
+        # cannot diverge from the production feature engine.
+        des_ap, des_lf = destripe_ap_lf(
+            raw_ap=raw.raw_ap,
+            raw_lf=raw.raw_lf,
+            fs_ap=raw.fs_ap,
+            fs_lf=raw.fs_lf,
+            geometry=geometry,
+            channel_labels=labels,
+            neuropixel_version=np_version,
+            ap_k_filter=options.ap_k_filter,
+            lf_k_filter=options.lf_k_filter,
+            nshank=options.nshank,
+        )
 
         return DestripedSnippet(
             raw=raw,

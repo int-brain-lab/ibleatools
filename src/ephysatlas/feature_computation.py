@@ -875,6 +875,99 @@ def compute_features_from_file(
     return result.features
 
 
+def _validate_arrays_and_labels(arr_ap, arr_lf, geometry, fs_ap, fs_lf, channel_labels):
+    """Validate AP/LF arrays against geometry/sampling rates and default labels.
+
+    Shared by :func:`compute_features_from_raw` (raw arrays) and
+    :func:`compute_features_from_destriped` (destriped arrays); both require the
+    same shapes/geometry alignment. Returns ``channel_labels``, defaulted to
+    zeros when ``None``.
+    """
+    if arr_ap is None and arr_lf is None:
+        raise ValueError("One of the AP or LF data must be provided")
+    if arr_ap is not None and arr_lf is not None:
+        assert arr_ap.shape[0] == arr_lf.shape[0], (
+            "Number of channels must match between AP and LF data"
+        )
+    if arr_ap is not None:
+        assert arr_ap.ndim == 2, "Input array must be 2D"
+        assert arr_ap.shape[0] == len(geometry["x"]) == len(geometry["y"]), (
+            "Number of channels must match geometry"
+        )
+        assert fs_ap > 0, "Sampling frequencies must be positive"
+    if arr_lf is not None:
+        assert arr_lf.ndim == 2, "Input array must be 2D"
+        assert arr_lf.shape[0] == len(geometry["x"]) == len(geometry["y"]), (
+            "Number of channels must match geometry"
+        )
+        assert fs_lf > 0, "Sampling frequencies must be positive"
+    if channel_labels is None:
+        channel_labels = (
+            np.zeros(arr_ap.shape[0])
+            if arr_ap is not None
+            else np.zeros(arr_lf.shape[0])
+        )
+    return channel_labels
+
+
+def destripe_ap_lf(
+    raw_ap,
+    raw_lf,
+    fs_ap=None,
+    fs_lf=None,
+    geometry=None,
+    channel_labels=None,
+    neuropixel_version=1,
+    ap_k_filter=False,
+    lf_k_filter=False,
+    nshank=1,
+):
+    """Destripe raw AP and LF snippets with ibldsp.
+
+    Single source of truth for destriping, shared by
+    :func:`compute_features_from_raw` and
+    :meth:`ephysatlas.feature_calculators.base.BaseFeatureCalculator.get_destriped_snippet`,
+    so the feature engine and the debug/inspection path cannot diverge.
+
+    Args:
+        raw_ap, raw_lf (np.ndarray | None): Raw AP/LF arrays shaped
+            ``(n_channels, n_samples)``; ``None`` skips that band.
+        fs_ap, fs_lf (float): Sampling frequencies (Hz).
+        geometry (dict): Channel geometry passed to ibldsp.
+        channel_labels (np.ndarray | None): Bad-channel labels.
+        neuropixel_version (int): Neuropixels version.
+        ap_k_filter (bool): Spatial-filter mode for AP destriping.
+        lf_k_filter (bool | None): Spatial-filter mode for LF destriping.
+        nshank (int): Number of probe shanks.
+
+    Returns:
+        tuple[np.ndarray | None, np.ndarray | None]: ``(des_ap, des_lf)``.
+    """
+    des_ap = None
+    if raw_ap is not None:
+        des_ap = ibldsp.voltage.destripe(
+            raw_ap,
+            fs=fs_ap,
+            h=geometry,
+            neuropixel_version=neuropixel_version,
+            channel_labels=channel_labels,
+            k_filter=ap_k_filter,
+            nshank=nshank,
+        )
+    des_lf = None
+    if raw_lf is not None:
+        des_lf = ibldsp.voltage.destripe_lfp(
+            raw_lf,
+            fs=fs_lf,
+            h=geometry,
+            neuropixel_version=neuropixel_version,
+            channel_labels=channel_labels,
+            k_filter=lf_k_filter,
+            nshank=nshank,
+        )
+    return des_ap, des_lf
+
+
 # TODO - I can make this function more modular so that that specifying just one of the raw_ap or raw_lf can make things more easier.
 def compute_features_from_raw(
     raw_ap,
@@ -965,45 +1058,119 @@ def compute_features_from_raw(
         - Each feature DataFrame is annotated with ibleatools and feature module
           versions for provenance tracking.
     """
-    if raw_ap is None and raw_lf is None:
-        raise ValueError("One of the AP or LF data must be provided")
+    channel_labels = _validate_arrays_and_labels(
+        raw_ap, raw_lf, geometry, fs_ap, fs_lf, channel_labels
+    )
 
-    if raw_ap is not None and raw_lf is not None:
-        assert raw_ap.shape[0] == raw_lf.shape[0], (
-            "Number of channels must match between AP and LF data"
-        )
+    # Destripe both bands through the shared primitive (AP uses CAR-style
+    # k_filter=False, matching the previous inline behavior).
+    des_ap, des_lf = destripe_ap_lf(
+        raw_ap,
+        raw_lf,
+        fs_ap=fs_ap,
+        fs_lf=fs_lf,
+        geometry=geometry,
+        channel_labels=channel_labels,
+        neuropixel_version=neuropixel_version,
+        ap_k_filter=False,
+        lf_k_filter=lf_k_filter,
+    )
 
-    # Validate input array shapes and parameters
-    if raw_ap is not None:
-        assert raw_ap.ndim == 2, "Input array must be 2D"
-        assert raw_ap.shape[0] == len(geometry["x"]) == len(geometry["y"]), (
-            "Number of channels must match geometry"
+    # rms_lf_no_car needs a second, no-CAR (k_filter=None) LF destripe of the raw
+    # signal, which cannot be recovered from des_lf. Compute it here (via the same
+    # primitive) and hand it to the feature engine, which emits rms_lf_no_car iff it
+    # receives this array.
+    compute_rms_no_car = False
+    if feature_params is not None:
+        lf_p = getattr(feature_params, "lf", None)
+        compute_rms_no_car = bool(getattr(lf_p, "compute_rms_no_car", False))
+    des_lf_no_car = None
+    if compute_rms_no_car and raw_lf is not None:
+        _, des_lf_no_car = destripe_ap_lf(
+            None,
+            raw_lf,
+            fs_lf=fs_lf,
+            geometry=geometry,
+            channel_labels=channel_labels,
+            neuropixel_version=neuropixel_version,
+            lf_k_filter=None,
         )
-        assert fs_ap > 0, "Sampling frequencies must be positive"
-    if raw_lf is not None:
-        assert raw_lf.ndim == 2, "Input array must be 2D"
-        assert raw_lf.shape[0] == len(geometry["x"]) == len(geometry["y"]), (
-            "Number of channels must match geometry"
-        )
-        assert fs_lf > 0, "Sampling frequencies must be positive"
+    logger.info("Destriped AP and LF data")
 
-    # Set default channel labels if not provided
-    if channel_labels is None:
-        channel_labels = (
-            np.zeros(raw_ap.shape[0])
-            if raw_ap is not None
-            else np.zeros(raw_lf.shape[0])
-        )
+    return compute_features_from_destriped(
+        des_ap,
+        des_lf,
+        fs_ap=fs_ap,
+        fs_lf=fs_lf,
+        geometry=geometry,
+        channel_labels=channel_labels,
+        des_lf_no_car=des_lf_no_car,
+        features_to_compute=features_to_compute,
+        output_dir=output_dir,
+        scratch_dir=scratch_dir,
+        feature_params=feature_params,
+        **kwargs,
+    )
+
+
+def compute_features_from_destriped(
+    des_ap,
+    des_lf,
+    fs_ap=None,
+    fs_lf=None,
+    geometry=None,
+    channel_labels=None,
+    des_lf_no_car=None,
+    features_to_compute=None,
+    output_dir=Path("."),
+    scratch_dir=None,
+    feature_params=None,
+    **kwargs,
+):
+    """Compute features from already-destriped AP/LF arrays.
+
+    This is the feature-computation half of :func:`compute_features_from_raw`
+    (which destripes and then calls this). Call it directly to compute features on
+    pre-destriped or cached data without re-destriping.
+
+    Args:
+        des_ap, des_lf (np.ndarray | None): Destriped AP/LF arrays shaped
+            ``(n_channels, n_samples)``; ``None`` skips that band's features.
+        fs_ap, fs_lf (float): Sampling frequencies (Hz).
+        geometry (dict): Channel geometry with ``"x"``/``"y"``.
+        channel_labels (np.ndarray, optional): Bad-channel labels; defaults to
+            zeros.
+        des_lf_no_car (np.ndarray, optional): LF destriped with no common-average
+            reference (``k_filter=None``). When provided, ``rms_lf_no_car`` is added
+            to the LF features; it cannot be derived from ``des_lf`` alone.
+        features_to_compute (list, optional): Feature families to evaluate. ``None``
+            computes all families supported by the supplied bands.
+        output_dir (Path, optional): Where per-feature parquet files are written.
+        scratch_dir (Path, optional): Scratch location for waveform extraction.
+        feature_params (optional): Duck-typed ``FeatureParams`` (``.lf``/``.csd``).
+        **kwargs: Extra options such as ``skip_saved_computation`` /
+            ``save_waveforms``.
+
+    Returns:
+        pd.DataFrame: Outer-joined feature table keyed by ``channel``.
+
+    Raises:
+        ValueError: If neither band is supplied or an unsupported family is
+            requested.
+    """
+    channel_labels = _validate_arrays_and_labels(
+        des_ap, des_lf, geometry, fs_ap, fs_lf, channel_labels
+    )
 
     # Define available feature sets
     available_features = ["lf", "csd", "ap", "waveforms"]
 
-    if raw_ap is None:
+    if des_ap is None:
         if features_to_compute is None:
             features_to_compute = ["lf", "csd"]
         else:
             features_to_compute = [f for f in features_to_compute if f in ["lf", "csd"]]
-    elif raw_lf is None:
+    elif des_lf is None:
         if features_to_compute is None:
             features_to_compute = ["ap", "waveforms"]
         else:
@@ -1023,31 +1190,6 @@ def compute_features_from_raw(
             raise ValueError(
                 f"Invalid feature sets requested: {invalid_features}. Available options: {available_features}"
             )
-
-    # Apply destriping to  AP and LF data
-    if raw_ap is not None:
-        des_ap = ibldsp.voltage.destripe(
-            raw_ap,
-            fs=fs_ap,
-            h=geometry,
-            neuropixel_version=neuropixel_version,
-            channel_labels=channel_labels,
-            k_filter=False,
-        )
-    else:
-        des_ap = None
-    if raw_lf is not None:
-        des_lf = ibldsp.voltage.destripe_lfp(
-            raw_lf,
-            fs=fs_lf,
-            h=geometry,
-            neuropixel_version=neuropixel_version,
-            channel_labels=channel_labels,
-            k_filter=lf_k_filter,
-        )
-    else:
-        des_lf = None
-    logger.info("Destriped AP and LF data")
 
     # Initialize dictionary to store computed features
     df = {}
@@ -1096,14 +1238,10 @@ def compute_features_from_raw(
     csd_kwargs = {"decimate": 10}
     ap_kwargs = {}
     waveforms_kwargs = {"scratch_dir": scratch_dir}
-    # Engine-level toggle for the no-CAR RMS. Not a features.lf kwarg (see the lf branch
-    # of compute_and_save_feature below); default False keeps today's behavior.
-    compute_rms_no_car = False
     if feature_params is not None:
         lf_p = getattr(feature_params, "lf", None)
         if lf_p is not None:
             lf_kwargs = {"bands": lf_p.bands, "decay_features": lf_p.decay_features}
-            compute_rms_no_car = getattr(lf_p, "compute_rms_no_car", False)
         csd_p = getattr(feature_params, "csd", None)
         if csd_p is not None:
             csd_kwargs = {
@@ -1184,21 +1322,14 @@ def compute_features_from_raw(
                 # Save spike information
                 waveforms["df_spikes"].to_parquet(waveforms_dir / "spikes.pqt")
         elif feature_name == "lf":
-            # Standard lf computation, then optionally append the no-CAR RMS.
+            # Standard lf computation, then append the no-CAR RMS when the caller
+            # supplied the no-CAR-destriped LF. rms_lf (CAR) and rms_lf_no_car
+            # (no-CAR) capture distinct information; the latter cannot come from
+            # des_lf, so it is passed in as des_lf_no_car.
             df[feature_name] = config["func"](**config["args"], **config["kwargs"])
-            if compute_rms_no_car:
-                # Re-destripe with k_filter=None (no common-average reference) so that
-                # rms_lf (CAR) and rms_lf_no_car (no-CAR) capture distinct information.
-                des_lf_nocar = ibldsp.voltage.destripe_lfp(
-                    raw_lf,
-                    fs=fs_lf,
-                    h=geometry,
-                    neuropixel_version=neuropixel_version,
-                    channel_labels=channel_labels,
-                    k_filter=None,
-                )
+            if des_lf_no_car is not None:
                 df[feature_name]["rms_lf_no_car"] = ibldsp.utils.rms(
-                    des_lf_nocar, axis=-1
+                    des_lf_no_car, axis=-1
                 )
         else:
             # Standard feature computation
