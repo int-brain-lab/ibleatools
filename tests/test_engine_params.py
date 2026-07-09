@@ -30,6 +30,11 @@ import ibldsp.voltage
 from ephysatlas import features
 from ephysatlas.feature_computation import compute_features_from_raw
 from ephysatlas.aggregation import get_aggregated_features_per_pid
+from ephysatlas.feature_calculators import (
+    CsdParams,
+    FeatureComputationOptions,
+    FeatureParams,
+)
 
 FIXTURE_PATH = Path(features.__file__).parents[2].joinpath("tests", "fixtures")
 
@@ -82,6 +87,83 @@ class TestCsdScale(unittest.TestCase):
         self.assertEqual(m.call_count, 2)
         for call in m.call_args_list:
             self.assertIs(call.kwargs.get("scale"), False)
+
+
+class TestTypedFeatureParams(unittest.TestCase):
+    """The typed FeatureParams dataclasses drive the engine like the stub."""
+
+    def setUp(self):
+        self.lf = _lf_fixture()
+        self.geometry = _linear_geometry(self.lf.shape[0])
+
+    def _compute(self, features_to_compute, feature_params, geometry=None):
+        with tempfile.TemporaryDirectory() as tmp:
+            return compute_features_from_raw(
+                raw_ap=None,
+                raw_lf=self.lf,
+                fs_lf=2500.0,
+                geometry=self.geometry if geometry is None else geometry,
+                neuropixel_version=1,
+                features_to_compute=features_to_compute,
+                output_dir=Path(tmp),
+                feature_params=feature_params,
+            )
+
+    def test_csd_scale_forwarded_via_typed_feature_params(self):
+        # CsdParams(scale=False) must reach both current_source_density calls. CSD
+        # needs full geometry (col/row), so use the NP1 trace header like TestCsdScale.
+        with patch(
+            "ibldsp.voltage.current_source_density",
+            wraps=ibldsp.voltage.current_source_density,
+        ) as m:
+            self._compute(
+                ["csd"],
+                FeatureParams(csd=CsdParams(scale=False)),
+                geometry=neuropixel.trace_header(version=1),
+            )
+        self.assertEqual(m.call_count, 2)
+        for call in m.call_args_list:
+            self.assertIs(call.kwargs.get("scale"), False)
+
+    def test_default_typed_params_match_none(self):
+        # FeatureParams() (all sub-configs None) must reproduce feature_params=None.
+        df_none = self._compute(["lf"], None)
+        df_default = self._compute(["lf"], FeatureParams())
+        self.assertEqual(set(df_none.columns), set(df_default.columns))
+        np.testing.assert_allclose(
+            df_none["rms_lf"].to_numpy(), df_default["rms_lf"].to_numpy()
+        )
+
+
+class TestFeatureParamsDict(unittest.TestCase):
+    """Nested-dict convenience form is normalized to typed FeatureParams."""
+
+    def test_from_dict_builds_typed_params(self):
+        fp = FeatureParams.from_dict(
+            {"csd": {"scale": False}, "lf": {"decay_features": False}}
+        )
+        self.assertIsInstance(fp.csd, CsdParams)
+        self.assertIs(fp.csd.scale, False)
+        self.assertIs(fp.lf.decay_features, False)
+
+    def test_options_normalizes_dict_feature_params(self):
+        opts = FeatureComputationOptions(feature_params={"csd": {"scale": False}})
+        self.assertIsInstance(opts.feature_params, FeatureParams)
+        self.assertIs(opts.feature_params.csd.scale, False)
+
+    def test_options_leaves_typed_feature_params_unchanged(self):
+        fp = FeatureParams(csd=CsdParams(scale=False))
+        opts = FeatureComputationOptions(feature_params=fp)
+        self.assertIs(opts.feature_params, fp)
+
+    def test_unknown_family_raises(self):
+        with self.assertRaises(ValueError):
+            FeatureParams.from_dict({"bogus": {}})
+
+    def test_unknown_subparam_raises(self):
+        # A mistyped sub-parameter must fail loudly, not be silently ignored.
+        with self.assertRaises(TypeError):
+            FeatureParams.from_dict({"csd": {"scal": False}})
 
 
 class TestFeatureParamsLf(unittest.TestCase):

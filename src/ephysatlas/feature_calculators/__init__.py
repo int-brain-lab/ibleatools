@@ -35,21 +35,27 @@ from .ibl import IBLPIDFeatureCalculator
 from .spikeglx import SpikeGLXFileFeatureCalculator
 from .spikeglx_like import SpikeGlxLikeFeatureCalculator
 from .types import (
+    CsdParams,
     DestripeOptions,
     DestripedSnippet,
     FeatureComputationOptions,
     FeatureComputationResult,
+    FeatureParams,
+    LfParams,
     RawSnippet,
     SnippetWindow,
 )
 
 __all__ = [
     "BaseFeatureCalculator",
+    "CsdParams",
     "DestripeOptions",
     "DestripedSnippet",
     "FeatureComputationOptions",
     "FeatureComputationResult",
+    "FeatureParams",
     "IBLPIDFeatureCalculator",
+    "LfParams",
     "RawSnippet",
     "SnippetWindow",
     "SpikeGLXFileFeatureCalculator",

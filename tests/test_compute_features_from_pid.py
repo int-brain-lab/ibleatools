@@ -22,6 +22,7 @@ from pathlib import Path
 from unittest import mock
 from unittest.mock import PropertyMock
 
+import ibldsp.voltage
 import numpy as np
 import pandas as pd
 
@@ -90,7 +91,7 @@ def _fake_add_targets(pid=None, one=None, channels=None, traj_dict=None):
     return ch
 
 
-def _run(output_dir, features, with_ap=True):
+def _run(output_dir, features, with_ap=True, feature_params=None):
     """Call compute_features_from_pid with fixture-backed fake readers."""
     sr_ap = _FakeReader(AP_DATA, FS_AP) if with_ap else None
     ssl = _FakeSSL(sr_ap, _FakeReader(LF_DATA, FS_LF))
@@ -114,6 +115,7 @@ def _run(output_dir, features, with_ap=True):
             duration_lf=0.5,
             features_to_compute=features,
             output_dir=output_dir,
+            feature_params=feature_params,
         )
 
 
@@ -182,6 +184,29 @@ class TestComputeFeaturesFromPid(unittest.TestCase):
         a = a.sort_values("channel").reset_index(drop=True)
         b = b.sort_values("channel").reset_index(drop=True)
         pd.testing.assert_frame_equal(a, b)
+
+    def test_feature_params_forwarded_through_entry_point(self):
+        # End-to-end wiring: compute_features_from_pid must thread feature_params
+        # through FeatureComputationOptions -> compute_snippet -> the engine, so
+        # CsdParams(scale=False) reaches ibldsp.voltage.current_source_density.
+        from ephysatlas.feature_calculators import CsdParams, FeatureParams
+
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch(
+                "ibldsp.voltage.current_source_density",
+                wraps=ibldsp.voltage.current_source_density,
+            ) as m,
+        ):
+            _run(
+                Path(tmp),
+                ["csd"],
+                with_ap=False,
+                feature_params=FeatureParams(csd=CsdParams(scale=False)),
+            )
+        self.assertGreaterEqual(m.call_count, 1)
+        for call in m.call_args_list:
+            self.assertIs(call.kwargs.get("scale"), False)
 
 
 if __name__ == "__main__":

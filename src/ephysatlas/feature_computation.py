@@ -611,6 +611,7 @@ def compute_features_from_pid(
     output_dir=None,
     recompute_channels=False,
     scratch_dir=None,
+    feature_params=None,
     **kwargs,
 ):
     """Compute electrophysiological features from a probe ID using the ONE database.
@@ -632,6 +633,9 @@ def compute_features_from_pid(
         recompute_channels (bool, optional): Whether to recompute channel information even if channels.pqt file is present.
             Defaults to False.
         scratch_dir (Path, optional): Directory for temporary files (e.g., dartsort scratch files).
+        feature_params (FeatureParams | dict, optional): Per-feature parameters
+            forwarded to the engine, as a ``FeatureParams`` or a nested dict
+            (e.g. ``{"csd": {"scale": False}}``). ``None`` uses the defaults.
         **kwargs: Additional keyword arguments passed to the feature computation pipeline.
 
     Returns:
@@ -707,6 +711,7 @@ def compute_features_from_pid(
         recompute_channels=recompute_channels,
         include_trajectory=True,
         lf_k_filter=False,
+        feature_params=feature_params,
         extra_kwargs=kwargs,
     )
     result = calc.compute_snippet(window, options)
@@ -741,6 +746,7 @@ def compute_features_from_file(
     output_dir=None,
     scratch_dir=None,
     lf_k_filter=False,
+    feature_params=None,
     **kwargs,
 ):
     """Compute features from .cbin files.
@@ -775,6 +781,9 @@ def compute_features_from_file(
             :func:`ibldsp.voltage.destripe_lfp`. The default ``False`` preserves
             the current CAR-style LF destriping; use ``None`` to disable LF
             spatial filtering.
+        feature_params (FeatureParams | dict, optional): Per-feature parameters
+            forwarded to the engine, as a ``FeatureParams`` or a nested dict
+            (e.g. ``{"csd": {"scale": False}}``). ``None`` uses the defaults.
         **kwargs: Additional keyword arguments forwarded to
             :func:`compute_features_from_raw`.
 
@@ -842,6 +851,7 @@ def compute_features_from_file(
         recompute_channels=True,
         include_trajectory=traj_dict is not None,
         lf_k_filter=lf_k_filter,
+        feature_params=feature_params,
         extra_kwargs=kwargs,
     )
     result = calc.compute_snippet(window, options)

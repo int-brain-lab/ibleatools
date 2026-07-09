@@ -22,9 +22,10 @@ FeatureComputationResult
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Sequence
 
 import numpy as np
 import pandas as pd
@@ -127,6 +128,87 @@ class DestripedSnippet:
 
 
 @dataclass(frozen=True)
+class LfParams:
+    """Per-feature parameters for the LF feature family.
+
+    Attributes:
+        bands (Mapping | None): Frequency bands passed to
+            :func:`ephysatlas.features.lf`. ``None`` uses the function default.
+        decay_features (bool): Whether to compute the PSD-decay features.
+        compute_rms_no_car (bool): Also compute the no-CAR LF RMS
+            (``rms_lf_no_car``).
+    """
+
+    bands: Mapping | None = None
+    decay_features: bool = True
+    compute_rms_no_car: bool = False
+
+
+@dataclass(frozen=True)
+class CsdParams:
+    """Per-feature parameters for the CSD feature family.
+
+    Attributes:
+        bands (Mapping | None): Frequency bands for the CSD spectral step.
+            ``None`` uses the default bands.
+        decimate (int): Temporal decimation factor applied before the CSD.
+        scale (bool): Whether ``ibldsp.voltage.current_source_density`` scales the
+            CSD.
+    """
+
+    bands: Mapping | None = None
+    decimate: int = 10
+    scale: bool = True
+
+
+@dataclass(frozen=True)
+class FeatureParams:
+    """Typed per-feature parameters forwarded to ``compute_features_from_raw``.
+
+    The engine reads these attributes duck-typed (via ``getattr``) so that
+    ``feature_computation`` never imports this package (avoids a circular import).
+    A sub-config left as ``None`` falls back to the engine's default behavior for
+    that family, so the default ``FeatureParams()`` reproduces today's output.
+
+    Attributes:
+        lf (LfParams | None): LF feature-family parameters.
+        csd (CsdParams | None): CSD feature-family parameters.
+    """
+
+    lf: LfParams | None = None
+    csd: CsdParams | None = None
+
+    @classmethod
+    def from_dict(cls, data: Mapping) -> FeatureParams:
+        """Build ``FeatureParams`` from a nested dict, e.g. ``{"csd": {"scale": False}}``.
+
+        Each family value may be a params dict or an already-built
+        ``LfParams``/``CsdParams``. Unknown family names or sub-parameters raise,
+        so a typo fails loudly instead of being silently ignored.
+
+        Args:
+            data (Mapping): Mapping of feature family -> params dict/object.
+
+        Returns:
+            FeatureParams: The typed, validated equivalent.
+
+        Raises:
+            ValueError: If a key is not a recognized feature family.
+            TypeError: If a family dict contains an unknown sub-parameter.
+        """
+        families = {"lf": LfParams, "csd": CsdParams}
+        kwargs = {}
+        for key, value in data.items():
+            if key not in families:
+                raise ValueError(
+                    f"unknown feature family {key!r}; expected one of {list(families)}"
+                )
+            param_cls = families[key]
+            kwargs[key] = value if isinstance(value, param_cls) else param_cls(**value)
+        return cls(**kwargs)
+
+
+@dataclass(frozen=True)
 class FeatureComputationOptions:
     """Options controlling one OOP feature-computation call.
 
@@ -147,6 +229,11 @@ class FeatureComputationOptions:
             missing.
         lf_k_filter (bool | None): Spatial filter mode forwarded to LF
             destriping in ``compute_features_from_raw``.
+        feature_params (FeatureParams | Mapping | None): Per-feature parameters
+            forwarded to ``compute_features_from_raw``. Accepts a ``FeatureParams``
+            or a nested dict (e.g. ``{"csd": {"scale": False}}``), which is
+            normalized to ``FeatureParams`` on init. ``None`` uses the engine
+            defaults for every family.
         extra_kwargs (Mapping[str, Any]): Extra keyword arguments forwarded to
             ``compute_features_from_raw``.
     """
@@ -160,7 +247,16 @@ class FeatureComputationOptions:
     include_trajectory: bool = True
     require_trajectory: bool = False
     lf_k_filter: bool | None = False
+    feature_params: FeatureParams | Mapping | None = None
     extra_kwargs: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        """Normalize a nested-dict ``feature_params`` into typed ``FeatureParams``."""
+        if isinstance(self.feature_params, Mapping):
+            # Frozen dataclass: assign through object.__setattr__.
+            object.__setattr__(
+                self, "feature_params", FeatureParams.from_dict(self.feature_params)
+            )
 
 
 @dataclass(frozen=True)
