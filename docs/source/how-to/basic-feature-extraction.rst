@@ -25,8 +25,9 @@ Step-by-Step Guide
 
    .. code-block:: python
 
-      from ephysatlas.feature_computation import compute_features_from_pid
       from pathlib import Path
+      from one.api import ONE
+      from ephysatlas.feature_computation import compute_features_from_pid
 
 2. **Set Up Parameters**
 
@@ -36,20 +37,24 @@ Step-by-Step Guide
       pid = "your-probe-insertion-id-here"
       output_dir = Path("/path/to/output/directory")
       
-      # Optional: specify time range and duration
-      t_start = 300.0  # Start time in seconds
-      duration = 5.0   # Duration in seconds
+      # Optional: specify time range and snippet durations
+      t_start = 300.0     # Start time in seconds
+      duration_ap = 1.0   # AP snippet length in seconds
+      duration_lf = 1.0   # LF snippet length in seconds
 
 3. **Run Feature Extraction**
 
    .. code-block:: python
 
-      # Compute features
+      # Compute features (pass a ONE client; it loads the raw data)
+      one = ONE()
       result = compute_features_from_pid(
           pid=pid,
+          one=one,
           output_dir=output_dir,
           t_start=t_start,
-          duration=duration
+          duration_ap=duration_ap,
+          duration_lf=duration_lf,
       )
       
       print(f"Features computed successfully!")
@@ -77,6 +82,59 @@ Here's the complete script from ``examples/feature_extraction_example.py``:
 .. literalinclude:: ../../../examples/feature_extraction_example.py
    :language: python
    :caption: Complete basic feature extraction script
+
+Customizing per-feature parameters
+-----------------------------------
+
+Per-feature options are passed via ``feature_params`` — either the typed objects
+from ``ephysatlas.feature_calculators`` or an equivalent nested dict. Only the
+options you set change; everything else keeps its default. For example, to
+disable CSD scaling:
+
+.. code-block:: python
+
+   from ephysatlas.feature_calculators import FeatureParams, CsdParams
+
+   result = compute_features_from_pid(
+       pid=pid,
+       one=one,
+       t_start=t_start,
+       duration_ap=duration_ap,
+       duration_lf=duration_lf,
+       feature_params=FeatureParams(csd=CsdParams(scale=False)),
+       # equivalently: feature_params={"csd": {"scale": False}}
+   )
+
+Using the OOP calculators directly
+------------------------------------
+
+``compute_features_from_pid`` and ``compute_features_from_file`` are thin
+wrappers over the calculators in ``ephysatlas.feature_calculators``. Use a
+calculator directly when you also want the intermediate destriped snippet (for
+inspection or plotting), or when working from local SpikeGLX files:
+
+.. code-block:: python
+
+   from ephysatlas.feature_calculators import (
+       IBLPIDFeatureCalculator,
+       FeatureComputationOptions,
+       SnippetWindow,
+   )
+
+   calc = IBLPIDFeatureCalculator(pid=pid, one=one)
+   window = SnippetWindow(t_start=300.0, duration_ap=1.0, duration_lf=1.0)
+   options = FeatureComputationOptions(
+       features_to_compute=["lf", "csd", "ap"], output_dir=output_dir
+   )
+   result = calc.compute_snippet(window, options)
+
+   # Intermediate destriped data, without recomputing features:
+   snippet = calc.get_destriped_snippet(window)
+
+For local files use
+:class:`ephysatlas.feature_calculators.SpikeGLXFileFeatureCalculator` (or
+:func:`ephysatlas.feature_computation.compute_features_from_file`). The full OOP
+script is in ``examples/feature_extraction_oop.py``.
 
 Expected Output
 ---------------

@@ -872,33 +872,13 @@ def get_psd_decay_features(
     Returns
     -------
     pd.DataFrame
-        DataFrame with one row per channel containing the following features:
-
-        **Aperiodic component features:**
-        - aperiodic_offset : float
-            Y-intercept of the aperiodic component fit (log10 power at 1 Hz)
-        - aperiodic_exponent : float
-            Slope of the aperiodic component in log-log space (1/f exponent)
-        - decay_fit_error : float
-            Root mean square error of the spectral model fit
-        - decay_fit_r_squared : float
-            R-squared goodness of fit for the spectral model
-        - decay_n_peaks : int
-            Number of periodic peaks detected above the aperiodic background
-
-        **Residual power features (periodic component after aperiodic removal):**
-        - psd_residual_delta : float
-            Residual power in delta band after aperiodic component removal
-        - psd_residual_theta : float
-            Residual power in theta band after aperiodic component removal
-        - psd_residual_alpha : float
-            Residual power in alpha band after aperiodic component removal
-        - psd_residual_beta : float
-            Residual power in beta band after aperiodic component removal
-        - psd_residual_gamma : float
-            Residual power in gamma band after aperiodic component removal
-        - psd_residual_lfp : float
-            Residual power in full LFP band after aperiodic component removal
+        One row per channel. Aperiodic-component columns: ``aperiodic_offset``
+        (log10 power at 1 Hz), ``aperiodic_exponent`` (1/f slope in log-log
+        space), ``decay_fit_error`` (RMS fit error), ``decay_fit_r_squared``
+        (goodness of fit) and ``decay_n_peaks`` (number of periodic peaks).
+        Residual-power columns (periodic power per band after aperiodic removal):
+        ``psd_residual_delta``, ``psd_residual_theta``, ``psd_residual_alpha``,
+        ``psd_residual_beta``, ``psd_residual_gamma`` and ``psd_residual_lfp``.
 
     Notes
     -----
@@ -934,9 +914,9 @@ def get_psd_decay_features(
 
     References
     ----------
-    .. [1] Donoghue, T., Haller, M., Peterson, E. J., Varma, P., Sebastian, P.,
-           Gao, R., ... & Voytek, B. (2020). Parameterizing neural power spectra
-           into periodic and aperiodic components. Nature neuroscience, 23(12), 1655-1665.
+    Donoghue, T., Haller, M., Peterson, E. J., Varma, P., Sebastian, P., Gao, R.,
+    et al. (2020). Parameterizing neural power spectra into periodic and aperiodic
+    components. Nature Neuroscience, 23(12), 1655-1665.
     """
     assert period.ndim == 2, "Period must be a 2D array"
     from scipy.signal import welch

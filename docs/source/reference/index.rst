@@ -69,7 +69,8 @@ Quick Reference
 Common Functions
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-* **Feature Extraction**: :func:`ephysatlas.feature_computation.compute_features_from_pid`
+* **Feature Extraction**: :func:`ephysatlas.feature_computation.compute_features_from_pid` / :func:`~ephysatlas.feature_computation.compute_features_from_file`
+* **OOP calculators**: :class:`ephysatlas.feature_calculators.IBLPIDFeatureCalculator`, :class:`~ephysatlas.feature_calculators.SpikeGLXFileFeatureCalculator`
 * **Visualization**: :class:`ephysatlas.reveal.AtlasReveal`
 * **Data Loading**: :func:`ephysatlas.data.load_raw_data`
 * **Utilities**: :func:`ephysatlas.utils.setup_output_directory`
