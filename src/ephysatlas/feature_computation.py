@@ -148,6 +148,11 @@ def online_feature_computation(
 ):
     """Compute electrophysiological features from SpikeGLX readers.
 
+    .. deprecated::
+        Use :func:`compute_features_from_file` or
+        :class:`ephysatlas.feature_calculators.SpikeGLXFileFeatureCalculator`;
+        this function will be removed in a future version.
+
     The function loads a snippet of AP (action potential) and/or LF (local field
     potential) data from SpikeGLX readers, validates the requested time range,
     performs lightweight bad-channel detection, and forwards the raw arrays to
@@ -204,6 +209,11 @@ def online_feature_computation(
         - Bad-channel detection falls back from full recordings to the extracted
           snippet when necessary.
     """
+    logger.warning(
+        "online_feature_computation() is deprecated and will be removed in a "
+        "future version; use compute_features_from_file() or "
+        "SpikeGLXFileFeatureCalculator instead."
+    )
     # Validate start time is non-negative
     if t0 < 0:
         raise ValueError(f"Start time t0 ({t0}) cannot be negative")
@@ -298,6 +308,11 @@ def load_data_from_pid(
 ):
     """Load electrophysiological data and channel information using a probe ID from the ONE database.
 
+    .. deprecated::
+        Use :func:`compute_features_from_pid` or
+        :class:`ephysatlas.feature_calculators.IBLPIDFeatureCalculator`;
+        this function will be removed in a future version.
+
     This function loads both AP and LF data from the ONE database using a probe ID. It supports both
     standard ONE clients and OneSdsc clients. The function also handles channel information, either
     loading it from a cached file or computing it from the SpikeGLX reader. File locking is used to
@@ -335,6 +350,10 @@ def load_data_from_pid(
         - If channel information cannot be loaded, the function falls back to an empty dictionary.
         - The function automatically extracts geometry information from SpikeGLX readers when needed.
     """
+    logger.warning(
+        "load_data_from_pid() is deprecated and will be removed in a future "
+        "version; use compute_features_from_pid() or IBLPIDFeatureCalculator instead."
+    )
     # Log the start of data loading process
     logger.info(f"Loading data using PID: {pid}")
 
