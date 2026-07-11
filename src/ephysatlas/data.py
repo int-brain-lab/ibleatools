@@ -36,6 +36,12 @@ _WAVEFORMS_FILES = [
     "waveforms.voltage.npy",
     "waveforms.table.pqt",
 ]
+# 3D (firing-rate-decile x log-time-lag) ACGs (~3.5 GB) — opt-in, not every
+# historical dataset has these (see ephysatlas.cells.compute_3d_acgs)
+_ACG3D_FILES = [
+    "clusters.acgs_3d.npy",
+    "acgs_3d.times.npy",
+]
 # Merged multi-recording LFP archives in lfp_aggregates/, keyed by compression level.
 _LFP_AGGREGATES_FILES = {
     "default": "lf_compressed_all.h5",  # epsilon=150, alpha=28, ~23 GB
@@ -569,12 +575,14 @@ def download_cells_features(
     one=None,
     overwrite=False,
     large_files=False,
+    acg3d=False,
 ):
     """Download cluster-level aggregates from S3 (``cells_aggregates/`` subfolder, ~1 GB).
 
     Downloads the standard cluster files. The large waveform files
     (``waveforms.voltage.npy`` and ``waveforms.table.pqt``, ~8 GB combined) are only
-    downloaded when ``large_files=True``.
+    downloaded when ``large_files=True``. The 3D ACG files (``clusters.acgs_3d.npy``
+    and ``acgs_3d.times.npy``, ~3.5 GB) are only downloaded when ``acg3d=True``.
 
     Use :func:`download_probe_details` if you only need probe metadata, or
     :func:`download_project_data` to get both in one call.
@@ -586,6 +594,8 @@ def download_cells_features(
         overwrite (bool): Re-download files that already exist locally.
         large_files (bool): If True, also download waveforms.voltage.npy and waveforms.table.pqt
             (~8 GB). Defaults to False.
+        acg3d (bool): If True, also download clusters.acgs_3d.npy and acgs_3d.times.npy
+            (~3.5 GB). Not every historical dataset has these. Defaults to False.
 
     Returns:
         Path: local_path/project/cells_aggregates/ directory.
@@ -594,8 +604,10 @@ def download_cells_features(
     dest = local_project_path / "cells_aggregates"
     dest.mkdir(parents=True, exist_ok=True)
     s3_prefix = f"aggregates/atlas/projects/{project}/cells_aggregates"
-    files_to_download = _CELLS_AGGREGATES_FILES + (
-        _WAVEFORMS_FILES if large_files else []
+    files_to_download = (
+        _CELLS_AGGREGATES_FILES
+        + (_WAVEFORMS_FILES if large_files else [])
+        + (_ACG3D_FILES if acg3d else [])
     )
     for fname in files_to_download:
         aws.s3_download_file(
@@ -614,6 +626,7 @@ def download_project_data(
     one=None,
     overwrite=False,
     large_files=False,
+    acg3d=False,
 ):
     """Download all project data (probe details + cell aggregates) from S3.
 
@@ -625,6 +638,7 @@ def download_project_data(
         one (one.api.ONE, optional): ONE instance for AWS credentials.
         overwrite (bool): Re-download files that already exist locally.
         large_files (bool): If True, also download the large waveform files (~8 GB). Defaults to False.
+        acg3d (bool): If True, also download the 3D ACG files (~3.5 GB). Defaults to False.
 
     Returns:
         Path: local_path/project directory.
@@ -636,6 +650,7 @@ def download_project_data(
         one=one,
         overwrite=overwrite,
         large_files=large_files,
+        acg3d=acg3d,
     )
     return Path(local_path) / project
 
@@ -672,6 +687,7 @@ def read_cells_features(path_project):
         Always present: df_clusters, df_clusters_good, acgs_log, acgs_log_times,
         waveforms_peak, stpc, stlfp.
         Present only if downloaded with ``large_files=True``: waveforms, df_waveforms.
+        Present only if downloaded with ``acg3d=True``: acgs_3d, acgs_3d_times.
 
     See Also
     --------
@@ -694,6 +710,11 @@ def read_cells_features(path_project):
     if (path / "waveforms.voltage.npy").exists():
         result["waveforms"] = np.load(path / "waveforms.voltage.npy", mmap_mode="r")
         result["df_waveforms"] = pd.read_parquet(path / "waveforms.table.pqt")
+    if (path / "clusters.acgs_3d.npy").exists():
+        # stays a float16 memmap rather than eager-cast to float32 (as acgs_log
+        # does): at (n_clusters, 10, 201) this array is ~3.5 GB even at float16.
+        result["acgs_3d"] = np.load(path / "clusters.acgs_3d.npy", mmap_mode="r")
+        result["acgs_3d_times"] = np.load(path / "acgs_3d.times.npy")
     return result
 
 

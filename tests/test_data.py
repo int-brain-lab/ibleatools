@@ -122,6 +122,12 @@ def _make_cluster_aggregates(path, n=10):
     return agg_path
 
 
+def _write_acg3d_files(agg_path, n=10):
+    """Write synthetic clusters.acgs_3d.npy and acgs_3d.times.npy into agg_path."""
+    np.save(agg_path / "clusters.acgs_3d.npy", np.zeros((n, 10, 201), dtype=np.float16))
+    np.save(agg_path / "acgs_3d.times.npy", np.linspace(-1000, 1000, 201))
+
+
 class TestProjectDataIO(unittest.TestCase):
     def setUp(self):
         self._tmpdir = tempfile.TemporaryDirectory()
@@ -149,6 +155,19 @@ class TestProjectDataIO(unittest.TestCase):
         # waveforms not present unless large_files=True was passed to download
         self.assertNotIn("waveforms", r)
         self.assertNotIn("df_waveforms", r)
+        # acgs_3d not present unless acg3d=True was passed to download
+        self.assertNotIn("acgs_3d", r)
+        self.assertNotIn("acgs_3d_times", r)
+
+    def test_read_cells_features_with_acgs_3d(self):
+        agg_path = self.project_path / "cells_aggregates"
+        _write_acg3d_files(agg_path, n=10)
+        r = ephysatlas.data.read_cells_features(self.project_path)
+        self.assertIn("acgs_3d", r)
+        self.assertEqual(r["acgs_3d"].shape, (10, 10, 201))
+        self.assertEqual(r["acgs_3d"].dtype, np.float16)
+        self.assertIn("acgs_3d_times", r)
+        self.assertEqual(r["acgs_3d_times"].shape, (201,))
 
     def test_read_cells_features_with_waveforms(self):
         n_traces = 50
@@ -201,7 +220,25 @@ class TestProjectDataIO(unittest.TestCase):
             len(ephysatlas.data._CELLS_AGGREGATES_FILES),
         )
         self.assertFalse(any("waveforms.voltage" in k for k in s3_keys))
+        self.assertFalse(any("acgs_3d" in k for k in s3_keys))
         self.assertTrue(all("cells_aggregates" in k for k in s3_keys))
+
+    def test_download_cells_features_acg3d(self):
+        mock_one = MagicMock()
+        mock_one.alyx = MagicMock()
+        with patch("ephysatlas.data.aws") as mock_aws:
+            mock_aws.get_s3_from_alyx.return_value = (MagicMock(), "test-bucket")
+            mock_aws.s3_download_file.return_value = Path("file1")
+            ephysatlas.data.download_cells_features(
+                self.tmp / "dl", project=self.project, one=mock_one, acg3d=True
+            )
+        s3_keys = [c[0][0] for c in mock_aws.s3_download_file.call_args_list]
+        n_expected = len(ephysatlas.data._CELLS_AGGREGATES_FILES) + len(
+            ephysatlas.data._ACG3D_FILES
+        )
+        self.assertEqual(mock_aws.s3_download_file.call_count, n_expected)
+        self.assertTrue(any("clusters.acgs_3d.npy" in k for k in s3_keys))
+        self.assertTrue(any("acgs_3d.times.npy" in k for k in s3_keys))
 
     def test_download_cells_features_large_files(self):
         mock_one = MagicMock()
@@ -238,6 +275,7 @@ class TestProjectDataIO(unittest.TestCase):
             one=mock_one,
             overwrite=False,
             large_files=False,
+            acg3d=False,
         )
         self.assertEqual(result, self.tmp / "dl" / self.project)
 

@@ -22,6 +22,8 @@ S3 Layout
         ├── clusters.waveforms_peak.npy           peak-channel waveform per cell                (n_cells × 128) float16
         ├── clusters_good.stpc.npy                spike-triggered population coupling           (n_good × 1000)    float16
         ├── clusters_good.stlfp.npy               spike-triggered LFP                           (n_good × 250)     float16
+        ├── clusters.acgs_3d.npy                  firing-rate-decile x log-time-lag 3D ACG (~3.5 GB) (n_cells × 10 × 201) float16
+        ├── acgs_3d.times.npy                     3D ACG log-time bin centres, ms                (201,) float64
         ├── waveforms.voltage.npy                 all neighbourhood traces (~8 GB)              (n_traces × 128)   float16
         └── waveforms.table.pqt                   pid / cluster_id / abs_channel index          (n_traces × 3)
 
@@ -29,6 +31,9 @@ S3 Layout
 long-lag asymptote converges to the firing rate in sp/s.
 Arrays indexed by cell are row-aligned with ``clusters.table.pqt``.
 Arrays indexed by good cell are row-aligned with ``clusters_good.table.pqt``.
+``clusters.acgs_3d.npy`` is also row-aligned with ``clusters.table.pqt`` (all cells,
+not just good units); see :func:`ephysatlas.cells.compute_3d_acgs` for how it is
+computed and recomputed on a new dataset.
 
 Downloading
 -----------
@@ -49,6 +54,9 @@ Downloading
     # include waveforms.voltage.npy + waveforms.table.pqt (~8 GB extra)
     ephysatlas.data.download_project_data(local_path, project=project, one=one, large_files=True)
 
+    # include clusters.acgs_3d.npy + acgs_3d.times.npy (~3.5 GB extra)
+    ephysatlas.data.download_project_data(local_path, project=project, one=one, acg3d=True)
+
 To download only one of the two parts:
 
 .. code-block:: python
@@ -57,6 +65,8 @@ To download only one of the two parts:
     ephysatlas.data.download_cells_features(local_path, project=project, one=one)
     # with neighbourhood waveforms:
     ephysatlas.data.download_cells_features(local_path, project=project, one=one, large_files=True)
+    # with 3D ACGs:
+    ephysatlas.data.download_cells_features(local_path, project=project, one=one, acg3d=True)
 
 Loading
 -------
@@ -80,6 +90,11 @@ Loading
     # present only when downloaded with large_files=True:
     waveforms            = r.get('waveforms')         # (n_traces × 128)   float16 memmap — ~8 GB
     df_waveforms         = r.get('df_waveforms')      # (n_traces × 3) — pid/cluster_id/abs_channel index
+    # present only when downloaded with acg3d=True:
+    acgs_3d              = r.get('acgs_3d')           # (n_cells × 10 × 201) float16 memmap — ~3.5 GB
+                                                        # firing-rate-decile x log-time-lag 3D ACG;
+                                                        # see ephysatlas.cells.compute_3d_acgs to recompute
+    acgs_3d_times         = r.get('acgs_3d_times')     # (201,) log-time bin centres, ms
 
 Joining with probe metadata
 ---------------------------
