@@ -1,8 +1,13 @@
 import unittest
 
 import numpy as np
+import pandas as pd
 
-from ephysatlas.cells import compute_burstiness_and_memory, compute_log_acg
+from ephysatlas.cells import (
+    compute_burstiness_and_memory,
+    compute_log_acg,
+    select_good_units_relaxed_rp,
+)
 
 try:
     from ephysatlas.cells import (
@@ -192,6 +197,53 @@ class TestCompute3DAcgs(unittest.TestCase):
         near_zero = np.abs(t_log) < 5  # ms
         far = np.abs(t_log) > 200  # ms
         self.assertLess(acgs_3d[0][:, near_zero].mean(), acgs_3d[0][:, far].mean())
+
+
+class TestSelectGoodUnitsRelaxedRp(unittest.TestCase):
+    def _df(self, bitwise_fail, slidingRP2_max_confidence):
+        return pd.DataFrame(
+            {
+                "bitwise_fail": bitwise_fail,
+                "slidingRP2_max_confidence": slidingRP2_max_confidence,
+            }
+        )
+
+    def test_missing_columns_raises(self):
+        with self.assertRaises(AssertionError):
+            select_good_units_relaxed_rp(pd.DataFrame({"bitwise_fail": [0]}))
+
+    def test_relaxed_threshold_admits_more_units_than_bitwise_fail(self):
+        # bit 0 (RP, legacy) fails on rows 1 and 2, but their v2 RP confidence is
+        # between the relaxed (70) and standard (90) thresholds -> only the strict
+        # bitwise_fail==0 selection excludes them.
+        df = self._df(
+            bitwise_fail=[0, 1, 1, 0b010, 0b100],
+            slidingRP2_max_confidence=[95.0, 80.0, 71.0, 95.0, 95.0],
+        )
+        relaxed = select_good_units_relaxed_rp(df, rp_confidence_threshold=70.0)
+        strict = (df["bitwise_fail"] == 0).to_numpy()
+        np.testing.assert_array_equal(relaxed, [True, True, True, False, False])
+        self.assertGreater(relaxed.sum(), strict.sum())
+
+    def test_noise_and_amp_vetoes_still_apply(self):
+        # bit 1 (noise_cutoff) and bit 2 (amp_median) failures are never overridden,
+        # regardless of a high slidingRP2_max_confidence.
+        df = self._df(
+            bitwise_fail=[0b010, 0b100, 0b110],
+            slidingRP2_max_confidence=[100.0, 100.0, 100.0],
+        )
+        relaxed = select_good_units_relaxed_rp(df)
+        np.testing.assert_array_equal(relaxed, [False, False, False])
+
+    def test_nan_confidence_treated_as_fail(self):
+        df = self._df(bitwise_fail=[0], slidingRP2_max_confidence=[np.nan])
+        relaxed = select_good_units_relaxed_rp(df)
+        self.assertFalse(relaxed[0])
+
+    def test_default_threshold_is_70(self):
+        df = self._df(bitwise_fail=[0, 0], slidingRP2_max_confidence=[69.9, 70.0])
+        relaxed = select_good_units_relaxed_rp(df)
+        np.testing.assert_array_equal(relaxed, [False, True])
 
 
 if __name__ == "__main__":

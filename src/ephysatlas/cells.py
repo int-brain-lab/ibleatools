@@ -28,6 +28,54 @@ import iblatlas.regions
 BINSIZE = 0.001
 LAG = 0.5
 
+# Standard bitwise_fail threshold for the sliding-RP bit (brainbox.metrics.single_units
+# .compute_labels, METRICS_PARAMS['RPmax_confidence']), percent (0-100) scale.
+BITWISE_FAIL_RP_CONFIDENCE_THRESHOLD = 90.0
+# bitwise_fail bit layout (brainbox.metrics.single_units.compute_labels): bit 0 (value 1)
+# = sliding-RP confidence, bit 1 (value 2) = noise_cutoff, bit 2 (value 4) = amp_median.
+_BITWISE_FAIL_NOISE_AMP_MASK = 0b110
+
+
+def select_good_units_relaxed_rp(df_clusters, rp_confidence_threshold=70.0):
+    """Good-unit mask with a relaxed sliding-refractory-period inclusion criterion.
+
+    The standard good-unit definition (``bitwise_fail == 0``, computed upstream by
+    ``brainbox.metrics.single_units.compute_labels``) requires the legacy sliding-RP
+    metric to reach :data:`BITWISE_FAIL_RP_CONFIDENCE_THRESHOLD` (90%) confidence
+    (bit 0 of ``bitwise_fail``). This keeps the noise-cutoff and amplitude vetoes
+    (bits 1-2) unchanged, but swaps that RP bit for a relaxed threshold on the v2
+    sliding-RP metric (``slidingRP2_max_confidence``, computed by
+    ``compute_sliding_rp_v2`` in the SDSC cells pipeline), letting through units
+    whose refractory-period confidence is lower than 90% but still above
+    `rp_confidence_threshold`.
+
+    Parameters
+    ----------
+    df_clusters : pandas.DataFrame
+        Cluster-level metadata; must include ``bitwise_fail`` and
+        ``slidingRP2_max_confidence`` columns.
+    rp_confidence_threshold : float, optional
+        Minimum ``slidingRP2_max_confidence`` (0-100 scale) to pass. Defaults to 70.0,
+        vs the standard 90.0 baked into ``bitwise_fail``.
+
+    Returns
+    -------
+    numpy.ndarray
+        Boolean mask, one entry per row of `df_clusters`. Clusters with a NaN
+        `slidingRP2_max_confidence` (too few spikes to compute) are treated as fail.
+    """
+    required_columns = {"bitwise_fail", "slidingRP2_max_confidence"}
+    missing_columns = required_columns - set(df_clusters.columns)
+    assert not missing_columns, f"df_clusters is missing columns: {missing_columns}"
+
+    noise_amp_pass = (
+        df_clusters["bitwise_fail"].to_numpy() & _BITWISE_FAIL_NOISE_AMP_MASK
+    ) == 0
+    rp_pass = (
+        df_clusters["slidingRP2_max_confidence"].to_numpy() >= rp_confidence_threshold
+    )
+    return noise_amp_pass & rp_pass
+
 
 def get_neighbours_members(df_clusters, radius_um):
     """
