@@ -4,6 +4,16 @@ import numpy as np
 
 from ephysatlas.cells import compute_burstiness_and_memory, compute_log_acg
 
+try:
+    from ephysatlas.cells import (
+        ACG3D_N_LOG_BINS,
+        ACG3D_NUM_FIRING_RATE_QUANTILES,
+        compute_3d_acgs,
+    )
+    _HAS_ACG3D_DEPS = True
+except ImportError:
+    _HAS_ACG3D_DEPS = False
+
 
 class TestComputeBurstinessAndMemory(unittest.TestCase):
     def test_too_few_spikes_returns_nan(self):
@@ -108,6 +118,67 @@ class TestComputeLogAcg(unittest.TestCase):
         for i, cid in enumerate([0, 1]):
             acg_single, _ = compute_log_acg(spike_times[spike_clusters == cid], self.FS)
             np.testing.assert_array_equal(acg_multi[i], acg_single)
+
+
+@unittest.skipUnless(_HAS_ACG3D_DEPS, "requires ibleatools[full] (spikeinterface)")
+class TestCompute3DAcgs(unittest.TestCase):
+    """Wiring smoke test: spikeinterface (linear ACG) -> npyx (log resampling)."""
+
+    FS = 30_000  # synthetic AP-band sampling rate, Hz
+    N_BINS = 2 * ACG3D_N_LOG_BINS + 1
+
+    def _dummy_spike_train(self, seed=0, duration=60.0, rate=20.0, refractory=0.003):
+        """Poisson-ish spike train (as cumulative ISIs) with an enforced refractory period."""
+        rng = np.random.default_rng(seed)
+        isis = rng.exponential(1 / rate, int(duration * rate * 2))
+        isis = isis[isis > refractory][: int(duration * rate)]
+        return np.cumsum(isis)
+
+    def test_output_shape(self):
+        spike_times = self._dummy_spike_train()
+        spike_clusters = np.zeros(spike_times.size, dtype=int)
+        acgs_3d, t_log = compute_3d_acgs(spike_times, spike_clusters, np.array([0]), self.FS)
+        self.assertEqual(acgs_3d.shape, (1, ACG3D_NUM_FIRING_RATE_QUANTILES, self.N_BINS))
+        self.assertEqual(t_log.shape, (self.N_BINS,))
+
+    def test_t_log_symmetric_and_monotone(self):
+        spike_times = self._dummy_spike_train()
+        spike_clusters = np.zeros(spike_times.size, dtype=int)
+        _, t_log = compute_3d_acgs(spike_times, spike_clusters, np.array([0]), self.FS)
+        self.assertTrue(np.all(np.diff(t_log) > 0), "t_log must be strictly increasing")
+        mid = self.N_BINS // 2
+        self.assertAlmostEqual(t_log[mid], 0.0)
+        np.testing.assert_allclose(t_log[:mid], -t_log[mid + 1:][::-1])
+
+    def test_values_finite_and_nonnegative(self):
+        spike_times = self._dummy_spike_train()
+        spike_clusters = np.zeros(spike_times.size, dtype=int)
+        acgs_3d, _ = compute_3d_acgs(spike_times, spike_clusters, np.array([0]), self.FS)
+        self.assertTrue(np.all(np.isfinite(acgs_3d)))
+        self.assertTrue(np.all(acgs_3d >= 0))
+
+    def test_multi_cluster_row_order(self):
+        """Two clusters at different rates should produce two independent rows."""
+        st0 = self._dummy_spike_train(seed=1, rate=10.0)
+        st1 = self._dummy_spike_train(seed=2, rate=30.0)
+        spike_times = np.concatenate([st0, st1])
+        spike_clusters = np.concatenate(
+            [np.zeros(st0.size, dtype=int), np.ones(st1.size, dtype=int)]
+        )
+        order = np.argsort(spike_times)
+        spike_times, spike_clusters = spike_times[order], spike_clusters[order]
+        acgs_3d, _ = compute_3d_acgs(spike_times, spike_clusters, np.array([0, 1]), self.FS)
+        self.assertEqual(acgs_3d.shape[0], 2)
+        self.assertFalse(np.array_equal(acgs_3d[0], acgs_3d[1]))
+
+    def test_refractory_period_visible_near_zero_lag(self):
+        """A hard refractory period should show lower density near zero lag than far from it."""
+        spike_times = self._dummy_spike_train(duration=120.0, rate=30.0, refractory=0.01)
+        spike_clusters = np.zeros(spike_times.size, dtype=int)
+        acgs_3d, t_log = compute_3d_acgs(spike_times, spike_clusters, np.array([0]), self.FS)
+        near_zero = np.abs(t_log) < 5    # ms
+        far = np.abs(t_log) > 200        # ms
+        self.assertLess(acgs_3d[0][:, near_zero].mean(), acgs_3d[0][:, far].mean())
 
 
 if __name__ == "__main__":
