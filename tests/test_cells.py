@@ -10,6 +10,7 @@ try:
         ACG3D_NUM_FIRING_RATE_QUANTILES,
         compute_3d_acgs,
     )
+
     _HAS_ACG3D_DEPS = True
 except ImportError:
     _HAS_ACG3D_DEPS = False
@@ -137,8 +138,12 @@ class TestCompute3DAcgs(unittest.TestCase):
     def test_output_shape(self):
         spike_times = self._dummy_spike_train()
         spike_clusters = np.zeros(spike_times.size, dtype=int)
-        acgs_3d, t_log = compute_3d_acgs(spike_times, spike_clusters, np.array([0]), self.FS)
-        self.assertEqual(acgs_3d.shape, (1, ACG3D_NUM_FIRING_RATE_QUANTILES, self.N_BINS))
+        acgs_3d, t_log = compute_3d_acgs(
+            spike_times, spike_clusters, np.array([0]), self.FS
+        )
+        self.assertEqual(
+            acgs_3d.shape, (1, ACG3D_NUM_FIRING_RATE_QUANTILES, self.N_BINS)
+        )
         self.assertEqual(t_log.shape, (self.N_BINS,))
 
     def test_t_log_symmetric_and_monotone(self):
@@ -148,12 +153,14 @@ class TestCompute3DAcgs(unittest.TestCase):
         self.assertTrue(np.all(np.diff(t_log) > 0), "t_log must be strictly increasing")
         mid = self.N_BINS // 2
         self.assertAlmostEqual(t_log[mid], 0.0)
-        np.testing.assert_allclose(t_log[:mid], -t_log[mid + 1:][::-1])
+        np.testing.assert_allclose(t_log[:mid], -t_log[mid + 1 :][::-1])
 
     def test_values_finite_and_nonnegative(self):
         spike_times = self._dummy_spike_train()
         spike_clusters = np.zeros(spike_times.size, dtype=int)
-        acgs_3d, _ = compute_3d_acgs(spike_times, spike_clusters, np.array([0]), self.FS)
+        acgs_3d, _ = compute_3d_acgs(
+            spike_times, spike_clusters, np.array([0]), self.FS
+        )
         self.assertTrue(np.all(np.isfinite(acgs_3d)))
         self.assertTrue(np.all(acgs_3d >= 0))
 
@@ -167,17 +174,23 @@ class TestCompute3DAcgs(unittest.TestCase):
         )
         order = np.argsort(spike_times)
         spike_times, spike_clusters = spike_times[order], spike_clusters[order]
-        acgs_3d, _ = compute_3d_acgs(spike_times, spike_clusters, np.array([0, 1]), self.FS)
+        acgs_3d, _ = compute_3d_acgs(
+            spike_times, spike_clusters, np.array([0, 1]), self.FS
+        )
         self.assertEqual(acgs_3d.shape[0], 2)
         self.assertFalse(np.array_equal(acgs_3d[0], acgs_3d[1]))
 
     def test_refractory_period_visible_near_zero_lag(self):
         """A hard refractory period should show lower density near zero lag than far from it."""
-        spike_times = self._dummy_spike_train(duration=120.0, rate=30.0, refractory=0.01)
+        spike_times = self._dummy_spike_train(
+            duration=120.0, rate=30.0, refractory=0.01
+        )
         spike_clusters = np.zeros(spike_times.size, dtype=int)
-        acgs_3d, t_log = compute_3d_acgs(spike_times, spike_clusters, np.array([0]), self.FS)
-        near_zero = np.abs(t_log) < 5    # ms
-        far = np.abs(t_log) > 200        # ms
+        acgs_3d, t_log = compute_3d_acgs(
+            spike_times, spike_clusters, np.array([0]), self.FS
+        )
+        near_zero = np.abs(t_log) < 5  # ms
+        far = np.abs(t_log) > 200  # ms
         self.assertLess(acgs_3d[0][:, near_zero].mean(), acgs_3d[0][:, far].mean())
 
 

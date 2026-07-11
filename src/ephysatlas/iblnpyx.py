@@ -69,8 +69,10 @@ def smooth_gaussian_axis0(arr, sd):
         kernel = np.append(kernel, np.zeros(mx - (len(kernel) - mx)))
     kernel = kernel / kernel.sum()
 
-    smoothed = np.apply_along_axis(lambda m: np.convolve(m, kernel, mode="same"), axis=0, arr=padded)
-    return smoothed[c + 1: smoothed.shape[0] - c + 1]
+    smoothed = np.apply_along_axis(
+        lambda m: np.convolve(m, kernel, mode="same"), axis=0, arr=padded
+    )
+    return smoothed[c + 1 : smoothed.shape[0] - c + 1]
 
 
 def convert_acg_log(lin_acg, cbin, cwin, n_log_bins=100, start_log_ms=0.8, smooth_sd=1):

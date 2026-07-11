@@ -535,10 +535,16 @@ def compute_3d_acgs(spike_times, spike_clusters, cluster_ids, fs):
         n_jobs=1,
     )
     n_bins = 2 * ACG3D_N_LOG_BINS + 1
-    acgs_3d = np.empty((acgs_3d_lin.shape[0], ACG3D_NUM_FIRING_RATE_QUANTILES, n_bins), dtype=np.float32)
+    acgs_3d = np.empty(
+        (acgs_3d_lin.shape[0], ACG3D_NUM_FIRING_RATE_QUANTILES, n_bins),
+        dtype=np.float32,
+    )
     t_log = None
     for i, acg_lin in enumerate(acgs_3d_lin):
         acgs_3d[i], t_log = convert_acg_log(
-            acg_lin, cbin=ACG3D_BIN_MS, cwin=ACG3D_WINDOW_MS, n_log_bins=ACG3D_N_LOG_BINS,
+            acg_lin,
+            cbin=ACG3D_BIN_MS,
+            cwin=ACG3D_WINDOW_MS,
+            n_log_bins=ACG3D_N_LOG_BINS,
         )
     return acgs_3d, t_log
