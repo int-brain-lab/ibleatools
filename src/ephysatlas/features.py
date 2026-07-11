@@ -282,6 +282,12 @@ class ChannelDataFrameSchema(pa.DataFrameModel):
         description="Atlas region identifier in Allen mapping",
         metadata={"raw_unit": "N/A"},
     )
+    distance_to_tip_um: Optional[float] = pa.Field(
+        coerce=True,
+        nullable=True,
+        description="Distance from the electrode to the tip of the probe in micrometers",
+        metadata={"raw_unit": "um"},
+    )
 
 
 class BaseChannelFeatures(pa.DataFrameModel):
@@ -408,6 +414,16 @@ class ModelLfFeatures(BaseChannelFeatures):
         nullable=True,
         description="Number of peaks detected in the residual plot after removing the linear fit of the psd decay in log-log space",
         metadata={"raw_unit": "count"},
+    )
+    rms_lf_no_car: Optional[float] = pa.Field(
+        coerce=True,
+        nullable=True,
+        description="Root mean square of LFP signal in V without common-average reference (no CAR). The value is transformed to dB using 20 * np.log10(x)",
+        metadata={
+            "raw_unit": "V",
+            "transformed_unit": "dB rel. V",
+            "transform": lambda x: 20 * np.log10(x),
+        },
     )
 
 
@@ -856,33 +872,13 @@ def get_psd_decay_features(
     Returns
     -------
     pd.DataFrame
-        DataFrame with one row per channel containing the following features:
-
-        **Aperiodic component features:**
-        - aperiodic_offset : float
-            Y-intercept of the aperiodic component fit (log10 power at 1 Hz)
-        - aperiodic_exponent : float
-            Slope of the aperiodic component in log-log space (1/f exponent)
-        - decay_fit_error : float
-            Root mean square error of the spectral model fit
-        - decay_fit_r_squared : float
-            R-squared goodness of fit for the spectral model
-        - decay_n_peaks : int
-            Number of periodic peaks detected above the aperiodic background
-
-        **Residual power features (periodic component after aperiodic removal):**
-        - psd_residual_delta : float
-            Residual power in delta band after aperiodic component removal
-        - psd_residual_theta : float
-            Residual power in theta band after aperiodic component removal
-        - psd_residual_alpha : float
-            Residual power in alpha band after aperiodic component removal
-        - psd_residual_beta : float
-            Residual power in beta band after aperiodic component removal
-        - psd_residual_gamma : float
-            Residual power in gamma band after aperiodic component removal
-        - psd_residual_lfp : float
-            Residual power in full LFP band after aperiodic component removal
+        One row per channel. Aperiodic-component columns: ``aperiodic_offset``
+        (log10 power at 1 Hz), ``aperiodic_exponent`` (1/f slope in log-log
+        space), ``decay_fit_error`` (RMS fit error), ``decay_fit_r_squared``
+        (goodness of fit) and ``decay_n_peaks`` (number of periodic peaks).
+        Residual-power columns (periodic power per band after aperiodic removal):
+        ``psd_residual_delta``, ``psd_residual_theta``, ``psd_residual_alpha``,
+        ``psd_residual_beta``, ``psd_residual_gamma`` and ``psd_residual_lfp``.
 
     Notes
     -----
@@ -918,9 +914,9 @@ def get_psd_decay_features(
 
     References
     ----------
-    .. [1] Donoghue, T., Haller, M., Peterson, E. J., Varma, P., Sebastian, P.,
-           Gao, R., ... & Voytek, B. (2020). Parameterizing neural power spectra
-           into periodic and aperiodic components. Nature neuroscience, 23(12), 1655-1665.
+    Donoghue, T., Haller, M., Peterson, E. J., Varma, P., Sebastian, P., Gao, R.,
+    et al. (2020). Parameterizing neural power spectra into periodic and aperiodic
+    components. Nature Neuroscience, 23(12), 1655-1665.
     """
     assert period.ndim == 2, "Period must be a 2D array"
     from scipy.signal import welch
@@ -1042,7 +1038,7 @@ def lf(data, fs, bands=None, decay_features=True):
     return df_lf
 
 
-def csd(data, fs, geometry, bands=None, decimate=10):
+def csd(data, fs, geometry, bands=None, decimate=10, scale=True):
     """Compute CSD features from a numpy array.
 
     Computes the current source density (CSD) features from electrophysiological data
@@ -1056,6 +1052,9 @@ def csd(data, fs, geometry, bands=None, decimate=10):
             Defaults to BANDS constant.
         decimate (int, optional): Decimation factor for CSD calculation.
             Defaults to 10.
+        scale (bool, optional): Forwarded to current_source_density. If True, scale the
+            finite difference by the intercontact distance and tissue conductivity;
+            if False, return the raw numerical finite difference. Defaults to True.
 
     Returns:
         pd.DataFrame: DataFrame with columns ['channel', 'rms_lf_csd', 'psd_delta_csd',
@@ -1079,14 +1078,18 @@ def csd(data, fs, geometry, bands=None, decimate=10):
         h=geometry,
     )
     # Calculate the CSD features
-    data_rs_diff2 = ibldsp.voltage.current_source_density(data_rs, h=geometry, n=2)
+    data_rs_diff2 = ibldsp.voltage.current_source_density(
+        data_rs, h=geometry, n=2, scale=scale
+    )
     df_csd = lf(data_rs_diff2, fs / decimate, bands=bands, decay_features=False)
     df_csd = df_csd.rename(
         columns={c: f"{c}_csd" for c in df_csd.columns if c not in ["channel"]}
     )
 
     # Calculate the Diff1 CSD features.
-    data_rs_diff1 = ibldsp.voltage.current_source_density(data_rs, h=geometry, n=1)
+    data_rs_diff1 = ibldsp.voltage.current_source_density(
+        data_rs, h=geometry, n=1, scale=scale
+    )
     df_csd_diff1 = lf(data_rs_diff1, fs / decimate, bands=bands, decay_features=False)
     df_csd_diff1 = df_csd_diff1.rename(
         columns={

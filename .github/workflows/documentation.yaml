@@ -1,0 +1,73 @@
+name: Documentation
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/documentation.yaml'
+      - 'docs/**'
+      - 'src/ephysatlas/**'
+  # Build (but do not deploy) on PRs so doc breakage is caught before merge.
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/documentation.yaml'
+      - 'docs/**'
+      - 'src/ephysatlas/**'
+
+# Least-privilege permissions required by the Pages deployment.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Serialize Pages runs; do not cancel an in-progress deployment (GitHub's
+# recommended setting once PR builds share this workflow).
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Set up Python
+        run: uv python install 3.10
+
+      # Lite install + the `docs` dependency group (myst-parser, sphinx-rtd-theme,
+      # sphinx-autodoc-typehints; sphinx itself comes transitively). The `full`
+      # extra (dartsort/dredge) is not needed: autodoc only needs to import the
+      # package, and the spike path is lazily imported.
+      - name: Sync docs dependencies
+        run: uv sync --group docs
+
+      - name: Build documentation
+        run: uv run sphinx-build -b html docs/source docs/build
+
+      # Only publish an artifact for real deployments, not for PR build-checks.
+      - name: Upload Pages artifact
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/build/
+
+  deploy:
+    needs: build
+    # PRs build for validation only; deployment happens on main / manual dispatch.
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

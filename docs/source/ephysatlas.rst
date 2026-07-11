@@ -24,14 +24,3 @@ Key Components
    :undoc-members:
    :show-inheritance:
    :no-index:
-
-Module Structure
-----------------
-
-.. toctree::
-   :maxdepth: 2
-
-   features
-   plots
-   reveal
-   utils

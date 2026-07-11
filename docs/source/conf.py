@@ -2,6 +2,7 @@
 
 import sys
 import os
+from importlib.metadata import PackageNotFoundError, version as _pkg_version
 
 #
 # For the full list of built-in configuration values, see the documentation:
@@ -13,7 +14,12 @@ import os
 project = "ibleatools"
 copyright = "2025, International Brain Laboratory"
 author = "International Brain Laboratory"
-release = "0.2.0"
+# Read the version from the installed package so the docs never go stale.
+try:
+    release = _pkg_version("ibleatools")
+except PackageNotFoundError:  # docs built without the package installed
+    release = "0.0.0"
+version = ".".join(release.split(".")[:2])
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration

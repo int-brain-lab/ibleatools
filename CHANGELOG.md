@@ -3,7 +3,26 @@
 This file documents the changes to the features for supported feature versions.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [0.6.0] - UNRELEASED
+## [0.7.0] - UNRELEASED
+
+### Added
+- Object-oriented feature-computation layer in `ephysatlas.feature_calculators`: `BaseFeatureCalculator`, `SpikeGlxLikeFeatureCalculator`, and the concrete `IBLPIDFeatureCalculator` (ONE/SpikeSortingLoader) and `SpikeGLXFileFeatureCalculator` (local AP/LF files). `compute_snippet()` is the shared template that both public entry points now use.
+- Typed per-feature parameters `FeatureParams` / `LfParams` / `CsdParams` (in `ephysatlas.feature_calculators`), settable on `compute_features_from_pid` / `compute_features_from_file` and forwarded to the engine. Accepts either the dataclasses or a nested dict (e.g. `{"csd": {"scale": False}}`), which is validated and normalized to `FeatureParams`. This makes per-feature options such as the CSD `scale` flag configurable end to end.
+- `destripe_ap_lf()` and `compute_features_from_destriped()` in `ephysatlas.feature_computation`: `compute_features_from_raw` now destripes via the shared `destripe_ap_lf` primitive and delegates feature computation to `compute_features_from_destriped`, which can also be called directly on already-destriped data.
+- OOP usage examples: `examples/feature_extraction_example.py` (public `compute_features_from_pid` path) and `examples/feature_extraction_oop.py` (`IBLPIDFeatureCalculator` / `SpikeGLXFileFeatureCalculator` directly).
+- `rms_lf_no_car` LF feature: RMS of the LF band destriped without common-average referencing (`k_filter=None`), opt-in via `feature_params.lf.compute_rms_no_car` (default off).
+- `scale` parameter (default `True`) on `ephysatlas.features.csd`, surfaced through `CsdParams.scale`, controlling whether the CSD is scaled.
+- Published the Sphinx documentation to GitHub Pages via a `.github/workflows/documentation.yaml` Actions workflow (builds on pushes to `main` and pull requests; deploys from `main`).
+
+### Changed
+- Channel metadata is now merged onto the feature table on the physical recording site `(axial_um, lateral_um, shank)` (rounded to the nearest micrometre) instead of on `channel` / `rawInd`, whose numbering is unreliable across data sources. `rawInd` is carried as descriptive metadata only. Channel builders now always provide `shank`.
+- `compute_features_from_pid` and `compute_features_from_file` are thin wrappers that delegate to the OOP calculators (`compute_features_from_raw` engine). The on-disk layout for the file path is now named after the AP/LF file stem (previously an md5 hash / `probe_unknown_pid_*`); the returned DataFrame, `channels.pqt`, and per-snippet `.attrs` are unchanged.
+- De-duplicated the reader-contract logic (`load_raw_snippet`, geometry-default filling, `_resolve_channel_labels`) into the shared `SpikeGlxLikeFeatureCalculator`; `get_destriped_snippet` now delegates to `destripe_ap_lf` so the debug/inspection path cannot diverge from the production destriping.
+
+### Deprecated
+- `compute_features`, `online_feature_computation`, and `load_data_from_pid` in `ephysatlas.feature_computation` are deprecated in favor of `compute_features_from_pid` / `compute_features_from_file` (and the OOP calculators) and will be removed in a future version.
+
+## [0.6.0]
 
 ### Changed
 - Cadzow denoising updated to `cadzow_denoiser` (replaces deprecated `cadzow_np1`): uses batched SVD, geometry-agnostic; `rank=5`, `fmax=125`, `nswx=64`, `ovx=32`, `gap_threshold=2.0`, `ppca_k=2.0`

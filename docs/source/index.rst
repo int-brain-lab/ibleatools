@@ -60,8 +60,9 @@ Basic usage:
    one = ONE()  # Initialize ONE client
    df_features = compute_features_from_pid(
        pid="your_probe_id",
-       t_start=300.0,  # Start time in seconds
-       duration=3.0,   # Duration in seconds
+       t_start=300.0,     # Start time in seconds
+       duration_ap=3.0,   # AP snippet length in seconds
+       duration_lf=3.0,   # LF snippet length in seconds
        one=one
    )
 
@@ -83,7 +84,8 @@ Basic usage:
        ap_file="path/to/ap.cbin",
        lf_file="path/to/lf.cbin",
        t_start=300.0,
-       duration=3.0
+       duration_ap=3.0,
+       duration_lf=3.0,
    )
 
 3. Legacy Function (`compute_features`) - DEPRECATED
@@ -262,17 +264,21 @@ Configuration Parameters
 ~~~~~~~~~~~~~~~~~~~~~~~~
 
 - **Required Parameters**:
+
   - `pid`: Probe ID for the recording
   - `t_start`: Start time in seconds
   - `duration`: Duration of the analysis in seconds
 
 - **Operation Mode**:
-  - `mode`: Specifies which operations to perform
+
+  - `mode`: Specifies which operations to perform:
+
     - `features`: Only compute features
     - `inference`: Only perform region inference
     - `both`: Perform both feature computation and region inference
 
 - **Optional Parameters**:
+
   - `output_dir`: Path to output directory for saving results
   - `model_path`: Path to the model directory for region inference. If not provided, a default path will be used
 
@@ -289,13 +295,8 @@ Documentation Sections
    :maxdepth: 2
    :caption: Contents:
 
-   ephysatlas
    how-to/index
    reference/index
-   features
-   plots
-   reveal
-   utils
 
 Getting Help
 ------------

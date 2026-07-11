@@ -1,5 +1,5 @@
 from one.api import ONE
-from ephysatlas.feature_computation import compute_features
+from ephysatlas.feature_computation import compute_features_from_pid
 from ephysatlas.regionclassifier import infer_regions
 from pathlib import Path
 import pandas as pd
@@ -18,7 +18,9 @@ pid = "4cb60c5c-d15b-4abd-8cfd-776bc5a81dbe"
 features_path = local_data_path.joinpath(f"{pid}__features.pqt")
 if not features_path.exists() or force_feature_compute:
     # Compute features
-    df = compute_features(pid=pid, t_start=300.0, duration=1.0, one=one)
+    df = compute_features_from_pid(
+        pid=pid, t_start=300.0, duration_ap=1.0, duration_lf=1.0, one=one
+    )
     # Save dataframe
     df.to_parquet(features_path)
 else:

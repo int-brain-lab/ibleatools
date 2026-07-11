@@ -346,9 +346,19 @@ def get_aggregated_features_per_pid(snippet_df_per_pid: pd.DataFrame):
         )
     # Load the channel metadata
     df_channels = pd.read_parquet(snippet_level_dir.parent / "channels.pqt")
-    # Merge the channel position information with the aggregated features
+    # Defensively coerce both merge keys to Int64 so the join does not silently drop
+    # rows on a channel dtype mismatch (e.g. object vs int64 vs Int64).
+    agg_df_per_pid["channel"] = agg_df_per_pid["channel"].astype("Int64")
+    df_channels["channel"] = df_channels["channel"].astype("Int64")
+    # Merge the channel position information with the aggregated features. distance_to_tip_um
+    # is channel metadata (not a raw feature), so it rides through here as a
+    # presence-filtered pass-through column: it reaches raw_ephys_features.pqt without
+    # entering the median groupby or the denoise path. No-op until channels.pqt carries it.
+    chan_cols = ["channel", "axial_um", "lateral_um"]
+    if "distance_to_tip_um" in df_channels.columns:
+        chan_cols.append("distance_to_tip_um")
     agg_df_per_pid = agg_df_per_pid.merge(
-        df_channels[["channel", "axial_um", "lateral_um"]], on="channel", how="left"
+        df_channels[chan_cols], on="channel", how="left"
     )
 
     return agg_df_per_pid
