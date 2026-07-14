@@ -28,6 +28,50 @@ import iblatlas.regions
 BINSIZE = 0.001
 LAG = 0.5
 
+# Standard bitwise_fail threshold for the sliding-RP bit (brainbox.metrics.single_units
+# .compute_labels, METRICS_PARAMS['RPmax_confidence']), percent (0-100) scale.
+BITWISE_FAIL_RP_CONFIDENCE_THRESHOLD = 90.0
+# bitwise_fail bit layout (brainbox.metrics.single_units.compute_labels): bit 0 (value 1)
+# = sliding-RP confidence, bit 1 (value 2) = noise_cutoff, bit 2 (value 4) = amp_median.
+_BITWISE_FAIL_NOISE_AMP_MASK = 0b110
+
+
+def select_good_units_relaxed_rp(df_clusters, rp_confidence_threshold=70.0):
+    """Good-unit mask with a relaxed sliding-refractory-period inclusion criterion.
+
+    The standard good-unit definition (``bitwise_fail == 0``, computed upstream by
+    ``brainbox.metrics.single_units.compute_labels``) requires the sliding-RP metric
+    (``max_confidence``) to reach :data:`BITWISE_FAIL_RP_CONFIDENCE_THRESHOLD` (90%)
+    confidence (bit 0 of ``bitwise_fail``). This keeps the noise-cutoff and amplitude
+    vetoes (bits 1-2) unchanged, but relaxes that RP bit to `rp_confidence_threshold`
+    applied directly to ``max_confidence``, letting through units whose
+    refractory-period confidence is lower than 90% but still above the threshold.
+
+    Parameters
+    ----------
+    df_clusters : pandas.DataFrame
+        Cluster-level metadata; must include ``bitwise_fail`` and ``max_confidence``
+        columns.
+    rp_confidence_threshold : float, optional
+        Minimum ``max_confidence`` (0-100 scale) to pass. Defaults to 70.0, vs the
+        standard 90.0 baked into ``bitwise_fail``.
+
+    Returns
+    -------
+    numpy.ndarray
+        Boolean mask, one entry per row of `df_clusters`. Clusters with a NaN
+        `max_confidence` (too few spikes to compute) are treated as fail.
+    """
+    required_columns = {"bitwise_fail", "max_confidence"}
+    missing_columns = required_columns - set(df_clusters.columns)
+    assert not missing_columns, f"df_clusters is missing columns: {missing_columns}"
+
+    noise_amp_pass = (
+        df_clusters["bitwise_fail"].to_numpy() & _BITWISE_FAIL_NOISE_AMP_MASK
+    ) == 0
+    rp_pass = df_clusters["max_confidence"].to_numpy() >= rp_confidence_threshold
+    return noise_amp_pass & rp_pass
+
 
 def get_neighbours_members(df_clusters, radius_um):
     """
@@ -465,3 +509,86 @@ def compute_log_acg(
         [_single_acg(spike_times[spike_clusters == cid]) for cid in cluster_ids]
     )
     return acg_log, t_log
+
+
+# ── 3D ACG (firing-rate decile x log-time-lag) ───────────────────────────────
+# Matches Han Yu's NEMO/ICLR pipeline (compute_3dACG_IBL.py): linear ACG at
+# cbin=1 ms / cwin=2000 ms via spikeinterface (same algorithm as
+# npyx.c4.fast_acg3d), then log-time resampled -> (n_clusters, 10, 201). The
+# log-resampling step is vendored in ephysatlas.iblnpyx (see that module's
+# docstring for why) rather than depended on directly; expect to swap it back
+# to a plain npyx dependency once that's resolved upstream. Recompute on a new
+# dataset with these same constants to reproduce the released format exactly.
+ACG3D_WINDOW_MS = 2000.0
+ACG3D_BIN_MS = 1.0
+ACG3D_NUM_FIRING_RATE_QUANTILES = 10
+ACG3D_SMOOTHING_MS = 250.0
+ACG3D_N_LOG_BINS = 100  # -> 2 * 100 + 1 = 201 bins after mirroring
+
+
+def compute_3d_acgs(spike_times, spike_clusters, cluster_ids, fs):
+    """
+    Firing-rate-decile x log-time-lag 3D autocorrelogram, one per cluster.
+
+    Computes the linear-time 3D ACG (spikeinterface's ``compute_acgs_3d``, the
+    same algorithm as ``npyx.c4.fast_acg3d``), then resamples each cluster onto
+    Han Yu's NEMO/ICLR log-time axis via
+    :func:`ephysatlas.iblnpyx.convert_acg_log`. Uses this module's ``ACG3D_*``
+    constants; call with unmodified constants to reproduce a reference dataset
+    exactly.
+
+    Requires the optional ``spikeinterface`` dependency (``pip install
+    ibleatools[full]``); imported lazily here so the rest of this module stays
+    usable without it.
+
+    Parameters
+    ----------
+    spike_times : numpy.ndarray
+        Spike times for the whole recording, in seconds.
+    spike_clusters : numpy.ndarray
+        Cluster id of each spike, same length as `spike_times`.
+    cluster_ids : numpy.ndarray
+        Clusters to compute the ACG for; defines the output row order.
+    fs : float
+        Sampling frequency of `spike_times`, in Hz.
+
+    Returns
+    -------
+    acgs_3d : numpy.ndarray
+        (len(cluster_ids), ACG3D_NUM_FIRING_RATE_QUANTILES, 201) float32 array.
+    t_log : numpy.ndarray
+        (201,) log-time bin centres, in ms (negative, zero, then positive lags).
+    """
+    from spikeinterface.core import NumpySorting
+    from spikeinterface.postprocessing import compute_acgs_3d
+
+    from ephysatlas.iblnpyx import convert_acg_log
+
+    sorting = NumpySorting.from_samples_and_labels(
+        samples_list=np.round(spike_times * fs).astype(np.int64),
+        labels_list=spike_clusters,
+        sampling_frequency=fs,
+        unit_ids=cluster_ids,
+    )
+    acgs_3d_lin, _, _ = compute_acgs_3d(
+        sorting,
+        window_ms=ACG3D_WINDOW_MS,
+        bin_ms=ACG3D_BIN_MS,
+        num_firing_rate_quantiles=ACG3D_NUM_FIRING_RATE_QUANTILES,
+        smoothing_factor=ACG3D_SMOOTHING_MS,
+        n_jobs=1,
+    )
+    n_bins = 2 * ACG3D_N_LOG_BINS + 1
+    acgs_3d = np.empty(
+        (acgs_3d_lin.shape[0], ACG3D_NUM_FIRING_RATE_QUANTILES, n_bins),
+        dtype=np.float32,
+    )
+    t_log = None
+    for i, acg_lin in enumerate(acgs_3d_lin):
+        acgs_3d[i], t_log = convert_acg_log(
+            acg_lin,
+            cbin=ACG3D_BIN_MS,
+            cwin=ACG3D_WINDOW_MS,
+            n_log_bins=ACG3D_N_LOG_BINS,
+        )
+    return acgs_3d, t_log
