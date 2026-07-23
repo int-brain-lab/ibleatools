@@ -257,7 +257,12 @@ class BaseFeatureCalculator(abc.ABC):
             preexisting=preexisting,
             skip_saved=options.skip_saved_computation,
         )
-        channel_labels = self._resolve_channel_labels(raw, channels)
+        # An explicit ``channel_labels`` in the options overrides automatic
+        # resolution (stored labels / cbin / snippet detection).
+        if options.channel_labels is not None:
+            channel_labels = np.asarray(options.channel_labels)
+        else:
+            channel_labels = self._resolve_channel_labels(raw, channels)
 
         provenance = collect_ibleatools_provenance(
             calculator_name=self.__class__.__name__,

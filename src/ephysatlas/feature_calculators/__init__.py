@@ -15,6 +15,12 @@ SpikeGLXFileFeatureCalculator
     Calculator for local AP/LF SpikeGLX files.
 IBLPIDFeatureCalculator
     Calculator for IBL probe insertions loaded through ONE.
+SpikeInterfaceFeatureCalculator
+    Shared reader-contract logic for SpikeInterface BaseRecording-backed sources.
+NwbFeatureCalculator
+    Calculator for NWB recordings (local, streamed, or DANDI).
+NwbSource
+    Describes how to open one NWB-backed SpikeInterface recording.
 
 Examples
 --------
@@ -32,8 +38,11 @@ Examples
 
 from .base import BaseFeatureCalculator
 from .ibl import IBLPIDFeatureCalculator
+from .nwb import NwbFeatureCalculator, NwbSource
 from .spikeglx import SpikeGLXFileFeatureCalculator
 from .spikeglx_like import SpikeGlxLikeFeatureCalculator
+from .spikeinterface_like import SpikeInterfaceFeatureCalculator
+from .spikeinterface_zarr import SpikeInterfaceZarrFeatureCalculator
 from .types import (
     CsdParams,
     DestripeOptions,
@@ -44,6 +53,7 @@ from .types import (
     LfParams,
     RawSnippet,
     SnippetWindow,
+    WaveformParams,
 )
 
 __all__ = [
@@ -56,8 +66,13 @@ __all__ = [
     "FeatureParams",
     "IBLPIDFeatureCalculator",
     "LfParams",
+    "NwbFeatureCalculator",
+    "NwbSource",
     "RawSnippet",
     "SnippetWindow",
     "SpikeGLXFileFeatureCalculator",
     "SpikeGlxLikeFeatureCalculator",
+    "SpikeInterfaceFeatureCalculator",
+    "SpikeInterfaceZarrFeatureCalculator",
+    "WaveformParams",
 ]

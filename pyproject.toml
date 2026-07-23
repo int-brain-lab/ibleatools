@@ -54,6 +54,14 @@ full = [
     "opt-einsum>=3.4.0",
     "luigi>=3.6.0",
     "iblscripts @ git+https://github.com/int-brain-lab/iblscripts.git",
+    # NWB feature calculator (feature_calculators/nwb.py): read local/streamed/DANDI
+    # NWB recordings through SpikeInterface. Lazy-imported, so lite install is unaffected.
+    "pynwb",
+    "hdmf-zarr",
+    "remfile",
+    "fsspec",
+    "aiohttp",
+    "dandi",
 ]
 
 [build-system]
