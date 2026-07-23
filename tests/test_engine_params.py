@@ -14,6 +14,7 @@ data per the testing convention:
    it enter the median groupby or the denoise path.
 """
 
+import importlib.util
 import inspect
 import tempfile
 import unittest
@@ -34,6 +35,7 @@ from ephysatlas.feature_calculators import (
     CsdParams,
     FeatureComputationOptions,
     FeatureParams,
+    WaveformParams,
 )
 
 FIXTURE_PATH = Path(features.__file__).parents[2].joinpath("tests", "fixtures")
@@ -288,6 +290,48 @@ class TestAggregationChannelMerge(unittest.TestCase):
         self.assertIn("distance_to_tip_um", chan_cols)
         self.assertIn("rms_lf_no_car", raw_cols)
         self.assertIn("rms_lf_no_car", denoise_cols)
+
+
+class TestWaveformNjobs(unittest.TestCase):
+    """Configurable dartsort ``n_jobs`` via FeatureParams.waveforms."""
+
+    def test_from_dict_waveforms_njobs(self):
+        fp = FeatureParams.from_dict({"waveforms": {"n_jobs": 1}})
+        self.assertEqual(fp.waveforms.n_jobs, 1)
+        self.assertEqual(WaveformParams().n_jobs, 0)  # default preserved
+
+    @unittest.skipUnless(importlib.util.find_spec("dartsort"), "dartsort not installed")
+    def test_njobs_forwarded_to_dartsort_subtract(self):
+        # DartParameters.n_jobs must reach dartsort.subtract (previously the passed
+        # params object was silently dropped, so no dartsort param was applied).
+        import dartsort
+
+        from ephysatlas.features import DartParameters
+
+        captured = {}
+
+        def fake_subtract(*args, **kwargs):
+            captured["n_jobs"] = kwargs.get("n_jobs")
+            raise RuntimeError("__stop__")  # short-circuit before real subtraction
+
+        data = np.random.RandomState(0).randn(4, 3000).astype("float32")
+        geometry = {
+            "x": np.array([0.0, 32.0, 0.0, 32.0]),
+            "y": np.array([0.0, 0.0, 20.0, 20.0]),
+        }
+        scratch = tempfile.mkdtemp(prefix="dart_njobs_")
+        for n_jobs in (0, 1):
+            captured.clear()
+            with patch.object(dartsort, "subtract", fake_subtract):
+                with self.assertRaises(RuntimeError):
+                    features.dart_subtraction_numpy(
+                        data,
+                        30000.0,
+                        geometry,
+                        params=DartParameters(n_jobs=n_jobs),
+                        scratch_dir=scratch,
+                    )
+            self.assertEqual(captured["n_jobs"], n_jobs)
 
 
 if __name__ == "__main__":

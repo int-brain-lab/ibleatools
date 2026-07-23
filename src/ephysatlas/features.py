@@ -214,6 +214,11 @@ class DartParameters(pydantic.BaseModel):
             Defaults to 42.
         scratch_dir (Path or str, optional): Scratch directory for temporary files.
             If None, will use system defaults.
+        n_jobs (int): dartsort worker mode passed to ``dartsort.subtract``. ``0``
+            runs in the main process (CUDA in-process, no multiprocessing; GPU
+            memory not freed between calls); ``1`` runs in a worker subprocess
+            (frees GPU memory on exit but needs a working multiprocessing setup).
+            Defaults to 0.
     """
 
     localization_radius: pydantic.PositiveFloat = 150
@@ -223,6 +228,7 @@ class DartParameters(pydantic.BaseModel):
         default=None,
         description="Scratch directory for temporary files. If None, will use system defaults.",
     )
+    n_jobs: pydantic.NonNegativeInt = 0
 
 
 class ChannelDataFrameSchema(pa.DataFrameModel):
@@ -1138,7 +1144,7 @@ def ap(data, geometry=None, channel_labels=None):
     return df_ap
 
 
-def dart_subtraction_numpy(data, fs, geometry, **params):
+def dart_subtraction_numpy(data, fs, geometry, params=None, scratch_dir=None, **extra):
     """Perform spike detection using Dartsort.
 
     This function performs spike detection and feature extraction using the
@@ -1165,7 +1171,20 @@ def dart_subtraction_numpy(data, fs, geometry, **params):
         GPU acceleration is supported when available.
     """
 
-    params = DartParameters() if params is None else DartParameters(**params)
+    # Resolve params from a DartParameters object (as _spikes_dartsort passes it), a
+    # dict of fields, or None, then merge an explicit scratch_dir. NOTE: this used to
+    # be ``DartParameters(**params)`` with a ``**params`` signature, which silently
+    # dropped a passed DartParameters object (pydantic ignores the unknown "params"
+    # key), so dartsort parameters were never actually applied.
+    if isinstance(params, DartParameters):
+        if extra:
+            params = params.model_copy(update=extra)
+    elif params is None:
+        params = DartParameters(**extra)
+    else:
+        params = DartParameters(**{**dict(params), **extra})
+    if scratch_dir is not None:
+        params = params.model_copy(update={"scratch_dir": scratch_dir})
     # The spike/waveform stack is an optional dependency: pip install ibleatools[full]
     try:
         import dartsort  # 04a23714d77f28c1bbf3351ed9e21601395d1bca is a working commit
@@ -1221,8 +1240,10 @@ def dart_subtraction_numpy(data, fs, geometry, **params):
         temp_folder := scratch_dir.joinpath(f"dart_{temp_suffix}"),
         featurization_config=featurization_cfg,
         subtraction_config=subtraction_cfg,
-        n_jobs=1,
-        # if you set n_jobs=1, this will initialize CUDA in a separate process, so GPU memory will be freed. with n_jobs=0, the cuda runtime will be initialized in the main process
+        n_jobs=params.n_jobs,
+        # n_jobs=1 initializes CUDA in a separate process (GPU memory freed on exit)
+        # but needs a working multiprocessing env; n_jobs=0 runs in the main process.
+        # Configurable via DartParameters.n_jobs / FeatureParams.waveforms (default 0).
         show_progress=True,
     )
 
