@@ -1268,7 +1268,12 @@ def compute_features_from_destriped(
                 "decimate": csd_p.decimate,
                 "scale": csd_p.scale,
             }
-        # ap / waveforms typed params are placeholders for now; keep today's kwargs.
+        wf_p = getattr(feature_params, "waveforms", None)
+        if wf_p is not None:
+            # dartsort worker mode (0 = main process, 1 = one subprocess); see
+            # WaveformParams. Flows to features.spikes -> dart_subtraction_numpy.
+            waveforms_kwargs["n_jobs"] = wf_p.n_jobs
+        # ap typed params are a placeholder for now; keep today's kwargs.
 
     # Define configuration for each feature type with their computation functions and parameters
     feature_configs = {

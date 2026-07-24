@@ -162,6 +162,21 @@ class CsdParams:
 
 
 @dataclass(frozen=True)
+class WaveformParams:
+    """Per-feature parameters for the waveforms (spike) feature family.
+
+    Attributes:
+        n_jobs (int): dartsort worker mode. ``0`` runs in the main process (CUDA
+            initialized in-process, no multiprocessing; GPU memory is not freed
+            between calls). ``1`` runs in a single worker subprocess (frees GPU
+            memory when it exits, but requires a working multiprocessing
+            environment). Defaults to ``0``.
+    """
+
+    n_jobs: int = 0
+
+
+@dataclass(frozen=True)
 class FeatureParams:
     """Typed per-feature parameters forwarded to ``compute_features_from_raw``.
 
@@ -173,10 +188,13 @@ class FeatureParams:
     Attributes:
         lf (LfParams | None): LF feature-family parameters.
         csd (CsdParams | None): CSD feature-family parameters.
+        waveforms (WaveformParams | None): Waveforms/spike feature-family
+            parameters (e.g. dartsort ``n_jobs``).
     """
 
     lf: LfParams | None = None
     csd: CsdParams | None = None
+    waveforms: WaveformParams | None = None
 
     @classmethod
     def from_dict(cls, data: Mapping) -> FeatureParams:
@@ -196,7 +214,7 @@ class FeatureParams:
             ValueError: If a key is not a recognized feature family.
             TypeError: If a family dict contains an unknown sub-parameter.
         """
-        families = {"lf": LfParams, "csd": CsdParams}
+        families = {"lf": LfParams, "csd": CsdParams, "waveforms": WaveformParams}
         kwargs = {}
         for key, value in data.items():
             if key not in families:
@@ -229,6 +247,11 @@ class FeatureComputationOptions:
             missing.
         lf_k_filter (bool | None): Spatial filter mode forwarded to LF
             destriping in ``compute_features_from_raw``.
+        channel_labels (np.ndarray | None): Explicit per-channel bad-channel
+            labels. When provided, this overrides the calculator's automatic
+            label resolution (stored labels / cbin / snippet detection) -- e.g.
+            pass ``np.zeros(n_channels)`` to disable bad-channel handling. ``None``
+            keeps the automatic behavior.
         feature_params (FeatureParams | Mapping | None): Per-feature parameters
             forwarded to ``compute_features_from_raw``. Accepts a ``FeatureParams``
             or a nested dict (e.g. ``{"csd": {"scale": False}}``), which is
@@ -247,6 +270,7 @@ class FeatureComputationOptions:
     include_trajectory: bool = True
     require_trajectory: bool = False
     lf_k_filter: bool | None = False
+    channel_labels: np.ndarray | None = None
     feature_params: FeatureParams | Mapping | None = None
     extra_kwargs: Mapping[str, Any] = field(default_factory=dict)
 
