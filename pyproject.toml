@@ -20,7 +20,7 @@ dynamic = ["version"]
 # by ibl-neuropixel, which is fine; the dartsort spike path is the part gated by [full].)
 dependencies = [
     "ibllib>=3.3.1",          # brainbox, ibllib.pipes, ONE-api (one.api/one.remote.aws), iblutil
-    "ibl-neuropixel>=1.11.0", # ibldsp, neuropixel, spikeglx
+    "ibl-neuropixel>=1.12.0", # ibldsp, neuropixel, spikeglx
     "lfpack>=0.2.0",          # data.py read_lfp_features() lazy import (LFPackReader)
     "iblatlas",               # iblatlas.atlas/regions/genomics
     "xgboost>=3.0.1",         # regionclassifier (top-level import)
