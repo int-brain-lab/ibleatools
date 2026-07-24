@@ -47,12 +47,17 @@ logger.info("LF/CSD features: shape=%s", result.features.shape)
 print(result.features.sort_values("channel")[["channel", "rms_lf", "psd_delta"]].head())
 
 # %% 2. Local Zarr stores (no storage_options needed) -- AP + LF for the full set
-# local = SpikeInterfaceZarrFeatureCalculator(
-#     ap_zarr="/path/to/...ProbeD-AP.zarr",
-#     lf_zarr="/path/to/...ProbeD-LFP.zarr",
-#     name="probeD",
-# )
-# full = local.compute_snippet(
-#     SnippetWindow(t_start=100.0, duration_ap=1.0, duration_lf=1.0),
-#     FeatureComputationOptions(features_to_compute=["lf", "csd", "ap"], include_trajectory=False),
-# )
+# Edit the two paths to point at real local .zarr stores before running this cell.
+# The AP band + waveform features are heavy, so this is slower than section 1.
+local = SpikeInterfaceZarrFeatureCalculator(
+    ap_zarr="/path/to/...ProbeD-AP.zarr",
+    lf_zarr="/path/to/...ProbeD-LFP.zarr",
+    name="probeD",
+)
+full = local.compute_snippet(
+    SnippetWindow(t_start=100.0, duration_ap=1.0, duration_lf=1.0),
+    FeatureComputationOptions(
+        features_to_compute=["lf", "csd", "ap"], include_trajectory=False
+    ),
+)
+logger.info("full feature set: shape=%s", full.features.shape)

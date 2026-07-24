@@ -65,7 +65,10 @@ full_calc = NwbFeatureCalculator.from_dandi(
     lf_electrical_series=LF_ES,
     name="CSHL049_probe00_full",
 )
-# full = full_calc.compute_snippet(
-#     SnippetWindow(t_start=100.0, duration_ap=1.0, duration_lf=1.0),
-#     FeatureComputationOptions(features_to_compute=["lf", "csd", "ap"], include_trajectory=False),
-# )
+full = full_calc.compute_snippet(
+    SnippetWindow(t_start=100.0, duration_ap=1.0, duration_lf=1.0),
+    FeatureComputationOptions(
+        features_to_compute=["lf", "csd", "ap"], include_trajectory=False
+    ),
+)
+logger.info("full feature set: shape=%s", full.features.shape)
