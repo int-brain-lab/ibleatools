@@ -32,16 +32,24 @@ def _geometry() -> dict:
     }
 
 
+_META_NP2013 = {
+    "imDatPrb_pn": "NP2013",
+    "imDatPrb_type": 2013.0,
+    "imroTbl": "(2013,384)(0 0 0 0 0)(1 0 0 0 1)(2 0 0 0 2)(3 0 0 0 3)",
+}
+
+
 class _FakeReader:
     """Minimal ``spikeglx.Reader``-like stub."""
 
-    def __init__(self, geometry=None):
+    def __init__(self, geometry=None, meta=None):
         self.fs = FS_AP
         self.ns = 6000
         self.nc = N_CH + NSYNC
         self.nsync = NSYNC
         self.file_bin = None
         self.geometry = geometry if geometry is not None else _geometry()
+        self.meta = meta
 
 
 def _channels() -> pd.DataFrame:
@@ -85,14 +93,18 @@ class TestSpikeGLXFileFeatureCalculator(unittest.TestCase):
 
     def test_enrich_skipped_when_not_included(self):
         calc = SpikeGLXFileFeatureCalculator(ap_file="probe.ap.bin", traj_dict=None)
+        calc._sr_ap = _FakeReader(meta=_META_NP2013)
         channels = _channels()
         out = calc.enrich_channel_metadata(
             channels, FeatureComputationOptions(include_trajectory=False)
         )
         self.assertIs(out, channels)
+        self.assertEqual((out["probe_model"] == "NP2013").all(), True)
+        self.assertEqual((out["referencing_scheme"] == "external").all(), True)
 
     def test_enrich_returns_unchanged_when_traj_missing_and_not_required(self):
         calc = SpikeGLXFileFeatureCalculator(ap_file="probe.ap.bin", traj_dict=None)
+        calc._sr_ap = _FakeReader(meta=_META_NP2013)
         channels = _channels()
         out = calc.enrich_channel_metadata(
             channels,
@@ -104,6 +116,7 @@ class TestSpikeGLXFileFeatureCalculator(unittest.TestCase):
 
     def test_enrich_raises_when_traj_required_but_missing(self):
         calc = SpikeGLXFileFeatureCalculator(ap_file="probe.ap.bin", traj_dict=None)
+        calc._sr_ap = _FakeReader(meta=_META_NP2013)
         with self.assertRaises(ValueError):
             calc.enrich_channel_metadata(
                 _channels(),
@@ -115,6 +128,7 @@ class TestSpikeGLXFileFeatureCalculator(unittest.TestCase):
     def test_enrich_with_traj_dict_calls_add_target_coordinates(self):
         traj = {"x": 0.0, "y": 0.0, "z": 0.0, "depth": 0.0, "theta": 0.0, "phi": 0.0}
         calc = SpikeGLXFileFeatureCalculator(ap_file="probe.ap.bin", traj_dict=traj)
+        calc._sr_ap = _FakeReader(meta=_META_NP2013)
         channels = _channels()
 
         def _fake_add(channels=None, traj_dict=None):
@@ -135,6 +149,15 @@ class TestSpikeGLXFileFeatureCalculator(unittest.TestCase):
         self.assertEqual(m.call_args.kwargs["traj_dict"], traj)
         for col in ("x_target", "y_target", "z_target"):
             self.assertIn(col, out.columns)
+
+    def test_enrich_probe_metadata_none_without_reader_meta(self):
+        calc = SpikeGLXFileFeatureCalculator(ap_file="probe.ap.bin", traj_dict=None)
+        calc._sr_ap = _FakeReader(meta=None)
+        out = calc.enrich_channel_metadata(
+            _channels(), FeatureComputationOptions(include_trajectory=False)
+        )
+        self.assertTrue(out["probe_model"].isna().all())
+        self.assertTrue(out["referencing_scheme"].isna().all())
 
 
 if __name__ == "__main__":
