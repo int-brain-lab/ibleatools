@@ -103,19 +103,21 @@ class SpikeGLXFileFeatureCalculator(SpikeGlxLikeFeatureCalculator):
     def enrich_channel_metadata(
         self, channels: pd.DataFrame, options: FeatureComputationOptions
     ) -> pd.DataFrame:
-        """Add optional trajectory target coordinates for local file sources.
+        """Add probe metadata and optional trajectory target coordinates.
 
         Args:
             channels (pd.DataFrame): Channel metadata.
             options (FeatureComputationOptions): Current computation options.
 
         Returns:
-            pd.DataFrame: Channel metadata with optional ``x_target``,
+            pd.DataFrame: Channel metadata with ``probe_model`` and
+            ``referencing_scheme`` columns, plus optional ``x_target``,
             ``y_target``, and ``z_target`` columns.
 
         Raises:
             ValueError: If trajectory metadata are required but missing.
         """
+        channels = self._join_probe_metadata(channels)
         if not options.include_trajectory:
             return channels
         if self.traj_dict is None:

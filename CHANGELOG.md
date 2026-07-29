@@ -13,6 +13,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `rms_lf_no_car` LF feature: RMS of the LF band destriped without common-average referencing (`k_filter=None`), opt-in via `feature_params.lf.compute_rms_no_car` (default off).
 - `scale` parameter (default `True`) on `ephysatlas.features.csd`, surfaced through `CsdParams.scale`, controlling whether the CSD is scaled.
 - Published the Sphinx documentation to GitHub Pages via a `.github/workflows/documentation.yaml` Actions workflow (builds on pushes to `main` and pull requests; deploys from `main`).
+- `ModelProbeDetails` gains `probe_model` and `referencing_scheme` columns, populated from SpikeGLX meta-data via the new `ibl-neuropixel` `spikeglx.get_probe_model` / `spikeglx.get_referencing_scheme` (#82)
+- `enrich_channel_metadata` now broadcasts `probe_model` and `referencing_scheme` onto every row of the channel metadata for both SpikeGLX-backed sources (`SpikeGLXFileFeatureCalculator` and `IBLPIDFeatureCalculator`), read from the first reader (AP, then LF) carrying SpikeGLX meta-data (#82)
 
 ### Changed
 - Channel metadata is now merged onto the feature table on the physical recording site `(axial_um, lateral_um, shank)` (rounded to the nearest micrometre) instead of on `channel` / `rawInd`, whose numbering is unreliable across data sources. `rawInd` is carried as descriptive metadata only. Channel builders now always provide `shank`.

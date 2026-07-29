@@ -755,6 +755,16 @@ class ModelProbeDetails(pa.DataFrameModel):
     probe_name: Optional[str] = pa.Field(nullable=True)
     probe_serial: Optional[str] = pa.Field(nullable=True)
     neuropixel_version: Optional[str] = pa.Field(nullable=True)
+    probe_model: Optional[str] = pa.Field(
+        nullable=True,
+        description="Probe part number from SpikeGLX meta-data (imDatPrb_pn), "
+        "e.g. 'NP2013'. See spikeglx.get_probe_model.",
+    )
+    referencing_scheme: Optional[str] = pa.Field(
+        nullable=True,
+        description="Referencing scheme from SpikeGLX meta-data (imroTbl): "
+        "'external', 'tip', 'ground' or 'on_shank'. See spikeglx.get_referencing_scheme.",
+    )
     lab: Optional[str] = pa.Field(nullable=True)
     pname: Optional[str] = pa.Field(nullable=True)
     spike_sorting: Optional[str] = pa.Field(nullable=True)
