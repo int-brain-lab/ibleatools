@@ -18,7 +18,6 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import spikeglx
 
 from ephysatlas.feature_computation import add_target_coordinates
 
@@ -132,25 +131,3 @@ class SpikeGLXFileFeatureCalculator(SpikeGlxLikeFeatureCalculator):
             channels=channel_dict, traj_dict=self.traj_dict
         )
         return pd.DataFrame(enriched)
-
-    def _join_probe_metadata(self, channels: pd.DataFrame) -> pd.DataFrame:
-        """Broadcast probe-level metadata onto every channel.
-
-        Args:
-            channels (pd.DataFrame): Channel metadata.
-
-        Returns:
-            pd.DataFrame: `channels` with `probe_model` and
-            `referencing_scheme` columns, read from the AP (or LF, if AP is
-            unavailable) SpikeGLX meta-data. Both are None if no reader has
-            meta-data (e.g. a reader opened without a companion .meta file).
-        """
-        reader = self.sr_ap if self.sr_ap is not None else self.sr_lf
-        meta = getattr(reader, "meta", None)
-        channels["probe_model"] = (
-            spikeglx.get_probe_model(meta) if meta is not None else None
-        )
-        channels["referencing_scheme"] = (
-            spikeglx.get_referencing_scheme(meta) if meta is not None else None
-        )
-        return channels

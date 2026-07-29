@@ -82,6 +82,44 @@ class SpikeGlxLikeFeatureCalculator(BaseFeatureCalculator):
             self._sr_lf = self._open_reader("lf")
         return self._sr_lf
 
+    def _join_probe_metadata(self, channels: pd.DataFrame) -> pd.DataFrame:
+        """Broadcast probe-level SpikeGLX metadata onto every channel.
+
+        Args:
+            channels (pd.DataFrame): Channel metadata.
+
+        Returns:
+            pd.DataFrame: A copy of ``channels`` with ``probe_model`` and
+            ``referencing_scheme`` columns, taken from the AP reader's SpikeGLX
+            meta-data, falling back to the already-open LF reader. Both are
+            ``pd.NA`` when neither carries meta-data (e.g. a reader opened
+            without a companion .meta file).
+        """
+        import spikeglx
+
+        # An AP reader can exist but carry no meta-data (no companion .meta file),
+        # in which case LF can still supply it. The fallback reads the *already
+        # opened* LF reader rather than the ``sr_lf`` property: opening a reader
+        # costs an Alyx round-trip for streamed sources, and load_raw_snippet()
+        # has opened both bands by the time this runs in the compute pipeline.
+        meta = getattr(self.sr_ap, "meta", None)
+        if meta is None:
+            meta = getattr(self._sr_lf, "meta", None)
+
+        probe_model = spikeglx.get_probe_model(meta) if meta is not None else pd.NA
+        referencing = (
+            spikeglx.get_referencing_scheme(meta) if meta is not None else pd.NA
+        )
+        # The explicit "string" dtype keeps an all-NA
+        # column concat-compatible with a populated one when channel tables from
+        # several probes are aggregated.
+        return channels.assign(
+            probe_model=pd.Series(probe_model, index=channels.index, dtype="string"),
+            referencing_scheme=pd.Series(
+                referencing, index=channels.index, dtype="string"
+            ),
+        )
+
     def load_raw_snippet(self, window: SnippetWindow) -> RawSnippet:
         """Read AP/LF snippets from the spikeglx-like readers.
 

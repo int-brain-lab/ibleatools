@@ -128,19 +128,21 @@ class IBLPIDFeatureCalculator(SpikeGlxLikeFeatureCalculator):
     def enrich_channel_metadata(
         self, channels: pd.DataFrame, options: FeatureComputationOptions
     ) -> pd.DataFrame:
-        """Add optional target coordinates from Alyx trajectories.
+        """Add probe metadata and optional target coordinates from Alyx trajectories.
 
         Args:
             channels (pd.DataFrame): Channel metadata.
             options (FeatureComputationOptions): Current computation options.
 
         Returns:
-            pd.DataFrame: Channel metadata with optional ``x_target``,
+            pd.DataFrame: Channel metadata with ``probe_model`` and
+            ``referencing_scheme`` columns, plus optional ``x_target``,
             ``y_target``, and ``z_target`` columns.
 
         Raises:
             ValueError: If trajectory metadata are required but cannot be loaded.
         """
+        channels = self._join_probe_metadata(channels)
         if not options.include_trajectory:
             return channels
         required = {"x_target", "y_target", "z_target"}

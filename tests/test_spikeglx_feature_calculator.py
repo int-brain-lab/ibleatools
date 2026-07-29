@@ -91,28 +91,41 @@ class TestSpikeGLXFileFeatureCalculator(unittest.TestCase):
         np.testing.assert_array_equal(metadata["lateral_um"], _geometry()["x"])
         np.testing.assert_array_equal(metadata["shank"], _geometry()["shank"])
 
-    def test_enrich_skipped_when_not_included(self):
+    def test_enrich_adds_probe_metadata_when_trajectory_not_included(self):
+        calc = SpikeGLXFileFeatureCalculator(ap_file="probe.ap.bin", traj_dict=None)
+        calc._sr_ap = _FakeReader(meta=_META_NP2013)
+        out = calc.enrich_channel_metadata(
+            _channels(), FeatureComputationOptions(include_trajectory=False)
+        )
+        self.assertTrue((out["probe_model"] == "NP2013").all())
+        self.assertTrue((out["referencing_scheme"] == "external").all())
+
+    def test_enrich_does_not_mutate_the_input_frame(self):
         calc = SpikeGLXFileFeatureCalculator(ap_file="probe.ap.bin", traj_dict=None)
         calc._sr_ap = _FakeReader(meta=_META_NP2013)
         channels = _channels()
         out = calc.enrich_channel_metadata(
             channels, FeatureComputationOptions(include_trajectory=False)
         )
-        self.assertIs(out, channels)
-        self.assertEqual((out["probe_model"] == "NP2013").all(), True)
-        self.assertEqual((out["referencing_scheme"] == "external").all(), True)
+        self.assertIsNot(out, channels)
+        self.assertNotIn("probe_model", channels.columns)
+        self.assertNotIn("referencing_scheme", channels.columns)
 
-    def test_enrich_returns_unchanged_when_traj_missing_and_not_required(self):
+    def test_enrich_returns_probe_metadata_only_when_traj_missing_and_not_required(
+        self,
+    ):
         calc = SpikeGLXFileFeatureCalculator(ap_file="probe.ap.bin", traj_dict=None)
         calc._sr_ap = _FakeReader(meta=_META_NP2013)
-        channels = _channels()
         out = calc.enrich_channel_metadata(
-            channels,
+            _channels(),
             FeatureComputationOptions(
                 include_trajectory=True, require_trajectory=False
             ),
         )
-        self.assertIs(out, channels)
+        self.assertTrue((out["probe_model"] == "NP2013").all())
+        # Trajectory enrichment was skipped, so no target coordinates were added.
+        for col in ("x_target", "y_target", "z_target"):
+            self.assertNotIn(col, out.columns)
 
     def test_enrich_raises_when_traj_required_but_missing(self):
         calc = SpikeGLXFileFeatureCalculator(ap_file="probe.ap.bin", traj_dict=None)
@@ -158,6 +171,29 @@ class TestSpikeGLXFileFeatureCalculator(unittest.TestCase):
         )
         self.assertTrue(out["probe_model"].isna().all())
         self.assertTrue(out["referencing_scheme"].isna().all())
+
+    def test_enrich_probe_metadata_falls_back_to_lf_when_ap_meta_missing(self):
+        # An AP reader without a companion .meta file must not shadow the LF
+        # reader's meta-data.
+        calc = SpikeGLXFileFeatureCalculator(
+            ap_file="probe.ap.bin", lf_file="probe.lf.bin", traj_dict=None
+        )
+        calc._sr_ap = _FakeReader(meta=None)
+        calc._sr_lf = _FakeReader(meta=_META_NP2013)
+        out = calc.enrich_channel_metadata(
+            _channels(), FeatureComputationOptions(include_trajectory=False)
+        )
+        self.assertTrue((out["probe_model"] == "NP2013").all())
+        self.assertTrue((out["referencing_scheme"] == "external").all())
+
+    def test_enrich_probe_metadata_from_lf_only_calculator(self):
+        calc = SpikeGLXFileFeatureCalculator(lf_file="probe.lf.bin", traj_dict=None)
+        calc._sr_lf = _FakeReader(meta=_META_NP2013)
+        out = calc.enrich_channel_metadata(
+            _channels(), FeatureComputationOptions(include_trajectory=False)
+        )
+        self.assertTrue((out["probe_model"] == "NP2013").all())
+        self.assertTrue((out["referencing_scheme"] == "external").all())
 
 
 if __name__ == "__main__":

@@ -147,6 +147,17 @@ class TestProjectDataIO(unittest.TestCase):
         self.assertIn("pid", df.columns)
         self.assertIn("bwm", df.columns)
 
+    def test_read_probe_details_accepts_file_without_optional_columns(self):
+        # Files written before probe_model/referencing_scheme were added to
+        # ModelProbeDetails must still validate: the schema marks them Optional,
+        # so strict validation may not require their presence.
+        df = _make_probe_details()
+        legacy = df.drop(columns=["probe_model", "referencing_scheme"])
+        legacy.to_parquet(self.project_path / "df_probe_details.pqt")
+        out = ephysatlas.data.read_probe_details(self.project_path, strict=True)
+        self.assertNotIn("probe_model", out.columns)
+        self.assertEqual(out.shape[0], 3)
+
     def test_read_cells_features(self):
         r = ephysatlas.data.read_cells_features(self.project_path)
         self.assertEqual(r["df_clusters"].shape[0], 10)

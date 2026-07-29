@@ -14,7 +14,10 @@ import numpy as np
 import pandas as pd
 
 from ephysatlas.feature_calculators.ibl import IBLPIDFeatureCalculator
-from ephysatlas.feature_calculators.types import RawSnippet
+from ephysatlas.feature_calculators.types import (
+    FeatureComputationOptions,
+    RawSnippet,
+)
 
 PID = "test_pid"
 N_CH = 4
@@ -23,6 +26,14 @@ FS_AP = 30000.0
 
 # Deterministic synthetic AP data shaped (n_total_channels, n_samples).
 AP_DATA = np.arange((N_CH + NSYNC) * 4000, dtype=np.float32).reshape(N_CH + NSYNC, 4000)
+
+
+# NP2.0 four-shank meta-data; the first imroTbl entry has reference id 0 -> "external".
+_META_NP2013 = {
+    "imDatPrb_pn": "NP2013",
+    "imDatPrb_type": 2013.0,
+    "imroTbl": "(2013,384)(0 0 0 0 0)(1 0 0 0 1)(2 0 0 0 2)(3 0 0 0 3)",
+}
 
 
 def _geometry() -> dict:
@@ -203,6 +214,35 @@ class TestIBLFeatureCalculator(unittest.TestCase):
         features = pd.DataFrame({"feat": [1.0, 2.0]})  # no 'channel' column
         with self.assertRaises(ValueError):
             calc._attach_physical_coordinates(features, _geometry())
+
+    def test_enrich_adds_probe_metadata(self):
+        # The streamed IBL reader carries SpikeGLX meta-data too, so channels.pqt
+        # from this source must gain the same two columns as the file-based source.
+        calc = IBLPIDFeatureCalculator(pid=PID, one=mock.MagicMock())
+        reader = _FakeReader(AP_DATA, FS_AP)
+        reader.meta = _META_NP2013
+        calc._sr_ap = reader
+        out = calc.enrich_channel_metadata(
+            pd.DataFrame({"channel": np.arange(N_CH)}),
+            FeatureComputationOptions(include_trajectory=False),
+        )
+        self.assertTrue((out["probe_model"] == "NP2013").all())
+        self.assertTrue((out["referencing_scheme"] == "external").all())
+
+    def test_enrich_probe_metadata_na_without_reader_meta(self):
+        # _FakeReader has no ``meta`` attribute at all, standing in for a reader
+        # opened without SpikeGLX meta-data. This also pins the "never open a
+        # reader just to read meta-data" contract: no LF reader is set, so a
+        # fallback through the ``sr_lf`` property would construct a real
+        # SpikeSortingLoader against the mock ONE and blow up.
+        calc = IBLPIDFeatureCalculator(pid=PID, one=mock.MagicMock())
+        calc._sr_ap = _FakeReader(AP_DATA, FS_AP)
+        out = calc.enrich_channel_metadata(
+            pd.DataFrame({"channel": np.arange(N_CH)}),
+            FeatureComputationOptions(include_trajectory=False),
+        )
+        self.assertTrue(out["probe_model"].isna().all())
+        self.assertTrue(out["referencing_scheme"].isna().all())
 
 
 if __name__ == "__main__":
