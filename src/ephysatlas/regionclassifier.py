@@ -75,7 +75,7 @@ def download_model(
     return local_path.joinpath(model_name)
 
 
-def load_model(path_model):
+def load_model(path_model, n_jobs=None):
     """Load a trained XGBoost classifier model from disk.
 
     This function loads both the model binary and its associated metadata from the
@@ -85,6 +85,10 @@ def load_model(path_model):
     Args:
         path_model (Path or str): Path to the directory containing the model files.
             The directory should contain 'model.ubj' and 'meta.yaml' files.
+        n_jobs (int, optional): Number of threads the classifier may use. Defaults to None,
+            leaving XGBoost's own choice (all available cores) untouched. Pass 1 when the
+            calling process also loads torch: both ship their own OpenMP runtime, and two
+            OpenMP thread pools in one process crash or deadlock on macOS.
 
     Returns:
         tuple: A tuple containing:
@@ -96,7 +100,9 @@ def load_model(path_model):
     with open(path_model.joinpath("meta.yaml")) as f:
         model_info = yaml.safe_load(f)
     # todo: this should support multiple model classes
-    classifier = XGBClassifier(model_file=path_model.joinpath("model.ubj"))
+    classifier = XGBClassifier(
+        model_file=path_model.joinpath("model.ubj"), n_jobs=n_jobs
+    )
     classifier.load_model(path_model.joinpath("model.ubj"))
     return classifier, model_info
 
@@ -187,7 +193,7 @@ def viterbi(
     return sequence, sequence_prob
 
 
-def infer_regions(df_inference, path_model, n_folds=5, denoise=False):
+def infer_regions(df_inference, path_model, n_folds=5, denoise=False, n_jobs=None):
     """Infer brain regions using a trained classifier model across multiple folds.
 
     This function loads a trained model for each fold and performs inference on the input data.
@@ -197,6 +203,8 @@ def infer_regions(df_inference, path_model, n_folds=5, denoise=False):
         df_inference (pd.DataFrame): DataFrame containing features for inference.
         path_model (Path): Path to the directory containing the trained model folds.
         n_folds (int, optional): Number of folds to use for inference. Defaults to 5.
+        n_jobs (int, optional): Number of threads each fold's classifier may use, passed to
+            :func:`load_model`. Defaults to None, leaving XGBoost's own choice untouched.
 
     Returns:
         tuple: A tuple containing:
@@ -206,7 +214,9 @@ def infer_regions(df_inference, path_model, n_folds=5, denoise=False):
               predicted region labels for each fold.
     """
     for fold in range(n_folds):
-        classifier, model_info = load_model(path_model.joinpath(f"FOLD0{fold}"))
+        classifier, model_info = load_model(
+            path_model.joinpath(f"FOLD0{fold}"), n_jobs=n_jobs
+        )
 
         if denoise:
             df_inference = features.denoise_dataframe(df_inference)
