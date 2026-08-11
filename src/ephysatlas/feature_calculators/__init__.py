@@ -13,6 +13,8 @@ SpikeGlxLikeFeatureCalculator
     Shared reader-contract logic for spikeglx.Reader-backed sources.
 SpikeGLXFileFeatureCalculator
     Calculator for local AP/LF SpikeGLX files.
+AllenDatFeatureCalculator
+    Calculator for Allen Visual Coding raw headerless int16 ``.dat`` bands on S3.
 IBLPIDFeatureCalculator
     Calculator for IBL probe insertions loaded through ONE.
 SpikeInterfaceFeatureCalculator
@@ -36,6 +38,11 @@ Examples
 ... )
 """
 
+from .allen_dat import (
+    ALLEN_CHANNEL_ORDER,
+    AllenDatFeatureCalculator,
+    AllenDatReader,
+)
 from .base import BaseFeatureCalculator
 from .ibl import IBLPIDFeatureCalculator
 from .nwb import NwbFeatureCalculator, NwbSource
@@ -57,6 +64,9 @@ from .types import (
 )
 
 __all__ = [
+    "ALLEN_CHANNEL_ORDER",
+    "AllenDatFeatureCalculator",
+    "AllenDatReader",
     "BaseFeatureCalculator",
     "CsdParams",
     "DestripeOptions",
