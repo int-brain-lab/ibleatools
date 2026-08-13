@@ -42,6 +42,10 @@ dependencies = [
 # Explicit alias so `pip install ibleatools[lite]` (e.g. the GUI dependency line) is
 # valid. Adds nothing — the base install is already the lite set.
 lite = []
+# Fetching/publishing models from the Hugging Face Hub. Lazy-imported by
+# ephysatlas.model_registry, so the lite install stays unaffected and the S3 route
+# keeps working without it.
+hub = ["huggingface_hub>=0.34"]
 # Full install: the base (lite) plus the spike/waveform-computation stack AND the
 # SDSC supercomputing-pipeline deps (luigi, iblscripts).
 full = [

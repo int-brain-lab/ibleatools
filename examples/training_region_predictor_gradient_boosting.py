@@ -11,6 +11,7 @@ import xgboost
 import iblutil.numerical
 import ephysatlas.anatomy
 import ephysatlas.data
+import ephysatlas.features  # voltage_features_set(); do not rely on ephysatlas.data importing it
 import ephysatlas.fixtures
 import ephysatlas.regionclassifier
 
@@ -26,20 +27,25 @@ if not path_features.exists():
     from one.api import ONE
     one = ONE()
     ephysatlas.data.list_available_labels(one=one, project=PROJECT)
-    path_features = ephysatlas.data.download_tables(root_path_features, label=VINTAGE, one=one)
+    path_features = ephysatlas.data.download_tables(root_path_features, label=VINTAGE, project=PROJECT, one=one)
 
 brain_atlas = ephysatlas.anatomy.ClassifierAtlas()
 
 path_models = path_features.parents[1].joinpath('models')
-path_models.mkdir(exist_ok=True)
+path_models.mkdir(parents=True, exist_ok=True)
 
 df_features = ephysatlas.data.read_features_from_disk(path_features, brain_atlas=brain_atlas)
+# Drop the low-quality (misaligned) insertions *before* deriving anything from the table, so
+# that `rids` below matches the classes actually seen in training.
+df_features = df_features[~df_features.index.get_level_values(0).isin(LOWQ)]
 
 FEATURE_SET = [
     "raw_lf",
     "raw_lf_csd",
     "raw_ap",
-    "localisation",
+    # "localisation",  # no-op: voltage_features_set() has no case for it (and no default
+    # case), so it silently adds 0 columns. Its features (alpha_mean/alpha_std) come in
+    # via "waveforms" (ModelSpikeFeatures).
     "waveforms",
     # "micro-manipulator",
 ]
@@ -77,7 +83,6 @@ def train(test_idx, fold_label=''):
     x_test = df_features.loc[test_idx, x_list].values.astype(float)
     y_train = df_features.loc[train_idx, TRAIN_LABEL].values.astype(float)
     y_test = df_features.loc[test_idx, TRAIN_LABEL].values.astype(float)
-    df_test = df_features.loc[test_idx, :].copy()
     classes = np.unique(df_features.loc[train_idx, TRAIN_LABEL])
 
     _, iy_train = iblutil.numerical.ismember(y_train, classes)
@@ -88,26 +93,30 @@ def train(test_idx, fold_label=''):
 
     # fit model
     classifier.fit(x_train, iy_train)
+
+    np.testing.assert_array_equal(classes, rids)
+
+    # The global model is trained on every channel, so there is no held-out set to score:
+    # scoring empty arrays raises in sklearn >=1.8. Its reported accuracy is the pooled
+    # out-of-fold accuracy, computed by the caller.
+    if y_test.size == 0:
+        return None, classifier, np.nan, None
+
     # make predictions
     y_pred = classes[classifier.predict(x_test)]
-    df_test[f"cosmos_prediction"] = classes[
-        classifier.predict(df_test.loc[:, x_list].values)
-    ]
     accuracy = sklearn.metrics.accuracy_score(y_test, y_pred)
     # row: true, col: predicted
     confusion_matrix = sklearn.metrics.confusion_matrix(y_test, y_pred)
     print(f"{fold_label} Accuracy: {accuracy}")
-
-    np.testing.assert_array_equal(classes, rids)
 
     return classifier.predict_proba(x_test), classifier, accuracy, confusion_matrix
 
 
 # %%
 n_folds = 5
-df_features = df_features[~df_features.index.get_level_values(0).isin(LOWQ)]
 all_pids = np.array(df_features.index.get_level_values(0).unique())
-rs = np.random.seed(12345)
+rs = 12345  # np.random.seed() returns None, so keep the value to record it in the metadata
+np.random.seed(rs)
 np.random.shuffle(all_pids)
 ifold = np.floor(np.arange(len(all_pids)) / len(all_pids) * n_folds)
 
@@ -117,7 +126,7 @@ for i in range(n_folds):
     test_pids = all_pids[ifold == i]
     train_pids = all_pids[ifold!= i]
     test_idx = np.isin(df_features.index.get_level_values(0), test_pids)
-    probas, classifier, accuracy, _ = train(
+    probas, classifier, accuracy, confusion_matrix = train(
         test_idx=test_idx, fold_label=f"fold {i}"
     )
     df_predictions.loc[test_idx, rids] = probas
