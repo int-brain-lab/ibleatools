@@ -30,8 +30,7 @@ def _release_config(cfg: Config) -> dict:
 
 def diag_log_prob(z, means, log_var):
     return -0.5 * (
-        LOG2PI
-        + log_var[None]
+        LOG2PI + log_var[None]
         + (z[:, None] - means[None]).square() * torch.exp(-log_var[None])
     ).sum(-1)
 
@@ -39,9 +38,7 @@ def diag_log_prob(z, means, log_var):
 class VoxelNeighborhoodDataset(Dataset):
     """One example per (probe, atlas voxel), with target voxel excluded from inputs."""
 
-    def __init__(
-        self, data: PreparedData, shared_z: np.ndarray, split_value: int, cfg: Config
-    ):
+    def __init__(self, data: PreparedData, shared_z: np.ndarray, split_value: int, cfg: Config):
         self.examples = []
         self.cfg = cfg
         self.z = shared_z.astype(np.float32)
@@ -50,9 +47,7 @@ class VoxelNeighborhoodDataset(Dataset):
 
         by_probe_voxel: Dict[Tuple[int, int], List[int]] = {}
         for i in ids:
-            by_probe_voxel.setdefault(
-                (int(data.probe_index[i]), int(data.voxel_id[i])), []
-            ).append(int(i))
+            by_probe_voxel.setdefault((int(data.probe_index[i]), int(data.voxel_id[i])), []).append(int(i))
 
         probe_to_indices = {
             int(probe): ids[data.probe_index[ids] == probe]
@@ -71,9 +66,7 @@ class VoxelNeighborhoodDataset(Dataset):
                 raise RuntimeError("FATAL target leakage")
 
             if len(candidates):
-                distance_um = (
-                    np.linalg.norm(data.xyz_m[candidates] - center[None], axis=1) * 1e6
-                )
+                distance_um = np.linalg.norm(data.xyz_m[candidates] - center[None], axis=1) * 1e6
                 keep = distance_um <= cfg.max_neighbor_distance_um
                 candidates = candidates[keep]
                 distance_um = distance_um[keep]
@@ -83,20 +76,14 @@ class VoxelNeighborhoodDataset(Dataset):
                 neighbors = np.empty(0, dtype=np.int64)
 
             context = data.context[target].mean(0).astype(np.float32)
-            self.examples.append(
-                (probe, voxel, target, neighbors, center.astype(np.float32), context)
-            )
+            self.examples.append((probe, voxel, target, neighbors, center.astype(np.float32), context))
 
     def __len__(self):
         return len(self.examples)
 
     def __getitem__(self, item):
         probe, voxel, target, neighbors, center, context = self.examples[item]
-        rel = (
-            (self.data_xyz[neighbors] - center[None])
-            * 1e6
-            / self.cfg.max_neighbor_distance_um
-        )
+        rel = (self.data_xyz[neighbors] - center[None]) * 1e6 / self.cfg.max_neighbor_distance_um
         return {
             "probe_index": probe,
             "voxel_id": voxel,
@@ -155,9 +142,7 @@ def collate_voxels(batch):
 
 
 class PointTransformerGMM(nn.Module):
-    def __init__(
-        self, latent_dim: int, context_dim: int, n_components: int, cfg: Config
-    ):
+    def __init__(self, latent_dim: int, context_dim: int, n_components: int, cfg: Config):
         super().__init__()
         h = cfg.pt_hidden_dim
         if h % cfg.pt_heads != 0:
@@ -166,25 +151,14 @@ class PointTransformerGMM(nn.Module):
         self.raw_sigma = nn.Parameter(torch.zeros(n_components, latent_dim))
         self.sigma_min = cfg.sigma_min
         self.register_buffer("prior_logits", torch.zeros(n_components))
-        self.unit_embed = nn.Sequential(
-            nn.Linear(latent_dim + 3, h), nn.GELU(), nn.Linear(h, h)
-        )
-        self.query_embed = nn.Sequential(
-            nn.Linear(context_dim, h), nn.GELU(), nn.Linear(h, h)
-        )
+        self.unit_embed = nn.Sequential(nn.Linear(latent_dim + 3, h), nn.GELU(), nn.Linear(h, h))
+        self.query_embed = nn.Sequential(nn.Linear(context_dim, h), nn.GELU(), nn.Linear(h, h))
         layer = nn.TransformerEncoderLayer(
-            h,
-            cfg.pt_heads,
-            4 * h,
-            cfg.pt_dropout,
-            batch_first=True,
-            norm_first=True,
-            activation="gelu",
+            h, cfg.pt_heads, 4 * h, cfg.pt_dropout,
+            batch_first=True, norm_first=True, activation="gelu",
         )
         self.encoder = nn.TransformerEncoder(layer, cfg.pt_layers)
-        self.gate = nn.Sequential(
-            nn.LayerNorm(h), nn.Linear(h, h), nn.GELU(), nn.Linear(h, n_components)
-        )
+        self.gate = nn.Sequential(nn.LayerNorm(h), nn.Linear(h, h), nn.GELU(), nn.Linear(h, n_components))
 
     @property
     def log_var(self):
@@ -194,18 +168,11 @@ class PointTransformerGMM(nn.Module):
         tokens = self.unit_embed(torch.cat([nz, pos], -1))
         q = self.query_embed(context)[:, None]
         x = torch.cat([q, tokens], 1)
-        mask = torch.cat(
-            [torch.zeros(len(pad), 1, dtype=torch.bool, device=pad.device), pad], 1
-        )
+        mask = torch.cat([torch.zeros(len(pad), 1, dtype=torch.bool, device=pad.device), pad], 1)
         return self.gate(self.encoder(x, src_key_padding_mask=mask)[:, 0])
 
     def batch_log_prob(self, batch):
-        logits = self.logits(
-            batch["neighbor_z"],
-            batch["relative_position"],
-            batch["context"],
-            batch["neighbor_padding_mask"],
-        )
+        logits = self.logits(batch["neighbor_z"], batch["relative_position"], batch["context"], batch["neighbor_padding_mask"])
         b, t, d = batch["target_z"].shape
         flat = batch["target_z"].reshape(-1, d)
         comp = diag_log_prob(flat, self.means, self.log_var).reshape(b, t, -1)
@@ -213,12 +180,7 @@ class PointTransformerGMM(nn.Module):
         return lp[batch["target_mask"]], logits
 
     def posterior_mean(self, batch):
-        logits = self.logits(
-            batch["neighbor_z"],
-            batch["relative_position"],
-            batch["context"],
-            batch["neighbor_padding_mask"],
-        )
+        logits = self.logits(batch["neighbor_z"], batch["relative_position"], batch["context"], batch["neighbor_padding_mask"])
         return F.softmax(logits, -1) @ self.means
 
 
@@ -226,21 +188,13 @@ def apply_neighbor_dropout(batch, cfg: Config):
     pad = batch["neighbor_padding_mask"].clone()
     valid = ~pad
     if cfg.neighbor_token_dropout_probability > 0:
-        pad |= (
-            torch.rand(valid.shape, device=valid.device)
-            < cfg.neighbor_token_dropout_probability
-        ) & valid
+        pad |= (torch.rand(valid.shape, device=valid.device) < cfg.neighbor_token_dropout_probability) & valid
     if cfg.full_neighbor_dropout_probability > 0:
-        pad[
-            torch.rand(len(pad), device=pad.device)
-            < cfg.full_neighbor_dropout_probability
-        ] = True
+        pad[torch.rand(len(pad), device=pad.device) < cfg.full_neighbor_dropout_probability] = True
     dropped = dict(batch)
     dropped["neighbor_padding_mask"] = pad
     dropped["neighbor_z"] = batch["neighbor_z"].masked_fill(pad[..., None], 0.0)
-    dropped["relative_position"] = batch["relative_position"].masked_fill(
-        pad[..., None], 0.0
-    )
+    dropped["relative_position"] = batch["relative_position"].masked_fill(pad[..., None], 0.0)
     dropped["effective_neighbor_count"] = (~pad).sum(1)
     return dropped
 
@@ -268,14 +222,11 @@ def move(batch, device):
 
 
 def evaluate_nll(model, loader, cfg):
-    model.eval()
-    total = 0.0
-    n = 0
+    model.eval(); total = 0.0; n = 0
     with torch.no_grad():
         for b in loader:
             lp, _ = model.batch_log_prob(move(b, cfg.device))
-            total += float(lp.sum().cpu())
-            n += len(lp)
+            total += float(lp.sum().cpu()); n += len(lp)
     return -total / max(n, 1)
 
 
@@ -303,64 +254,38 @@ def fit_point_transformer_gmm(shared_z, data, cfg: Config, out: Path):
     ).fit(z[train_idx])
     joblib.dump(gmm, out / "unconditional_gmm_train_only.joblib")
 
-    model = PointTransformerGMM(
-        z.shape[1], data.context.shape[1], cfg.gmm_components, cfg
-    ).to(cfg.device)
+    model = PointTransformerGMM(z.shape[1], data.context.shape[1], cfg.gmm_components, cfg).to(cfg.device)
     with torch.no_grad():
-        model.means.copy_(
-            torch.tensor(gmm.means_, dtype=torch.float32, device=cfg.device)
-        )
+        model.means.copy_(torch.tensor(gmm.means_, dtype=torch.float32, device=cfg.device))
         sigma = np.sqrt(gmm.covariances_)
         raw = np.log(np.expm1(np.maximum(sigma - cfg.sigma_min, 1e-5)))
         model.raw_sigma.copy_(torch.tensor(raw, dtype=torch.float32, device=cfg.device))
-        prior_logits = torch.log(
-            torch.tensor(
-                gmm.weights_, dtype=torch.float32, device=cfg.device
-            ).clamp_min(1e-8)
-        )
+        prior_logits = torch.log(torch.tensor(gmm.weights_, dtype=torch.float32, device=cfg.device).clamp_min(1e-8))
         model.prior_logits.copy_(prior_logits)
         model.gate[-1].bias.copy_(prior_logits)
 
-    opt = torch.optim.AdamW(
-        model.parameters(), lr=cfg.pt_learning_rate, weight_decay=cfg.pt_weight_decay
-    )
-    best = np.inf
-    state = None
-    bad = 0
+    opt = torch.optim.AdamW(model.parameters(), lr=cfg.pt_learning_rate, weight_decay=cfg.pt_weight_decay)
+    best = np.inf; state = None; bad = 0
     history = {"train_nll": [], "val_nll": [], "mean_effective_train_neighbors": []}
     for epoch in range(1, cfg.pt_epochs + 1):
-        model.train()
-        total = 0.0
-        n = 0
-        effective_counts = []
+        model.train(); total = 0.0; n = 0; effective_counts = []
         for b in tqdm(loaders[0], desc=f"PT-GMM {epoch:03d}", leave=False):
-            b = move(b, cfg.device)
-            b_train = apply_neighbor_dropout(b, cfg)
-            effective_counts.append(
-                float(b_train["effective_neighbor_count"].float().mean().cpu())
-            )
+            b = move(b, cfg.device); b_train = apply_neighbor_dropout(b, cfg)
+            effective_counts.append(float(b_train["effective_neighbor_count"].float().mean().cpu()))
             opt.zero_grad(set_to_none=True)
             lp, _ = model.batch_log_prob(b_train)
             loss = -lp.mean()
             if not torch.isfinite(loss):
                 raise FloatingPointError("Non-finite PT-GMM loss")
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
-            opt.step()
-            total += float(loss.detach().cpu()) * len(lp)
-            n += len(lp)
+            loss.backward(); torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip); opt.step()
+            total += float(loss.detach().cpu()) * len(lp); n += len(lp)
         val = evaluate_nll(model, loaders[1], cfg)
         tr = total / max(n, 1)
-        history["train_nll"].append(tr)
-        history["val_nll"].append(val)
-        history["mean_effective_train_neighbors"].append(
-            float(np.mean(effective_counts))
-        )
+        history["train_nll"].append(tr); history["val_nll"].append(val)
+        history["mean_effective_train_neighbors"].append(float(np.mean(effective_counts)))
         print(f"PT-GMM epoch {epoch:03d}: train NLL={tr:.4f} val NLL={val:.4f}")
         if val < best - cfg.pt_min_delta:
-            best = val
-            state = copy.deepcopy(model.state_dict())
-            bad = 0
+            best = val; state = copy.deepcopy(model.state_dict()); bad = 0
         else:
             bad += 1
         if bad >= cfg.pt_patience:
@@ -380,35 +305,22 @@ def fit_point_transformer_gmm(shared_z, data, cfg: Config, out: Path):
         },
         out / cfg.pt_checkpoint_name,
     )
-    return (
-        model,
-        scaler,
-        datasets,
-        loaders,
-        {
-            "history": history,
-            "best_val_nll": float(best),
-            "test_nll": float(evaluate_nll(model, loaders[2], cfg)),
-            "n_train_examples": len(datasets[0]),
-            "n_validation_examples": len(datasets[1]),
-            "n_test_examples": len(datasets[2]),
-        },
-    )
+    return model, scaler, datasets, loaders, {
+        "history": history,
+        "best_val_nll": float(best),
+        "test_nll": float(evaluate_nll(model, loaders[2], cfg)),
+        "n_train_examples": len(datasets[0]),
+        "n_validation_examples": len(datasets[1]),
+        "n_test_examples": len(datasets[2]),
+    }
 
 
-def load_point_transformer_gmm(
-    checkpoint_path: Path,
-    data: PreparedData,
-    standardized_shared: np.ndarray,
-    cfg: Config,
-):
+def load_point_transformer_gmm(checkpoint_path: Path, data: PreparedData, standardized_shared: np.ndarray, cfg: Config):
     payload = torch.load(checkpoint_path, map_location=cfg.device, weights_only=False)
     latent_dim = int(payload.get("latent_dim", standardized_shared.shape[1]))
     context_dim = int(payload.get("context_dim", data.context.shape[1]))
     n_components = int(payload.get("n_components", cfg.gmm_components))
-    model = PointTransformerGMM(latent_dim, context_dim, n_components, cfg).to(
-        cfg.device
-    )
+    model = PointTransformerGMM(latent_dim, context_dim, n_components, cfg).to(cfg.device)
     model.load_state_dict(payload["model_state_dict"], strict=True)
     model.eval()
     datasets = make_neighborhood_datasets(data, standardized_shared, cfg)

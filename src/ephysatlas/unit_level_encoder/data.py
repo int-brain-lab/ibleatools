@@ -45,9 +45,7 @@ def normalize_waveforms(waveforms: np.ndarray, eps: float = 1e-8) -> np.ndarray:
 
 
 def normalize_acgs(acgs: np.ndarray) -> np.ndarray:
-    x = np.nan_to_num(
-        np.asarray(acgs, dtype=np.float32), nan=0.0, posinf=0.0, neginf=0.0
-    )
+    x = np.nan_to_num(np.asarray(acgs, dtype=np.float32), nan=0.0, posinf=0.0, neginf=0.0)
     return np.log1p(np.clip(x, 0.0, None)).astype(np.float32)
 
 
@@ -86,9 +84,18 @@ def split_probes_from_manifest(
         return_inverse=True,
     )
 
-    train_pids = {str(pid) for pid in split_manifest.get("train_pids", [])}
-    validation_pids = {str(pid) for pid in split_manifest.get("validation_pids", [])}
-    test_pids = {str(pid) for pid in split_manifest.get("test_pids", [])}
+    train_pids = {
+        str(pid)
+        for pid in split_manifest.get("train_pids", [])
+    }
+    validation_pids = {
+        str(pid)
+        for pid in split_manifest.get("validation_pids", [])
+    }
+    test_pids = {
+        str(pid)
+        for pid in split_manifest.get("test_pids", [])
+    }
 
     # ------------------------------------------------------------------
     # Validate the authoritative spatial split itself.
@@ -97,7 +104,11 @@ def split_probes_from_manifest(
     overlap_train_test = train_pids & test_pids
     overlap_val_test = validation_pids & test_pids
 
-    if overlap_train_val or overlap_train_test or overlap_val_test:
+    if (
+        overlap_train_val
+        or overlap_train_test
+        or overlap_val_test
+    ):
         raise RuntimeError(
             "The authoritative spatial split is invalid: "
             "some PIDs occur in more than one split.\n"
@@ -163,7 +174,8 @@ def split_probes_from_manifest(
     incorrectly_assigned_test = [
         pid
         for pid in test_pids
-        if pid in unit_pid_to_split and unit_pid_to_split[pid] != 2
+        if pid in unit_pid_to_split
+        and unit_pid_to_split[pid] != 2
     ]
     if incorrectly_assigned_test:
         raise RuntimeError(
@@ -180,7 +192,8 @@ def split_probes_from_manifest(
             unique_pids,
             probe_split,
         )
-        if str(pid) not in known_pids and int(split_value) != 0
+        if str(pid) not in known_pids
+        and int(split_value) != 0
     ]
     if wrongly_held_out_unknown:
         raise RuntimeError(
@@ -254,12 +267,8 @@ def assert_strict_probe_split(
     return audit
 
 
-def make_voxel_ids(
-    xyz_m: np.ndarray, voxel_size_um: float
-) -> Tuple[np.ndarray, np.ndarray]:
-    keys = np.floor(np.asarray(xyz_m, dtype=np.float64) * 1e6 / voxel_size_um).astype(
-        np.int64
-    )
+def make_voxel_ids(xyz_m: np.ndarray, voxel_size_um: float) -> Tuple[np.ndarray, np.ndarray]:
+    keys = np.floor(np.asarray(xyz_m, dtype=np.float64) * 1e6 / voxel_size_um).astype(np.int64)
     unique, inv = np.unique(keys, axis=0, return_inverse=True)
     return inv.astype(np.int64), unique
 
@@ -278,9 +287,7 @@ def prepare_data(
     if not (len(acgs) == len(context) == len(xyz) == len(pids) == n):
         raise ValueError("All arrays must have the same first dimension")
     if tuple(waveforms.shape[1:]) != tuple(cfg.waveform_shape):
-        raise ValueError(
-            f"Expected waveform shape {cfg.waveform_shape}, got {waveforms.shape[1:]}"
-        )
+        raise ValueError(f"Expected waveform shape {cfg.waveform_shape}, got {waveforms.shape[1:]}")
     if tuple(acgs.shape[1:]) != tuple(cfg.acg_shape):
         raise ValueError(f"Expected ACG shape {cfg.acg_shape}, got {acgs.shape[1:]}")
 
@@ -308,9 +315,7 @@ def prepare_data(
     train = split == 0
     mean = context[train].mean(0, keepdims=True)
     std = context[train].std(0, keepdims=True)
-    unique_counts = np.array(
-        [len(np.unique(context[train, j])) for j in range(context.shape[1])]
-    )
+    unique_counts = np.array([len(np.unique(context[train, j])) for j in range(context.shape[1])])
     continuous = unique_counts > 4
     mean[:, ~continuous] = 0.0
     std[:, ~continuous] = 1.0

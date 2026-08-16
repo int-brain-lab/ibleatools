@@ -6,16 +6,14 @@ from typing import Tuple
 
 import torch
 
-from ephysatlas.model_registry import UNIT_AE_FILE, UNIT_GMM_FILE
-
 
 @dataclass
 class Config:
     """Configuration for the released waveform+ACG unit-level atlas model.
 
-    Restored from a checkpoint on the inference path: ``UnitEncoder`` rebuilds it from the
-    ``config`` dict the autoencoder checkpoint carries. Runtime paths are deliberately not part
-    of the scientific configuration, and the training-only fields below are unused when serving.
+    Runtime paths are deliberately not part of the scientific configuration.
+    The runner assigns a temporary output directory and all persistent artifacts
+    are published to / loaded from Hugging Face.
     """
 
     seed: int = 0
@@ -87,22 +85,12 @@ class Config:
 
     waveform_sampling_rate_hz: float = 30_000.0
     cosmos_region_names: Tuple[str, ...] = (
-        "CB",
-        "CNU",
-        "CTXsp",
-        "HB",
-        "HPF",
-        "HY",
-        "Isocortex",
-        "MB",
-        "OLF",
-        "TH",
-        "root",
+        "CB", "CNU", "CTXsp", "HB", "HPF", "HY",
+        "Isocortex", "MB", "OLF", "TH", "root",
     )
 
-    # Runtime-only fields, unused on the inference path.
+    # Runtime-only fields populated by run_unit_level_encoder.py.
     output_dir: Path | str = Path(".")
-    # The canonical release filenames, written straight into the model-dir root.
-    ae_checkpoint_name: str = UNIT_AE_FILE
-    pt_checkpoint_name: str = UNIT_GMM_FILE
+    ae_checkpoint_name: str = "best_multimodal_autoencoder.pt"
+    pt_checkpoint_name: str = "best_point_transformer_gmm.pt"
     summary_name: str = "summary.json"
