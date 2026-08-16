@@ -297,6 +297,7 @@ Documentation Sections
 
    how-to/index
    reference/index
+   design/model-hub
 
 Getting Help
 ------------

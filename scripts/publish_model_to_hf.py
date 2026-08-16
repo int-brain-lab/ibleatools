@@ -1,0 +1,323 @@
+"""Package a trained region-classifier directory for the Hugging Face Hub.
+
+Takes a local model directory produced by :func:`ephysatlas.regionclassifier.save_model`
+and makes it self-describing and self-testing:
+
+1. ``ephysatlas_model.json`` -- the manifest (row identity, features, classes + acronyms,
+   fold layout, what ``predict`` returns, training-time environment).
+2. ``README.md`` -- Hugging Face model card with YAML frontmatter.
+3. ``LICENSE`` -- CC-BY-4.0 notice.
+4. ``example/features_sample.parquet`` + ``example/expected_predictions.parquet`` -- a small
+   real sample and its golden output, so ``RegionClassifier.selftest()`` can detect drift.
+
+Packaging is always safe to run. Uploading is opt-in and requires ``--upload`` plus a
+write-scoped token in ``HF_TOKEN``; without both, this script only writes local files.
+Uploads are **private by default** and `predictions.pqt` is never published.
+
+Usage::
+
+    # 1. package locally and self-test -- no network, no token
+    python scripts/publish_model_to_hf.py --model-dir <dir> --features <agg_full dir>
+
+    # 2. upload to a PRIVATE repo, pushing main and tagging the vintage
+    HF_TOKEN=... python scripts/publish_model_to_hf.py --model-dir <dir> \\
+        --features <agg_full dir> --method xgboost \\
+        --repo-id int-brain-lab/ea-decoder-channel-xgboost --revision 2026_W32 --upload
+
+    # 3. review on the Hub, then open it up
+    HF_TOKEN=... python scripts/publish_model_to_hf.py \\
+        --repo-id int-brain-lab/ea-decoder-channel-xgboost --make-public
+"""
+
+import argparse
+import json
+import logging
+import os
+import sys
+from pathlib import Path
+
+import numpy as np
+
+import ephysatlas.anatomy
+import ephysatlas.data
+import ephysatlas.model_registry as model_registry
+from ephysatlas.regionclassifier import RegionClassifier
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)-8s %(name)s: %(message)s")
+_logger = logging.getLogger("publish_model_to_hf")
+
+LICENSE_TEXT = """Creative Commons Attribution 4.0 International (CC-BY-4.0)
+
+You are free to share and adapt this material for any purpose, including commercially,
+provided you give appropriate credit.
+
+Full licence text: https://creativecommons.org/licenses/by/4.0/legalcode
+"""
+
+CARD_TEMPLATE = """---
+license: cc-by-4.0
+library_name: xgboost
+tags:
+  - neuroscience
+  - electrophysiology
+  - neuropixels
+  - brain-region-classification
+  - international-brain-lab
+---
+
+# Ephys Atlas region classifier ({vintage}, {region_map})
+
+Predicts the **brain region of each Neuropixels recording channel** from electrophysiological
+features alone -- no histology required. Trained by the
+[International Brain Laboratory](https://www.internationalbrainlab.com/) on the Ephys Atlas
+feature release `{vintage}`.
+
+> **What you can and cannot do without IBL access.** The *model* runs for anyone. Computing
+> the *input features* from raw Neuropixels data needs `ibllib` / `ibl-neuropixel`, and the
+> raw data itself is IBL-hosted. To try the model immediately, use the bundled sample under
+> `example/` -- no account, no raw data, no S3.
+
+## Quickstart
+
+```python
+import pandas as pd
+from ephysatlas import load_pretrained
+
+model = load_pretrained("{repo_id}", revision="{revision}")
+df = pd.read_parquet("example/features_sample.parquet")   # or your own features
+out = model.predict(df)
+print(out[["predicted_acronym", "prediction_probability", "fold_agreement"]].head())
+```
+
+`load_pretrained` is the entry point for every ephysatlas model, whatever its family — it reads
+`ephysatlas_model.json` and returns the right wrapper. Use it rather than importing a concrete
+class, so your code keeps working as the package evolves.
+
+`predict` returns one row per input channel, indexed identically to the input:
+`predicted_acronym`, its Allen `predicted_atlas_id`, the fold-averaged
+`prediction_probability`, a `fold_agreement` column (fraction of the {n_folds} folds voting
+for the winner -- the natural uncertainty signal), and a `p_<acronym>` column per class.
+
+The prediction columns are namespaced so that `df.join(out)` works: the feature table already
+carries histology-derived `acronym` / `atlas_id` columns, and predictions must not shadow them.
+
+### Which weights are used
+
+By default `predict` **averages the {n_folds} fold models**; the single all-data `model.ubj` at
+the repo root is not used. Pass `estimator="global"` to use it instead — one fifth of the
+inference cost, but `fold_agreement` then comes back as NaN, since no folds were consulted. The
+two modes disagree on a small fraction of channels, so pick one per analysis.
+
+## Inputs
+
+- **{n_features} features**, listed in `ephysatlas_model.json` under `inputs.features`. Every
+  one must be present; `predict` raises and names anything missing.
+- Indexed by `(pid, channel)`, one row per recording channel.
+- **Must be the denoised aggregated features of vintage `{vintage}`** -- that is, the
+  `raw_ephys_features_denoised.pqt` table produced by the Ephys Atlas aggregation pipeline,
+  as loaded by `ephysatlas.data.read_features_from_disk`. Units are baked into that table by
+  the pipeline (RMS features in dB, `spike_count` in log2), so feeding raw features, or
+  features from a vintage whose units differ, produces confident nonsense. Run
+  `model.selftest()` to confirm your install reproduces the shipped output before trusting it.
+
+## Performance
+
+Pooled out-of-fold accuracy: **{accuracy:.4f}** over {n_classes} {region_map} regions,
+{training_size} insertions. Splits are by insertion (`pid`), so no channel from a test
+insertion appears in training. See `confusion_matrix.png`.
+
+Note this figure scores each channel with the one fold that held it out, whereas the default
+`estimator="ensemble"` averages all {n_folds} folds. On genuinely unseen data the ensemble is
+typically the marginally better estimator, so treat the number as slightly conservative.
+
+## Limitations
+
+- Trained on IBL Neuropixels 1.0 recordings in mouse. Transfer to NP2, other species or
+  other rigs is untested.
+- Coverage follows IBL brain-wide-map targeting; rare regions are under-represented.
+- `{region_map}` is a coarse parcellation. Predictions are per-channel and spatially
+  unregularised -- neighbouring channels can disagree.
+- Known-misaligned insertions were excluded from training.
+
+## Reproducibility
+
+**Pin the revision.** `revision="{revision}"` is an immutable tag. Omitting `revision` resolves
+to `main`, which tracks whichever model is currently recommended and *will* change when a new
+feature vintage is published — fine for a first look, not for anything you publish or re-run.
+
+`ephysatlas_model.json` records the training-time `environment` (xgboost, scikit-learn, numpy,
+ephysatlas, python) and `random_seed`. Verify your install reproduces the shipped output:
+
+```python
+model.selftest()
+```
+
+Note `scikit-learn<1.9` is required (1.9 broke `OneToOneFeatureMixin.get_feature_names_out`,
+which the feature transformer relies on).
+
+## Citation
+
+Please cite the International Brain Laboratory Ephys Atlas. Model id `{model_id}`,
+feature vintage `{vintage}`.
+"""
+
+
+def build_example(path_model: Path, path_features: Path, n_channels: int, seed: int = 0):
+    """Write a small real feature sample plus its golden predictions.
+
+    Args:
+        path_model (Path): Model directory to write ``example/`` into.
+        path_features (Path): An ``agg_full`` features directory to sample from.
+        n_channels (int): Number of channels to include.
+        seed (int, optional): Sampling seed, so the sample is reproducible.
+
+    Returns:
+        Path: The ``example/`` directory.
+    """
+    index = json.loads(path_model.joinpath(model_registry.MODEL_MANIFEST_FILE).read_text())
+    feature_names = index["inputs"]["features"]
+    brain_atlas = ephysatlas.anatomy.ClassifierAtlas()
+    df = ephysatlas.data.read_features_from_disk(
+        path_features, brain_atlas=brain_atlas, strict=False
+    )
+    missing = [c for c in feature_names if c not in df.columns]
+    if missing:
+        raise ValueError(f"features directory lacks columns the model needs: {missing}")
+
+    # Sample whole channels at random but deterministically, spanning many insertions.
+    rng = np.random.default_rng(seed)
+    take = rng.choice(df.shape[0], size=min(n_channels, df.shape[0]), replace=False)
+    sample = df.iloc[np.sort(take)].loc[:, feature_names]
+
+    example = path_model.joinpath("example")
+    example.mkdir(parents=True, exist_ok=True)
+    sample.to_parquet(example.joinpath("features_sample.parquet"))
+
+    # Golden output, produced by the very model being published.
+    predictions = RegionClassifier(path_model).predict(sample)
+    predictions.to_parquet(example.joinpath("expected_predictions.parquet"))
+    _logger.info(f"wrote example/ with {len(sample)} channels")
+    return example
+
+
+def write_card(path_model: Path, index: dict, repo_id: str, revision: str):
+    """Render README.md and LICENSE into the model directory."""
+    training = index.get("training") or {}
+    config = index["config"]
+    card = CARD_TEMPLATE.format(
+        vintage=index["vintage"],
+        region_map=config["region_map"],
+        repo_id=repo_id,
+        revision=revision or "main",
+        n_folds=len(index["artifacts"]["folds"]) or 1,
+        n_features=len(index["inputs"]["features"]),
+        n_classes=len(config["classes"]),
+        accuracy=config.get("accuracy") or float("nan"),
+        training_size=training.get("training_size", "n/a"),
+        model_id=index["model_id"],
+    )
+    path_model.joinpath("README.md").write_text(card)
+    path_model.joinpath("LICENSE").write_text(LICENSE_TEXT)
+    _logger.info("wrote README.md and LICENSE")
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--model-dir", type=Path, default=None, help="local model directory")
+    parser.add_argument(
+        "--features", type=Path, default=None, help="agg_full dir to build example/ from"
+    )
+    parser.add_argument("--n-example-channels", type=int, default=500)
+    parser.add_argument(
+        "--method",
+        default=None,
+        help="semantic label for the approach (xgboost, transformer, ridge, regionmean, gmm). "
+        "Recorded in the manifest; distinct from model_class, which is the implementation.",
+    )
+    parser.add_argument(
+        "--repo-id",
+        default=None,
+        help="target Hugging Face repo, e.g. org/ephys-atlas-region-classifier. "
+        "Required with --upload; otherwise only used in the model card's quickstart.",
+    )
+    parser.add_argument("--revision", default=None, help="branch/tag to publish under")
+    parser.add_argument(
+        "--upload",
+        action="store_true",
+        help="actually push to the hub (requires HF_TOKEN with write scope)",
+    )
+    parser.add_argument(
+        "--public",
+        action="store_true",
+        help="create the repository public immediately. Default is private, so the contents "
+        "can be reviewed on the Hub first; use --make-public afterwards to open it up.",
+    )
+    parser.add_argument(
+        "--make-public",
+        action="store_true",
+        help="flip an existing repository to public and exit. Does not upload anything.",
+    )
+    args = parser.parse_args(argv)
+
+    # --make-public is a standalone step: no packaging, no upload, no model directory needed.
+    if args.make_public:
+        token = os.environ.get("HF_TOKEN")
+        if not token or not args.repo_id:
+            _logger.error("--make-public needs both HF_TOKEN and --repo-id")
+            return 1
+        model_registry.HFModelSource(
+            repo_id=args.repo_id, token=token
+        ).set_visibility(private=False)
+        _logger.info(f"https://huggingface.co/{args.repo_id}")
+        return 0
+
+    if args.model_dir is None:
+        parser.error("--model-dir is required")
+    path_model = args.model_dir.resolve()
+    if not path_model.joinpath("meta.yaml").exists():
+        parser.error(f"{path_model} does not look like a model directory (no meta.yaml)")
+
+    index = model_registry.build_model_index(path_model, method=args.method)
+    # Without a repo id the card still renders; the quickstart carries a visible placeholder
+    # rather than a wrong default, since there is no single repo across model families.
+    write_card(
+        path_model, index, args.repo_id or f"{model_registry.DEFAULT_HF_ORG}/ea-decoder-channel-xgboost", args.revision
+    )
+    if args.features is not None:
+        build_example(path_model, args.features, args.n_example_channels)
+        RegionClassifier(path_model).selftest()
+        _logger.info("selftest passed against the freshly written golden file")
+    else:
+        _logger.warning("--features not given: no example/ or golden file written")
+
+    _logger.info(f"packaged model at {path_model}")
+    for p in sorted(path_model.rglob("*")):
+        if p.is_file():
+            _logger.info(f"   {p.relative_to(path_model)} ({p.stat().st_size / 1e6:.2f} MB)")
+
+    if not args.upload:
+        _logger.info("packaging only. Re-run with --upload (and HF_TOKEN set) to publish.")
+        return 0
+
+    token = os.environ.get("HF_TOKEN")
+    if not token:
+        _logger.error("--upload given but HF_TOKEN is not set; refusing to publish")
+        return 1
+    if not args.repo_id:
+        _logger.error("--upload requires --repo-id; refusing to guess a destination")
+        return 1
+    source = model_registry.HFModelSource(repo_id=args.repo_id, token=token)
+    source.upload(
+        path_model,
+        revision=args.revision,
+        message=f"Publish {path_model.name}",
+        private=not args.public,
+    )
+    _logger.info(f"https://huggingface.co/{args.repo_id}")
+    if args.revision:
+        _logger.info(f"pinned revision: {args.revision} (tag on main)")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

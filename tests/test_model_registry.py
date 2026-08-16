@@ -6,6 +6,7 @@ exercised without touching S3 or the Hugging Face Hub.
 """
 
 import json
+import logging
 import shutil
 import tempfile
 import unittest
@@ -28,7 +29,9 @@ def _make_model_dir(path_models: Path, n_folds: int = 2) -> Path:
     """Train and save a tiny synthetic model with folds, and build its manifest."""
     rng = np.random.default_rng(0)
     x = rng.normal(size=(90, len(FEATURES)))
-    y = rng.integers(0, len(CLASSES), size=90)
+    # Balanced and deterministic, so every held-out block still contains all classes and each
+    # fold model emits the full class vector.
+    y = np.tile(np.arange(len(CLASSES)), 90 // len(CLASSES))
     meta_template = dict(
         RANDOM_SEED=42,
         VINTAGE="2026_W32",
@@ -39,18 +42,25 @@ def _make_model_dir(path_models: Path, n_folds: int = 2) -> Path:
         TRAINING=dict(training_size=10, testing_size=2),
     )
 
-    def _fit():
+    def _fit(keep=None):
+        """Fit on all rows, or on everything outside one held-out block (a real fold)."""
+        mask = np.ones(len(y), bool) if keep is None else keep
         clf = XGBClassifier(n_estimators=2, max_depth=2)
-        clf.fit(x, y)
+        clf.fit(x[mask], y[mask])
         return clf
 
+    # The global model sees every row; each fold holds one block out. That is what makes the
+    # ensemble and the global model genuinely different estimators, as in production.
     path_model = regionclassifier.save_model(
         path_models, _fit(), dict(meta_template), identifier="test"
     )
+    block = len(y) // n_folds
     for i in range(n_folds):
+        keep = np.ones(len(y), bool)
+        keep[i * block : (i + 1) * block] = False
         regionclassifier.save_model(
             path_models,
-            _fit(),
+            _fit(keep),
             dict(meta_template),
             subfolder=f"FOLD{i:02d}",
             identifier="test",
@@ -100,6 +110,139 @@ class TestResolveModel(unittest.TestCase):
         )
 
 
+class TestLoadPretrained(unittest.TestCase):
+    """The single public entry point -- the only API a published model card should name."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.path_model = _make_model_dir(self.tmp)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_local_directory_needs_no_network_or_credentials(self):
+        import ephysatlas
+
+        model = ephysatlas.load_pretrained(self.path_model)
+        self.assertIsInstance(model, regionclassifier.RegionClassifier)
+        self.assertEqual(model.index["task"], model_registry.TASK_REGION_CLASSIFICATION)
+
+    def test_exposed_at_package_top_level(self):
+        # The card names `from ephysatlas import load_pretrained`; keep that import stable
+        # even if the modules underneath are reorganised.
+        import ephysatlas
+
+        self.assertTrue(callable(ephysatlas.load_pretrained))
+
+    def test_unknown_task_raises_actionably(self):
+        index_file = self.path_model.joinpath(model_registry.MODEL_MANIFEST_FILE)
+        index = json.loads(index_file.read_text())
+        index["task"] = "some-future-task"
+        index_file.write_text(json.dumps(index))
+        import ephysatlas
+
+        with self.assertRaises(ValueError) as ctx:
+            ephysatlas.load_pretrained(self.path_model)
+        self.assertIn("some-future-task", str(ctx.exception))
+
+    def test_unpinned_hub_id_warns_about_moving_main(self):
+        import ephysatlas
+
+        # Resolution will fail (no network / no such repo); we only care that the warning
+        # about an unpinned revision is emitted before the attempt.
+        with self.assertLogs("ephysatlas.models", level="WARNING") as logs:
+            with self.assertRaises(ValueError):
+                ephysatlas.load_pretrained("org/does-not-exist", source="hf")
+        self.assertIn("no revision pinned", "\n".join(logs.output))
+
+    def test_local_directory_does_not_warn_about_revision(self):
+        import ephysatlas
+
+        logger = logging.getLogger("ephysatlas.models")
+        with self.assertLogs(logger, level="INFO") as logs:
+            ephysatlas.load_pretrained(self.path_model)
+        self.assertNotIn("no revision pinned", "\n".join(logs.output))
+
+    def test_manifestless_model_defaults_to_region_classification(self):
+        self.path_model.joinpath(model_registry.MODEL_MANIFEST_FILE).unlink()
+        import ephysatlas
+
+        model = ephysatlas.load_pretrained(self.path_model)
+        self.assertIsInstance(model, regionclassifier.RegionClassifier)
+
+
+class TestUpload(unittest.TestCase):
+    """The upload sequence, with HfApi stubbed -- nothing here touches the network."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.path_model = self.tmp.joinpath("2026_W32_Cosmos_test")
+        self.path_model.mkdir()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _run(self, revision, tag_raises=False):
+        calls = []
+
+        class FakeApi:
+            def __init__(self, token=None):
+                calls.append(("HfApi", token))
+
+            def create_repo(self, **kw):
+                calls.append(("create_repo", kw["repo_id"], kw["private"], kw["exist_ok"]))
+
+            def upload_folder(self, **kw):
+                # uploading must target main (no revision=), so main is never left empty
+                calls.append(
+                    ("upload_folder", kw["repo_id"], kw.get("revision"), kw.get("ignore_patterns"))
+                )
+                return "commit"
+
+            def create_tag(self, **kw):
+                calls.append(("create_tag", kw["tag"]))
+                if tag_raises:
+                    raise RuntimeError("tag exists")
+
+        import huggingface_hub
+
+        original = huggingface_hub.HfApi
+        huggingface_hub.HfApi = FakeApi
+        try:
+            source = model_registry.HFModelSource(repo_id="org/repo", token="t")
+            source.upload(self.path_model, revision=revision)
+        finally:
+            huggingface_hub.HfApi = original
+        return calls
+
+    def test_creates_repo_then_uploads_to_main_then_tags(self):
+        calls = self._run("2026_W32")
+        names = [c[0] for c in calls]
+        # create_repo must come first: the original bug was tagging a repo that did not exist
+        self.assertEqual(names, ["HfApi", "create_repo", "upload_folder", "create_tag"])
+        # private by default, so nothing goes world-readable as a side effect of a script
+        self.assertEqual(calls[1][1:], ("org/repo", True, True))
+        # revision must be None on upload_folder, i.e. the push lands on main
+        self.assertIsNone(calls[2][2])
+        self.assertEqual(calls[3][1], "2026_W32")
+
+    def test_predictions_are_never_uploaded(self):
+        ignore = self._run("2026_W32")[2][3]
+        self.assertIn("predictions.pqt", ignore)
+
+    def test_no_revision_skips_tagging(self):
+        self.assertEqual([c[0] for c in self._run(None)][-1], "upload_folder")
+
+    def test_existing_tag_warns_rather_than_moving_it(self):
+        # Tags are immutable citations; a failure to create one must not abort the publish.
+        calls = self._run("2026_W32", tag_raises=True)
+        self.assertIn("create_tag", [c[0] for c in calls])
+
+    def test_upload_without_repo_id_raises(self):
+        with self.assertRaises(ValueError):
+            model_registry.HFModelSource().upload(self.path_model)
+
+
 class TestBuildModelIndexDispatch(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
@@ -137,7 +280,7 @@ class TestLoadModelDispatch(unittest.TestCase):
         self.assertEqual(info["MODEL_CLASS"], "xgboost.sklearn.XGBClassifier")
 
     def test_unknown_model_class_in_manifest_raises(self):
-        index_file = self.path_model.joinpath(model_registry.MODEL_INDEX_FILE)
+        index_file = self.path_model.joinpath(model_registry.MODEL_MANIFEST_FILE)
         index = json.loads(index_file.read_text())
         index["model_class"] = "some.other.Model"
         index_file.write_text(json.dumps(index))
@@ -157,10 +300,38 @@ class TestLoadModelDispatch(unittest.TestCase):
         self.assertIsInstance(classifier, XGBClassifier)
 
     def test_legacy_model_without_manifest_falls_back_to_meta_yaml(self):
-        self.path_model.joinpath(model_registry.MODEL_INDEX_FILE).unlink()
+        self.path_model.joinpath(model_registry.MODEL_MANIFEST_FILE).unlink()
         classifier, info = regionclassifier.load_model(self.path_model)
         self.assertIsInstance(classifier, XGBClassifier)
         self.assertEqual(info["MODEL_CLASS"], "xgboost.sklearn.XGBClassifier")
+
+    def test_manifest_alone_is_sufficient(self):
+        # Families that never go through save_model (e.g. the torch spatial encoder) ship no
+        # meta.yaml at all, so the manifest must be enough on its own.
+        self.path_model.joinpath("meta.yaml").unlink()
+        classifier, info = regionclassifier.load_model(self.path_model)
+        self.assertIsInstance(classifier, XGBClassifier)
+        # model_info is still meta-shaped, so infer_regions-style callers keep working
+        self.assertEqual(info["FEATURES"], FEATURES)
+        self.assertEqual(info["CLASSES"], CLASSES)
+        self.assertEqual(info["MODEL_CLASS"], "xgboost.sklearn.XGBClassifier")
+
+    def test_neither_manifest_nor_meta_raises(self):
+        self.path_model.joinpath(model_registry.MODEL_MANIFEST_FILE).unlink()
+        self.path_model.joinpath("meta.yaml").unlink()
+        with self.assertRaises(FileNotFoundError):
+            regionclassifier.load_model(self.path_model)
+
+    def test_weights_filename_comes_from_the_manifest(self):
+        # The loader must honour artifacts.weights rather than hardcoding model.ubj.
+        path = self.path_model
+        path.joinpath("model.ubj").rename(path.joinpath("weights.ubj"))
+        index_file = path.joinpath(model_registry.MODEL_MANIFEST_FILE)
+        index = json.loads(index_file.read_text())
+        index["artifacts"]["weights"] = "weights.ubj"
+        index_file.write_text(json.dumps(index))
+        classifier, _ = regionclassifier.load_model(path)
+        self.assertIsInstance(classifier, XGBClassifier)
 
 
 class TestRegionClassifier(unittest.TestCase):
@@ -180,7 +351,7 @@ class TestRegionClassifier(unittest.TestCase):
 
     def test_manifest_core_and_task_block(self):
         index = json.loads(
-            self.path_model.joinpath(model_registry.MODEL_INDEX_FILE).read_text()
+            self.path_model.joinpath(model_registry.MODEL_MANIFEST_FILE).read_text()
         )
         # shared core: identifies the family and where the weights live
         self.assertEqual(index["task"], model_registry.TASK_REGION_CLASSIFICATION)
@@ -189,23 +360,105 @@ class TestRegionClassifier(unittest.TestCase):
         self.assertEqual(index["artifacts"]["folds"], ["FOLD00", "FOLD01"])
         self.assertEqual(index["training"]["random_seed"], 42)
         self.assertIsNotNone(index["environment"]["xgboost"])
+        # granularity, and the inputs/outputs blocks
+        self.assertEqual(index["granularity"], "channel")
+        self.assertEqual(index["inputs"]["index"], ["pid", "channel"])
+        self.assertEqual(index["inputs"]["features"], FEATURES)
+        self.assertEqual(index["outputs"]["kind"], "categorical")
+        self.assertIn("predicted_acronym", index["outputs"]["columns"])
         # task-specific config
         config = index["config"]
-        self.assertEqual(config["features"], FEATURES)
         self.assertEqual(config["classes"], CLASSES)
         self.assertEqual(len(config["class_acronyms"]), len(CLASSES))
         self.assertEqual(config["region_map"], "Cosmos")
 
+    def test_method_and_compatibility_recorded_only_when_given(self):
+        # Omitted rather than guessed: an unverified probe-compatibility claim in a public
+        # manifest is the silent failure the field exists to prevent.
+        index = model_registry.build_model_index(self.path_model)
+        self.assertNotIn("method", index)
+        self.assertNotIn("compatibility", index)
+        index = model_registry.build_model_index(
+            self.path_model, method="xgboost", compatibility={"probe": ["NP1"]}
+        )
+        self.assertEqual(index["method"], "xgboost")
+        self.assertEqual(index["compatibility"]["probe"], ["NP1"])
+
+    def test_method_is_independent_of_model_class(self):
+        # The point of keeping both: model_class is the implementation used for dispatch,
+        # method is the stable semantic label. Two methods can share one model_class.
+        index = model_registry.build_model_index(self.path_model, method="xgboost")
+        self.assertEqual(index["model_class"], "xgboost.sklearn.XGBClassifier")
+        self.assertEqual(index["method"], "xgboost")
+        self.assertNotEqual(index["method"], index["model_class"])
+
     def test_predict_returns_acronyms_and_agreement(self):
         out = regionclassifier.RegionClassifier(self.path_model).predict(self.df)
         self.assertEqual(len(out), len(self.df))
-        for column in ["acronym", "atlas_id", "probability", "fold_agreement"]:
+        for column in [
+            "predicted_acronym",
+            "predicted_atlas_id",
+            "prediction_probability",
+            "fold_agreement",
+        ]:
             self.assertIn(column, out.columns)
-        self.assertTrue(set(out["acronym"]).issubset({"Isocortex", "TH", "root"}))
-        self.assertTrue(((out["probability"] >= 0) & (out["probability"] <= 1)).all())
-        self.assertTrue(((out["fold_agreement"] > 0) & (out["fold_agreement"] <= 1)).all())
+        self.assertTrue(
+            set(out["predicted_acronym"]).issubset({"Isocortex", "TH", "root"})
+        )
+        p = out["prediction_probability"]
+        self.assertTrue(((p >= 0) & (p <= 1)).all())
+        # 0 is reachable, and meaningful: the fold-averaged argmax can be a class that no
+        # single fold ranked first (e.g. folds split between A and B while all rank C second).
+        # Those rows are exactly the ones a user should distrust.
+        agreement = out["fold_agreement"]
+        self.assertTrue(((agreement >= 0) & (agreement <= 1)).all())
         # index is preserved so results can be joined straight back onto the input
         pd.testing.assert_index_equal(out.index, self.df.index)
+
+    def test_global_estimator_uses_the_single_model(self):
+        clf = regionclassifier.RegionClassifier(self.path_model)
+        ens = clf.predict(self.df, estimator="ensemble")
+        glob = clf.predict(self.df, estimator="global")
+        # same schema and index in both modes, so downstream code does not branch
+        self.assertEqual(list(ens.columns), list(glob.columns))
+        pd.testing.assert_index_equal(ens.index, glob.index)
+        # a single model has no folds to agree with -- NaN, not a fabricated 1.0
+        self.assertTrue(glob["fold_agreement"].isna().all())
+        self.assertTrue(ens["fold_agreement"].notna().all())
+
+    def test_global_and_ensemble_are_actually_different_estimators(self):
+        clf = regionclassifier.RegionClassifier(self.path_model)
+        ens = clf.predict(self.df, estimator="ensemble")
+        glob = clf.predict(self.df, estimator="global")
+        self.assertFalse(
+            np.allclose(
+                ens["prediction_probability"].values, glob["prediction_probability"].values
+            )
+        )
+
+    def test_unknown_estimator_raises(self):
+        clf = regionclassifier.RegionClassifier(self.path_model)
+        with self.assertRaises(ValueError):
+            clf.predict(self.df, estimator="best")
+
+    def test_global_estimator_without_root_weights_raises(self):
+        self.path_model.joinpath("model.ubj").unlink()
+        clf = regionclassifier.RegionClassifier(self.path_model)
+        with self.assertRaises(ValueError) as ctx:
+            clf.predict(self.df, estimator="global")
+        self.assertIn("ensemble", str(ctx.exception))
+
+    def test_prediction_columns_do_not_collide_with_ground_truth(self):
+        # Both the channel feature table and the cluster table already carry histology
+        # `acronym`/`atlas_id`. Predictions must be joinable onto them without a suffix.
+        df = self.df.copy()
+        df["acronym"] = "Isocortex"
+        df["atlas_id"] = 315
+        out = regionclassifier.RegionClassifier(self.path_model).predict(df)
+        self.assertEqual(set(out.columns) & set(df.columns), set())
+        joined = df.join(out)  # would raise if any column overlapped
+        self.assertIn("predicted_acronym", joined.columns)
+        self.assertIn("acronym", joined.columns)
 
     def test_missing_features_raise_and_name_them(self):
         clf = regionclassifier.RegionClassifier(self.path_model)
