@@ -126,7 +126,10 @@ class ContextAtlasManager:
             merfish.load()
             LEVEL = "subclass"
             path = AllenAtlas._get_cache_dir().joinpath("merfish")
-            cell_type_vol = torch.tensor(np.load(path.joinpath(f"merfish_{LEVEL}.npy")))
+            merfish_volume = np.load(path.joinpath(f"merfish_{LEVEL}.npy"))
+            # Denoise merfish volume
+            denoised_volume = merfish.denoise_volume(merfish_volume, agea.load_atlas().label != 0)
+            cell_type_vol = torch.tensor(denoised_volume)
             zero_ind = torch.where(cell_type_vol.sum(dim=0) == 0)
             cell_type_vol = cell_type_vol.numpy()
             size_x, size_z, size_y = cell_type_vol.shape[1:]
@@ -369,6 +372,9 @@ def build_channels_plus_emptyvoxels_with_neighbors(
     batch_size_eval: int = 1024,
     shuffle_train: bool = True,
     seed: int = 0,
+    split_manifest: dict | None = None,
+    preprocessing_stats: dict | None = None,
+    return_preprocessing_stats: bool = False,
 ):
     """
       • GRID DATASET = voxels that do NOT contain any ephys channels.
@@ -417,10 +423,15 @@ def build_channels_plus_emptyvoxels_with_neighbors(
 
     grid_mask = ~has_eph & has_ctx
 
-    # Context stats over ALL grid voxels (rec + non-rec) per your original rule
+    # Context stats over ALL grid voxels (rec + non-rec) per your original rule.
+    # For a released model, use the frozen preprocessing statistics.
     ctx_all_t = torch.from_numpy(ctx_all).float()
-    ctx_mean = ctx_all_t[grid_mask].mean(dim=0)
-    ctx_std = ctx_all_t[grid_mask].std(dim=0, unbiased=False).clamp_min(1e-6)
+    if preprocessing_stats is not None and {"ctx_mean", "ctx_std"}.issubset(preprocessing_stats):
+        ctx_mean = torch.as_tensor(preprocessing_stats["ctx_mean"], dtype=torch.float32)
+        ctx_std = torch.as_tensor(preprocessing_stats["ctx_std"], dtype=torch.float32).clamp_min(1e-6)
+    else:
+        ctx_mean = ctx_all_t[grid_mask].mean(dim=0)
+        ctx_std = ctx_all_t[grid_mask].std(dim=0, unbiased=False).clamp_min(1e-6)
 
     def _stdz_ctx(t):
         mask = np.where(t.sum(axis=1) != 0)[0]
@@ -493,14 +504,8 @@ def build_channels_plus_emptyvoxels_with_neighbors(
             [str(i) for i in range(int(uniq_p.max()) + 1)], dtype=str
         )
 
-    def _read_pid_txt(path):
-        path = Path(path)
-        with open(path, "r") as f:
-            return [line.strip() for line in f if line.strip()]
-
-    def _pid_strings_to_probe_indices(pid_list, *, split_name):
+    def _pid_strings_to_probe_indices(pid_list, *, split_name, require_all=True):
         pid_to_probe_idx = {str(pid_names[i]): int(i) for i in uniq_p}
-
         ids = []
         missing = []
 
@@ -511,30 +516,56 @@ def build_channels_plus_emptyvoxels_with_neighbors(
             else:
                 missing.append(pid)
 
-        if len(missing) > 0:
-            print(
-                f"[warn] {split_name}: {len(missing)} pids from txt were not found "
-                f"in loaded data. First few: {missing[:5]}"
+        if missing:
+            message = (
+                f"{split_name}: {len(missing)} PIDs from the saved split are not "
+                f"present in loaded vintage data. First few: {missing[:5]}"
             )
+            if require_all:
+                raise ValueError(message)
+            print(f"[warn] {message}")
 
         return set(ids)
-
-    rng = np.random.default_rng(seed)
-    shuffled = rng.permutation(uniq_p)
 
     p_tr = 0.7
     p_va = 0.1
 
-    nP = len(shuffled)
-    n_tr_p = int(round(p_tr * nP))
-    n_va_p = int(round(p_va * nP))
+    if split_manifest is None:
+        # First training of a vintage: create the split once. The caller should
+        # immediately persist split_info as split.json in the release registry.
+        rng = np.random.default_rng(seed)
+        shuffled = rng.permutation(uniq_p)
 
-    n_tr_p = int(np.clip(n_tr_p, 1, nP))
-    n_va_p = int(np.clip(n_va_p, 0, nP - n_tr_p))
+        nP = len(shuffled)
+        n_tr_p = int(round(p_tr * nP))
+        n_va_p = int(round(p_va * nP))
 
-    p_tr_ids = set(shuffled[:n_tr_p].astype(int).tolist())
-    p_va_ids = set(shuffled[n_tr_p : n_tr_p + n_va_p].astype(int).tolist())
-    p_te_ids = set(shuffled[n_tr_p + n_va_p :].astype(int).tolist())
+        n_tr_p = int(np.clip(n_tr_p, 1, nP))
+        n_va_p = int(np.clip(n_va_p, 0, nP - n_tr_p))
+
+        p_tr_ids = set(shuffled[:n_tr_p].astype(int).tolist())
+        p_va_ids = set(shuffled[n_tr_p : n_tr_p + n_va_p].astype(int).tolist())
+        p_te_ids = set(shuffled[n_tr_p + n_va_p :].astype(int).tolist())
+        split_source = "generated"
+    else:
+        # Re-training/evaluation of a released vintage: the manifest is
+        # authoritative. Never silently regenerate from seed.
+        p_tr_ids = _pid_strings_to_probe_indices(
+            split_manifest.get("train_pids", []),
+            split_name="train",
+            require_all=True,
+        )
+        p_va_ids = _pid_strings_to_probe_indices(
+            split_manifest.get("validation_pids", []),
+            split_name="validation",
+            require_all=True,
+        )
+        p_te_ids = _pid_strings_to_probe_indices(
+            split_manifest.get("test_pids", []),
+            split_name="test",
+            require_all=True,
+        )
+        split_source = "manifest"
 
     # safety checks
     all_split_ids = set(p_tr_ids) | set(p_va_ids) | set(p_te_ids)
@@ -556,8 +587,11 @@ def build_channels_plus_emptyvoxels_with_neighbors(
 
     missing_loaded = set(uniq_p.tolist()) - all_split_ids
     if len(missing_loaded) > 0:
+        # This is allowed for an old manifest evaluated against a data table that
+        # contains additional probes. Those probes must not enter any split.
         print(
-            f"[warn] {len(missing_loaded)} loaded probes are not assigned to any split."
+            f"[split] {len(missing_loaded)} loaded probes are intentionally not assigned "
+            f"to the {split_source} split."
         )
 
     # map probe split -> row indices
@@ -565,31 +599,45 @@ def build_channels_plus_emptyvoxels_with_neighbors(
     I_va = np.flatnonzero(np.isin(rec_pids_i, list(p_va_ids)))
     I_te = np.flatnonzero(np.isin(rec_pids_i, list(p_te_ids)))
 
-    # Compute clipping thresholds from TRAIN only
-    rec_ephys_low_pctl = torch.tensor(
-        [
-            np.percentile(rec_ephys[I_tr, feat_ind].cpu().numpy(), 0.5)
-            for feat_ind in range(rec_ephys.shape[1])
-        ],
-        dtype=rec_ephys.dtype,
-    )
+    # Compute clipping thresholds from TRAIN only, unless a released model provides
+    # the exact frozen preprocessing statistics.
+    if preprocessing_stats is not None and {
+        "rec_ephys_low_pctl", "rec_ephys_high_pctl", "e_mean", "e_std"
+    }.issubset(preprocessing_stats):
+        rec_ephys_low_pctl = torch.as_tensor(
+            preprocessing_stats["rec_ephys_low_pctl"], dtype=rec_ephys.dtype
+        )
+        rec_ephys_high_pctl = torch.as_tensor(
+            preprocessing_stats["rec_ephys_high_pctl"], dtype=rec_ephys.dtype
+        )
+    else:
+        rec_ephys_low_pctl = torch.tensor(
+            [
+                np.percentile(rec_ephys[I_tr, feat_ind].cpu().numpy(), 0.5)
+                for feat_ind in range(rec_ephys.shape[1])
+            ],
+            dtype=rec_ephys.dtype,
+        )
+        rec_ephys_high_pctl = torch.tensor(
+            [
+                np.percentile(rec_ephys[I_tr, feat_ind].cpu().numpy(), 99.5)
+                for feat_ind in range(rec_ephys.shape[1])
+            ],
+            dtype=rec_ephys.dtype,
+        )
 
-    rec_ephys_high_pctl = torch.tensor(
-        [
-            np.percentile(rec_ephys[I_tr, feat_ind].cpu().numpy(), 99.5)
-            for feat_ind in range(rec_ephys.shape[1])
-        ],
-        dtype=rec_ephys.dtype,
-    )
-
-    # Clip all splits using train thresholds
+    # Clip all splits using TRAIN/release thresholds
     rec_ephys = torch.maximum(
         torch.minimum(rec_ephys, rec_ephys_high_pctl), rec_ephys_low_pctl
     )
 
-    # Now compute ephys stats from CLIPPED TRAIN data
-    e_mean = rec_ephys[I_tr].mean(dim=0)
-    e_std = rec_ephys[I_tr].std(dim=0, unbiased=False).clamp_min(1e-6)
+    if preprocessing_stats is not None and {"e_mean", "e_std"}.issubset(preprocessing_stats):
+        e_mean = torch.as_tensor(preprocessing_stats["e_mean"], dtype=rec_ephys.dtype)
+        e_std = torch.as_tensor(preprocessing_stats["e_std"], dtype=rec_ephys.dtype).clamp_min(1e-6)
+    else:
+        # Compute ephys stats from CLIPPED TRAIN data
+        e_mean = rec_ephys[I_tr].mean(dim=0)
+        e_std = rec_ephys[I_tr].std(dim=0, unbiased=False).clamp_min(1e-6)
 
     # Standardize all splits
     rec_ephys_std = (rec_ephys - e_mean) / e_std
@@ -633,6 +681,7 @@ def build_channels_plus_emptyvoxels_with_neighbors(
         p_tr_names=[str(pid_names[int(i)]) for i in sorted(p_tr_ids)],
         p_va_names=[str(pid_names[int(i)]) for i in sorted(p_va_ids)],
         p_te_names=[str(pid_names[int(i)]) for i in sorted(p_te_ids)],
+        source=split_source,
     )
 
     # original mixed train loader for base model
@@ -676,7 +725,16 @@ def build_channels_plus_emptyvoxels_with_neighbors(
         collate_fn=collate,
     )
 
-    return (
+    preprocessing_stats_out = {
+        "rec_ephys_low_pctl": rec_ephys_low_pctl.detach().cpu(),
+        "rec_ephys_high_pctl": rec_ephys_high_pctl.detach().cpu(),
+        "e_mean": e_mean.detach().cpu(),
+        "e_std": e_std.detach().cpu(),
+        "ctx_mean": ctx_mean.detach().cpu(),
+        "ctx_std": ctx_std.detach().cpu(),
+    }
+
+    out = (
         train_loader,  # mixed, for base model
         conf_train_loader,  # recorded-only, for confidence model
         val_loader,
@@ -687,6 +745,9 @@ def build_channels_plus_emptyvoxels_with_neighbors(
         ctx_std,
         split_info,
     )
+    if return_preprocessing_stats:
+        return out + (preprocessing_stats_out,)
+    return out
 
 
 class RecDS(Dataset):
