@@ -41,7 +41,12 @@ import numpy as np
 import ephysatlas.anatomy
 import ephysatlas.data
 import ephysatlas.model_registry as model_registry
-from ephysatlas.regionclassifier import RegionClassifier
+
+# RegionClassifier (and, for the encoder, SpatialEncoder) are imported lazily inside the
+# functions that use them. RegionClassifier pulls xgboost and SpatialEncoder pulls torch; on
+# macOS arm64 the two segfault if loaded into one process, and a single publish run only ever
+# touches one family. Keeping both imports out of module scope means an encoder run never loads
+# xgboost and a classifier run never loads torch.
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)-8s %(name)s: %(message)s")
 _logger = logging.getLogger("publish_model_to_hf")
@@ -162,6 +167,112 @@ feature vintage `{vintage}`.
 """
 
 
+CARD_TEMPLATE_ENCODER = """---
+license: cc-by-4.0
+library_name: pytorch
+tags:
+  - neuroscience
+  - electrophysiology
+  - neuropixels
+  - spatial-encoding
+  - international-brain-lab
+---
+
+# Ephys Atlas spatial encoder ({vintage})
+
+Predicts the **electrophysiological feature vector expected at a channel's position** -- from
+that position plus anatomical context and the recorded features of nearby channels on other
+insertions. Trained by the
+[International Brain Laboratory](https://www.internationalbrainlab.com/) on the Ephys Atlas
+feature release `{vintage}`.
+
+> **The input is a position, not features.** This is the inverse of the region classifier: that
+> model takes features and returns a region; this one takes a channel's `x, y, z` (Allen frame,
+> metres) and returns the {n_features} ephys features it would expect there. Feeding it the
+> feature columns instead of coordinates is the most common mistake -- `predict` raises and names
+> the coordinates it needs.
+
+## What ships in this repo, and why all of it is needed
+
+A published encoder is not the weights alone. `predict` cannot run without every one of:
+
+- `{weights}` -- the trained network.
+- the context PCA volumes (`agea_vol_pca.npy`, `merfish_vol_pca.npy`) -- the anatomical context
+  it samples at each position.
+- `neighbor_bank.npz` -- the **neighbour bank**: the position, standardised feature vector and
+  insertion id of every training channel. At inference the model gathers the nearest recorded
+  channels from this bank and attends to them, so the bank *is* part of the model, the way the
+  stored points are part of a k-nearest-neighbours model. It cannot be reconstructed from the
+  weights, which is why it is shipped here rather than recomputed on your machine.
+
+> **First run downloads the Allen volume.** Building the context sampler constructs an
+> `AllenAtlas`, which fetches the Allen CCF volume from `download.alleninstitute.org` (public, no
+> account, a few hundred MB) the first time it runs on a machine, then caches it.
+
+## Quickstart
+
+```python
+import pandas as pd
+from ephysatlas import load_pretrained
+
+model = load_pretrained("{repo_id}", revision="{revision}")
+df = pd.read_parquet("example/features_sample.parquet")   # channel positions (x, y, z)
+out = model.predict(df)                                    # one pred_<feature> column each
+print(out.head())
+```
+
+`load_pretrained` is the entry point for every ephysatlas model, whatever its family -- it reads
+`ephysatlas_model.json` and returns the right wrapper. Use it rather than importing a concrete
+class, so your code keeps working as the package evolves.
+
+`predict` returns one row per input channel, indexed identically to the input, with a
+`pred_<feature>` column per entry in `outputs.columns`. The `pred_` prefix keeps `df.join(out)`
+from colliding with the ground-truth feature columns of the same names.
+
+## Inputs
+
+- Indexed by `(pid, channel)`, one row per recording channel.
+- The coordinate columns `x, y, z` named in `ephysatlas_model.json` under `inputs.columns`, in
+  the Allen atlas frame, **in metres**. The feature columns are *not* read -- they are the output.
+
+## Neighbourhood selection
+
+For each query position the model attends to recorded channels within **{radius_um} µm**, taking
+the **nearest {m_max}** (`selection: nearest`). This is deterministic: two calls on the same
+input return identical predictions.
+
+> Training used a *random* subset of the in-radius neighbours; this published `predict` takes the
+> nearest instead. The two agree exactly whenever a position has at most {m_max} neighbours in
+> radius, and differ only in dense regions where the training-time subset would itself have varied
+> run to run. Deterministic output is the right contract for a published model.
+
+## Limitations
+
+- Trained on IBL Neuropixels 1.0 recordings in mouse. Transfer to NP2, other species or other
+  rigs is untested.
+- Coverage follows IBL brain-wide-map targeting; predictions far from any recorded channel fall
+  back on anatomical context alone and are correspondingly weaker.
+
+## Reproducibility
+
+**Pin the revision.** `revision="{revision}"` is an immutable tag. Omitting `revision` resolves to
+`main`, which tracks whichever model is currently recommended and *will* change when a new feature
+vintage is published -- fine for a first look, not for anything you publish or re-run.
+
+`ephysatlas_model.json` records the training-time `environment` and `random_seed`. Verify your
+install reproduces the shipped output:
+
+```python
+model.selftest()
+```
+
+## Citation
+
+Please cite the International Brain Laboratory Ephys Atlas. Model id `{model_id}`,
+feature vintage `{vintage}`.
+"""
+
+
 def build_example(path_model: Path, path_features: Path, n_channels: int, seed: int = 0):
     """Write a small real feature sample plus its golden predictions.
 
@@ -174,6 +285,8 @@ def build_example(path_model: Path, path_features: Path, n_channels: int, seed: 
     Returns:
         Path: The ``example/`` directory.
     """
+    from ephysatlas.regionclassifier import RegionClassifier
+
     index = json.loads(path_model.joinpath(model_registry.MODEL_MANIFEST_FILE).read_text())
     feature_names = index["inputs"]["features"]
     brain_atlas = ephysatlas.anatomy.ClassifierAtlas()
@@ -200,11 +313,76 @@ def build_example(path_model: Path, path_features: Path, n_channels: int, seed: 
     return example
 
 
-def write_card(path_model: Path, index: dict, repo_id: str, revision: str):
-    """Render README.md and LICENSE into the model directory."""
+def _read_encoder_source(path_features: Path, feature_names) -> "pd.DataFrame":
+    """Read an ``agg_full`` directory into the ``(pid, channel)`` table the encoder needs.
+
+    The encoder is fed positions, so its source must carry both the coordinates (from
+    ``channels.pqt``) and the feature columns (from ``raw_ephys_features_denoised.pqt``): the
+    bank stores standardised features keyed by position. Rows missing any coordinate or feature
+    are dropped, so neither the bank nor the example carries holes. Mirrors the join the training
+    pipeline does.
+
+    Args:
+        path_features (Path): An ``agg_full`` features directory.
+        feature_names (list): The feature columns the model predicts, from ``outputs.columns``.
+
+    Returns:
+        pd.DataFrame: Indexed by ``(pid, channel)``, carrying ``x, y, z`` and every feature.
+    """
+    import pandas as pd
+
+    path_features = Path(path_features)
+    feats = pd.read_parquet(path_features.joinpath("raw_ephys_features_denoised.pqt"))
+    chans = pd.read_parquet(path_features.joinpath("channels.pqt"))
+    df = feats.join(chans.loc[:, ["x", "y", "z"]], how="inner")
+    return df.dropna(subset=["x", "y", "z"] + list(feature_names))
+
+
+def build_encoder_example(
+    path_model: Path, index: dict, path_features: Path, n_channels: int, seed: int = 0
+):
+    """Write a small position sample plus the encoder's golden predictions.
+
+    Unlike the classifier example, the sample holds channel *positions* (``x, y, z``): the
+    encoder predicts features from them. It is written to ``example/features_sample.parquet``
+    all the same, because ``SpatialEncoder.selftest`` -- shared machinery with the classifier --
+    looks for that name.
+
+    Args:
+        path_model (Path): Model directory to write ``example/`` into.
+        index (dict): The manifest, read for ``outputs.columns``.
+        path_features (Path): An ``agg_full`` features directory to sample positions from.
+        n_channels (int): Number of channels to include.
+        seed (int, optional): Sampling seed, so the sample is reproducible.
+
+    Returns:
+        Path: The ``example/`` directory.
+    """
+    from ephysatlas.models.encoder_inpainting import SpatialEncoder
+
+    features = index["outputs"]["columns"]
+    df = _read_encoder_source(path_features, features)
+    # Sample whole channels deterministically, spanning many insertions.
+    rng = np.random.default_rng(seed)
+    take = rng.choice(df.shape[0], size=min(n_channels, df.shape[0]), replace=False)
+    sample = df.iloc[np.sort(take)].loc[:, ["x", "y", "z"]]
+
+    example = path_model.joinpath("example")
+    example.mkdir(parents=True, exist_ok=True)
+    sample.to_parquet(example.joinpath("features_sample.parquet"))
+
+    # Golden output, produced by the very model being published.
+    predictions = SpatialEncoder(path_model, index=index).predict(sample)
+    predictions.to_parquet(example.joinpath("expected_predictions.parquet"))
+    _logger.info(f"wrote example/ with {len(sample)} channels")
+    return example
+
+
+def _render_classifier_card(index: dict, repo_id: str, revision: str) -> str:
+    """Fill CARD_TEMPLATE from a region-classifier manifest."""
     training = index.get("training") or {}
     config = index["config"]
-    card = CARD_TEMPLATE.format(
+    return CARD_TEMPLATE.format(
         vintage=index["vintage"],
         region_map=config["region_map"],
         repo_id=repo_id,
@@ -216,9 +394,99 @@ def write_card(path_model: Path, index: dict, repo_id: str, revision: str):
         training_size=training.get("training_size", "n/a"),
         model_id=index["model_id"],
     )
-    path_model.joinpath("README.md").write_text(card)
+
+
+def _render_encoder_card(index: dict, repo_id: str, revision: str) -> str:
+    """Fill CARD_TEMPLATE_ENCODER from a spatial-encoder manifest.
+
+    Reads the ordered feature list from ``outputs`` (not ``inputs``: this family predicts
+    features *from* position) and the neighbourhood settings from ``config``.
+    """
+    config = index.get("config") or {}
+    outputs = index.get("outputs") or {}
+    artifacts = index.get("artifacts") or {}
+    neighbourhood = config.get("neighbourhood") or {}
+    return CARD_TEMPLATE_ENCODER.format(
+        vintage=index["vintage"],
+        repo_id=repo_id,
+        revision=revision or "main",
+        n_features=len(outputs.get("columns") or []),
+        weights=artifacts.get("weights", model_registry.ENCODER_WEIGHTS_FILE),
+        radius_um=neighbourhood.get("radius_um", 600.0),
+        m_max=neighbourhood.get("m_max", 64),
+        model_id=index["model_id"],
+    )
+
+
+# The card renderer a task gets. A new family registers here rather than growing an if/elif,
+# mirroring model_registry.TASK_BUILDERS.
+CARD_RENDERERS = {
+    model_registry.TASK_REGION_CLASSIFICATION: _render_classifier_card,
+    model_registry.TASK_SPATIAL_ENCODING: _render_encoder_card,
+}
+
+
+def write_card(path_model: Path, index: dict, repo_id: str, revision: str):
+    """Render README.md and LICENSE into the model directory, per the manifest's task.
+
+    Raises:
+        NotImplementedError: For a task with no registered card renderer. A card makes concrete,
+            family-specific claims -- the classifier card quotes region accuracy and a class
+            count, the encoder card the neighbour bank and the position->features inversion -- so
+            a new family must supply its own template rather than borrow another's and misdescribe
+            itself.
+    """
+    task = index.get("task")
+    renderer = CARD_RENDERERS.get(task)
+    if renderer is None:
+        raise NotImplementedError(
+            f"no model card template for task {task!r}; a card states family-specific claims, so "
+            f"add a renderer for {task!r} to CARD_RENDERERS before publishing it. "
+            f"Known: {sorted(CARD_RENDERERS)}."
+        )
+    path_model.joinpath("README.md").write_text(renderer(index, repo_id, revision))
     path_model.joinpath("LICENSE").write_text(LICENSE_TEXT)
     _logger.info("wrote README.md and LICENSE")
+
+
+def _default_repo_id(task: str) -> str:
+    """A placeholder repo id for the card when ``--repo-id`` is not given, per family.
+
+    There is no single repo across families, so the card shows a visibly family-appropriate
+    placeholder rather than a wrong default.
+    """
+    names = {
+        model_registry.TASK_REGION_CLASSIFICATION: "ea-decoder-channel-xgboost",
+        model_registry.TASK_SPATIAL_ENCODING: "ea-encoder-channel",
+    }
+    return f"{model_registry.DEFAULT_HF_ORG}/{names.get(task, 'ea-model')}"
+
+
+def _write_example_and_selftest(path_model: Path, index: dict, path_features: Path, n_channels: int):
+    """Write the golden ``example/`` and self-test the freshly packaged model, per family.
+
+    Each branch imports its own wrapper lazily so that packaging one family never loads the
+    other's heavy dependency (xgboost vs torch); see the module-level import note.
+
+    Raises:
+        NotImplementedError: For a task with no packaging path here.
+    """
+    task = index.get("task")
+    if task == model_registry.TASK_REGION_CLASSIFICATION:
+        from ephysatlas.regionclassifier import RegionClassifier
+
+        build_example(path_model, path_features, n_channels)
+        RegionClassifier(path_model).selftest()
+    elif task == model_registry.TASK_SPATIAL_ENCODING:
+        from ephysatlas.models.encoder_inpainting import SpatialEncoder
+
+        build_encoder_example(path_model, index, path_features, n_channels)
+        SpatialEncoder(path_model, index=index).selftest()
+    else:
+        raise NotImplementedError(
+            f"no packaging path for task {task!r}; add one before publishing this family."
+        )
+    _logger.info("selftest passed against the freshly written golden file")
 
 
 def main(argv=None):
@@ -278,17 +546,34 @@ def main(argv=None):
         parser.error(f"{path_model} does not look like a model directory (no meta.yaml)")
 
     index = model_registry.build_model_index(path_model, method=args.method)
+    task = index.get("task")
+
+    # The spatial encoder cannot even be validated until its neighbour bank is written: the bank
+    # is a runtime input the manifest must list, and build_model_index records only artifacts
+    # already on disk. Build it from the same feature source the example uses, then re-scan so
+    # artifacts.neighbor_bank is recorded. Skipped without --features, since the bank needs data.
+    if task == model_registry.TASK_SPATIAL_ENCODING and args.features is not None:
+        from ephysatlas.models.encoder_inpainting import build_neighbor_bank
+
+        df_source = _read_encoder_source(args.features, index["outputs"]["columns"])
+        build_neighbor_bank(path_model, df_source, index)
+        index = model_registry.build_model_index(path_model, method=args.method)
+
+    # Fail here rather than shipping a repository that looks complete and only breaks when a
+    # stranger loads it.
+    model_registry.validate_artifacts(path_model, index)
     # Without a repo id the card still renders; the quickstart carries a visible placeholder
     # rather than a wrong default, since there is no single repo across model families.
-    write_card(
-        path_model, index, args.repo_id or f"{model_registry.DEFAULT_HF_ORG}/ea-decoder-channel-xgboost", args.revision
-    )
+    write_card(path_model, index, args.repo_id or _default_repo_id(task), args.revision)
     if args.features is not None:
-        build_example(path_model, args.features, args.n_example_channels)
-        RegionClassifier(path_model).selftest()
-        _logger.info("selftest passed against the freshly written golden file")
+        _write_example_and_selftest(path_model, index, args.features, args.n_example_channels)
     else:
         _logger.warning("--features not given: no example/ or golden file written")
+
+    # Last, so the digests cover the manifest, the card, the licence and the golden example.
+    # Anything written after this point would ship unverified.
+    model_registry.write_checksums(path_model)
+    model_registry.verify_checksums(path_model, missing_ok=False)
 
     _logger.info(f"packaged model at {path_model}")
     for p in sorted(path_model.rglob("*")):
@@ -306,6 +591,9 @@ def main(argv=None):
     if not args.repo_id:
         _logger.error("--upload requires --repo-id; refusing to guess a destination")
         return 1
+    # Never upload a release that already fails locally: a corrupt publish is far more
+    # expensive to withdraw than to prevent, since a pushed tag is meant to be immutable.
+    model_registry.verify_checksums(path_model, missing_ok=False)
     source = model_registry.HFModelSource(repo_id=args.repo_id, token=token)
     source.upload(
         path_model,

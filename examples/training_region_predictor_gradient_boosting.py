@@ -13,6 +13,7 @@ import ephysatlas.anatomy
 import ephysatlas.data
 import ephysatlas.features  # voltage_features_set(); do not rely on ephysatlas.data importing it
 import ephysatlas.fixtures
+import ephysatlas.model_registry  # write_split(); do not rely on regionclassifier importing it
 import ephysatlas.regionclassifier
 
 PROJECT = 'ea_active'
@@ -173,6 +174,15 @@ path_model = ephysatlas.regionclassifier.save_model(path_models, classifier, met
 print(f"Global Accuracy: {accuracy}")
 print(f"Model saved to {path_model}")
 df_predictions.to_parquet(path_model / 'predictions.pqt')
+
+# Publish the split itself, not just its hash. `meta.yaml` records hash_training/hash_testing,
+# which proves two runs used the same split but cannot say *which* insertions were held out --
+# so a reader cannot verify held-out status, only trust it. Written from `all_pids` and `ifold`
+# rather than the loop's leftover variables, and in the shuffled order, because hash_uuids is
+# order-sensitive and re-sorting would make meta.yaml's hashes unreproducible from this file.
+ephysatlas.model_registry.write_split(
+    path_model, all_pids, ifold, random_seed=rs, n_folds=n_folds
+)
 
 if path_model.joinpath('folds').exists():
     shutil.rmtree(path_model.joinpath('folds'))

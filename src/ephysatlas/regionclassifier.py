@@ -88,15 +88,34 @@ def download_model(
     )
 
 
-def _load_xgb(path_model: Path, weights: str = "model.ubj"):
-    """Load an XGBoost classifier from its weights file."""
+def _load_xgb(path_model: Path, manifest: dict = None):
+    """Load an XGBoost classifier from the weights file its manifest names.
+
+    Args:
+        path_model (Path): Model directory.
+        manifest (dict, optional): Parsed manifest. Empty or None for a fold directory, which
+            carries only a ``meta.yaml`` -- hence the ``model.ubj`` default.
+
+    Returns:
+        XGBClassifier: The loaded classifier.
+    """
+    weights = ((manifest or {}).get("artifacts") or {}).get("weights", "model.ubj")
     classifier = XGBClassifier()
     classifier.load_model(path_model.joinpath(weights))
     return classifier
 
 
-# Dispatch table keyed on the model class named by the manifest (or meta.yaml). Adding the
-# torch spatial encoder means one entry here plus the loader it points at.
+# Dispatch table keyed on the model class named by the manifest (or meta.yaml). Every loader
+# takes ``(path_model, manifest)`` and returns an in-memory model: passing the whole manifest
+# rather than one hand-picked ``weights`` string is what lets a family whose model is several
+# files (the spatial encoder: weights, context volumes, a neighbour bank) register here at all.
+# Deliberately xgboost-only. The spatial encoder is NOT registered here even though it has a
+# loader, because this module imports xgboost at scope (line 9): any process that reached a torch
+# loader through this table would hold both runtimes at once, and on macOS arm64 that segfaults
+# at the first torch tensor copy. The encoder is loaded through
+# `ephysatlas.models.encoder_inpainting` instead, which is the path `load_pretrained` uses.
+# This is the concrete cost the design doc's §9 split (move the registry out of this module)
+# would remove.
 MODEL_LOADERS = {
     "xgboost.sklearn.XGBClassifier": _load_xgb,
 }
@@ -145,8 +164,7 @@ def load_model(path_model):
             f"no loader registered for MODEL_CLASS {model_class!r}; "
             f"known: {sorted(MODEL_LOADERS)}"
         )
-    weights = ((manifest or {}).get("artifacts") or {}).get("weights", "model.ubj")
-    classifier = MODEL_LOADERS[model_class](path_model, weights=weights)
+    classifier = MODEL_LOADERS[model_class](path_model, manifest or {})
     if model_info is None:
         model_info = model_registry.meta_from_manifest(manifest)
     return classifier, model_info
@@ -359,6 +377,16 @@ class RegionClassifier:
         base = folds_root if folds_root.exists() else self.path_model
         names = (self.index.get("artifacts") or {}).get("folds") or []
         dirs = [d for d in (base.joinpath(n) for n in names) if d.joinpath("meta.yaml").exists()]
+        if names and 0 < len(dirs) < len(names):
+            # Losing *some* folds is the dangerous case, and it used to pass in silence: the
+            # ensemble quietly averages fewer models than the manifest and the model card
+            # advertise, and fold_agreement is then computed over the survivors -- reporting
+            # unanimity among two folds while claiming five.
+            logger.warning(
+                f"manifest declares {len(names)} folds but only {len(dirs)} are loadable "
+                f"({sorted(d.name for d in dirs)}); predictions and fold_agreement will be "
+                f"computed from those alone"
+            )
         if not dirs:
             # No folds published: fall back to the single global model.
             dirs = [self.path_model]
@@ -445,6 +473,8 @@ class RegionClassifier:
 
         Raises:
             KeyError: If any required feature column is absent, naming the missing ones.
+            ValueError: If the manifest's ``inputs.features`` no longer matches its recorded
+                order digest, i.e. the published feature list has been edited or reordered.
         """
         feature_names = list(self.inputs["features"])
         missing = [c for c in feature_names if c not in df.columns]
@@ -453,6 +483,11 @@ class RegionClassifier:
                 f"{len(missing)} feature(s) required by this model are missing from the "
                 f"input DataFrame: {missing}. Expected all of: {feature_names}"
             )
+        # After the missing-column check on purpose: someone who simply forgot a column should
+        # get the KeyError that names it, not an integrity error about the manifest.
+        model_registry.validate_feature_order(
+            self.inputs["features"], self.inputs.get("feature_order_sha256")
+        )
         if denoise:
             df = features.denoise_dataframe(df)
 
