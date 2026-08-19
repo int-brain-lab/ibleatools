@@ -224,6 +224,24 @@ class SpatialEncoder:
             self._model = _load_inpainting_encoder(self.path_model, self.index)
         return self._model
 
+    def preprocessing_stats(self) -> dict:
+        """Return the standardisation statistics baked into the checkpoint.
+
+        These are the register-buffers the model ships with -- the feature and context means and
+        stds -- exposed for figure code that reconstructs his ``load_channel_preprocessing_stats``
+        without going through his release registry.
+
+        Returns:
+            dict: ``{"e_mean", "e_std", "ctx_mean", "ctx_std"}`` as numpy arrays.
+        """
+        model = self.model
+        return {
+            "e_mean": model.e_mean.detach().cpu().numpy(),
+            "e_std": model.e_std.detach().cpu().numpy(),
+            "ctx_mean": model.ctx_mean.detach().cpu().numpy(),
+            "ctx_std": model.ctx_std.detach().cpu().numpy(),
+        }
+
     def confidence_model(self):
         """Load the probe-confidence model published alongside, if there is one.
 

@@ -137,6 +137,36 @@ class UnitEncoder:
         a = normalize_acgs(np.asarray(acg, dtype=np.float32))
         return w, a
 
+    # -- read-only accessors, for figure code that reconstructs his `load_released_unit_model` --
+
+    @property
+    def cfg(self):
+        """The training ``Config`` restored from the checkpoint (loads on first use)."""
+        self._load()
+        return self._cfg
+
+    @property
+    def model_ae(self):
+        """The loaded :class:`MultimodalAutoencoder`."""
+        self._load()
+        return self._model_ae
+
+    @property
+    def model_gmm(self):
+        """The loaded :class:`PointTransformerGMM`."""
+        self._load()
+        return self._model_gmm
+
+    @property
+    def scaler(self):
+        """The loaded latent ``StandardScaler``."""
+        self._load()
+        return self._scaler
+
+    def atlas_arrays(self, cache_dir=None):
+        """Public accessor for the S3-fetched atlas arrays. See :meth:`_atlas_arrays`."""
+        return self._atlas_arrays(cache_dir)
+
     # -- the operations the unit figures consume -------------------------------------------
 
     def encode(self, waveform, acg, standardize: bool = False, batch_size: int = 4096):

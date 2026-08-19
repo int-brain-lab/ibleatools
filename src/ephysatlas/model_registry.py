@@ -1030,6 +1030,22 @@ def write_split(
     return out
 
 
+def read_split(path_model: Path):
+    """Read ``split.json`` if the release ships one.
+
+    Args:
+        path_model (Path): Model directory.
+
+    Returns:
+        dict or None: The parsed split payload (``pids``, ``folds`` and the self-describing
+        labels), or None when the model publishes no split.
+    """
+    path = Path(path_model).joinpath(MODEL_SPLIT_FILE)
+    if not path.exists():
+        return None
+    return json.loads(path.read_text())
+
+
 def _looks_like_uuid(value: str) -> bool:
     """True when a string parses as a UUID, used only to name offenders in an error."""
     import uuid
