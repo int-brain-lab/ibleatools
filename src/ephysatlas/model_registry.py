@@ -64,6 +64,13 @@ ENCODER_WEIGHTS_FILE = "spatial_encoder.pt"
 ENCODER_CONFIDENCE_FILE = "confidence_model.pt"
 ENCODER_BANK_FILE = "neighbor_bank.npz"
 ENCODER_CONTEXT_FILES = ("agea_vol_pca.npy", "merfish_vol_pca.npy")
+
+# Unit-level encoder: the canonical filenames a published release stages its checkpoints under.
+# Unlike the other families it ships no recorded data -- the atlas dataset is fetched from S3.
+UNIT_AE_FILE = "autoencoder.pt"
+UNIT_GMM_FILE = "point_transformer_gmm.pt"
+UNIT_SCALER_FILE = "shared_latent_scaler.joblib"
+UNIT_UNCOND_GMM_FILE = "unconditional_gmm_train_only.joblib"
 # Never hashed: the checksum file cannot cover itself; the Hub adds .gitattributes and a
 # .cache/ tree to a snapshot; and the upload already drops the rest, so hashing any of it would
 # make every download fail verification.
@@ -87,6 +94,7 @@ DEFAULT_CHECKSUM_IGNORE = DEFAULT_UPLOAD_IGNORE + (
 # Task discriminators used by the manifest's "task" field.
 TASK_REGION_CLASSIFICATION = "region-classification"
 TASK_SPATIAL_ENCODING = "spatial-encoding"
+TASK_UNIT_ENCODING = "unit-encoding"
 
 # Which task a saved model belongs to, keyed on the MODEL_CLASS recorded in the metadata.
 #
@@ -96,6 +104,11 @@ MODEL_CLASS_TASKS = {
     "xgboost.sklearn.XGBClassifier": TASK_REGION_CLASSIFICATION,
     "ephysatlas.spatial_encoder.model.NeighborInpaintingModel": TASK_SPATIAL_ENCODING,
     "NeighborInpaintingModel": TASK_SPATIAL_ENCODING,
+    # The unit-level encoder is two torch classes (autoencoder + PT-GMM). One manifest carries one
+    # model_class, so the autoencoder -- the entry checkpoint -- is the dispatch key; UnitEncoder
+    # loads the PT-GMM and scaler beside it.
+    "ephysatlas.unit_level_encoder.model.MultimodalAutoencoder": TASK_UNIT_ENCODING,
+    "MultimodalAutoencoder": TASK_UNIT_ENCODING,
 }
 
 
@@ -489,10 +502,72 @@ def _blocks_spatial_encoding(meta: dict, path_model: Path) -> dict:
     }
 
 
+def _blocks_unit_encoding(meta: dict, path_model: Path) -> dict:
+    """Return the task-specific manifest blocks for the two-stage unit-level encoder.
+
+    Two departures from the other families, both deliberate:
+
+    - **The output is a latent, not named features.** ``outputs`` records ``kind: "latent"`` and a
+      ``latent_dim`` rather than a column list -- the phenotype is a point in a learned space, so
+      there is no ordered feature list to hash.
+    - **The recorded dataset is not an artifact.** It is fetched from S3 via ONE at load and
+      recorded under ``data_source``, so the published repo carries only weights. This is the one
+      family that requires an IBL account to run its atlas-wide operations.
+
+    Args:
+        meta (dict): Training metadata -- ``VINTAGE``, ``LATENT_DIM``, ``GMM_COMPONENTS``, and the
+            S3 ``PROJECT``.
+        path_model (Path): Model directory, scanned for the checkpoints actually present.
+
+    Returns:
+        dict: The ``granularity``, ``artifacts``, ``inputs``, ``outputs``, ``config`` and
+        ``data_source`` entries.
+    """
+    # Record only the checkpoints on disk; a missing role must not be invented.
+    artifacts = {}
+    for role, name in (
+        ("autoencoder", UNIT_AE_FILE),
+        ("pt_gmm", UNIT_GMM_FILE),
+        ("scaler", UNIT_SCALER_FILE),
+        ("unconditional_gmm", UNIT_UNCOND_GMM_FILE),
+    ):
+        if path_model.joinpath(name).exists():
+            artifacts[role] = name
+    latent_dim = int(meta.get("LATENT_DIM") or meta.get("SHARED_LATENT_DIM", 32))
+    return {
+        "granularity": "unit",
+        "artifacts": artifacts,
+        "inputs": {
+            "index": ["pid", "cluster"],
+            # Per-unit arrays, not a flat feature table.
+            "modalities": ["waveform", "acg"],
+        },
+        "outputs": {
+            # The one place the manifest leaves the feature-list contract: a latent phenotype.
+            "kind": "latent",
+            "latent_dim": latent_dim,
+        },
+        "config": {
+            "architecture": {
+                "shared_latent_dim": latent_dim,
+                "gmm_components": int(meta.get("GMM_COMPONENTS", 16)),
+            },
+        },
+        # The recorded dataset stays on S3 under IBL's access controls, fetched via ONE at load
+        # and never republished on the Hub.
+        "data_source": {
+            "backend": "s3-ibl",
+            "project": str(meta.get("PROJECT", "ibl_neuropixel_brainwide_01")),
+            "requires_one": True,
+        },
+    }
+
+
 # One entry per model family. The transport layer above never changes.
 TASK_BUILDERS = {
     TASK_REGION_CLASSIFICATION: _blocks_region_classification,
     TASK_SPATIAL_ENCODING: _blocks_spatial_encoding,
+    TASK_UNIT_ENCODING: _blocks_unit_encoding,
 }
 
 

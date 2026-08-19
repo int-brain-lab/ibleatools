@@ -273,6 +273,71 @@ feature vintage `{vintage}`.
 """
 
 
+CARD_TEMPLATE_UNIT = """---
+license: cc-by-4.0
+library_name: pytorch
+tags:
+  - neuroscience
+  - electrophysiology
+  - neuropixels
+  - unit-level-encoder
+  - international-brain-lab
+---
+
+# Ephys Atlas unit-level encoder ({vintage})
+
+A **per-unit** (per spike-sorted neuron) model, in two stages: a multimodal autoencoder embeds a
+unit's multi-channel **waveform** and its **autocorrelogram** into a {latent_dim}-d latent -- its
+phenotype -- and a Point-Transformer Gaussian mixture over those latents whose components read as
+**putative cell types**. Trained by the
+[International Brain Laboratory](https://www.internationalbrainlab.com/) on release `{vintage}`.
+
+> **This model encodes; it does not `predict(df)`.** Its input is a unit's waveform + ACG arrays
+> and its output is a point in a learned latent space, not a table of named predictions. So the
+> interface is `encode` (and `reconstruct` / `components` / `assign`), not the `predict(df)` the
+> region classifier and spatial encoder expose.
+
+> **Requires an IBL/ONE account for atlas-wide use.** Unlike the other families, the recorded unit
+> dataset is **not** shipped here -- it is pulled from IBL S3 via ONE at first use and cached
+> locally. Encoding your *own* units needs only the weights below; reproducing the atlas-wide
+> latents (`.latents()`) triggers the S3 fetch.
+
+## Quickstart
+
+```python
+import numpy as np
+from ephysatlas import load_pretrained
+
+model = load_pretrained("{repo_id}", revision="{revision}")
+z = model.encode(waveform, acg)          # [n_units, {latent_dim}] latent phenotype
+rec = model.reconstruct(waveform, acg)   # waveform + ACG reconstruction
+means, log_var = model.components()      # GMM putative cell types
+```
+
+`load_pretrained` is the entry point for every ephysatlas model -- it reads
+`ephysatlas_model.json` and returns the right wrapper.
+
+## What ships here
+
+- `{ae}` -- the multimodal autoencoder.
+- `{gmm}` -- the Point-Transformer GMM.
+- the latent `StandardScaler`, and the unconditional GMM baseline.
+
+The recorded per-unit dataset (waveforms, ACGs, positions) is **not** here: it is fetched from S3
+via ONE, keeping this repository weights-only.
+
+## Reproducibility
+
+**Pin the revision.** `revision="{revision}"` is an immutable tag. Verify your install reproduces
+the shipped output with `model.selftest()` (encode-only -- no S3, no account).
+
+## Citation
+
+Please cite the International Brain Laboratory Ephys Atlas. Model id `{model_id}`, vintage
+`{vintage}`.
+"""
+
+
 def build_example(path_model: Path, path_features: Path, n_channels: int, seed: int = 0):
     """Write a small real feature sample plus its golden predictions.
 
@@ -378,6 +443,44 @@ def build_encoder_example(
     return example
 
 
+def build_unit_example(path_model: Path, index: dict, arrays_dir: Path, n_units: int, seed: int = 0):
+    """Write a small unit sample (waveform + ACG) plus the encoder's golden latents.
+
+    The unit encoder's input is per-unit arrays, not a table, so the sample is an ``.npz`` of
+    ``waveform``/``acg`` and the golden is ``expected_latents.npy``. Encode-only, so the golden
+    reproduces offline -- no S3 fetch, no ONE -- which is what ``UnitEncoder.selftest`` checks.
+
+    Args:
+        path_model (Path): Model directory to write ``example/`` into.
+        index (dict): The manifest.
+        arrays_dir (Path): A prepared unit-arrays directory (``waveforms.npy``, ``acgs.npy``).
+        n_units (int): Number of units to include.
+        seed (int, optional): Sampling seed, so the sample is reproducible.
+
+    Returns:
+        Path: The ``example/`` directory.
+    """
+    from ephysatlas.models.unit_encoder import UnitEncoder
+
+    arrays_dir = Path(arrays_dir)
+    wav = np.load(arrays_dir.joinpath("waveforms.npy"), mmap_mode="r")
+    acg = np.load(arrays_dir.joinpath("acgs.npy"), mmap_mode="r")
+    rng = np.random.default_rng(seed)
+    take = np.sort(rng.choice(wav.shape[0], size=min(n_units, wav.shape[0]), replace=False))
+    waveform = np.asarray(wav[take], dtype=np.float32)
+    acg_sample = np.asarray(acg[take], dtype=np.float32)
+
+    example = path_model.joinpath("example")
+    example.mkdir(parents=True, exist_ok=True)
+    np.savez(example.joinpath("units_sample.npz"), waveform=waveform, acg=acg_sample)
+
+    # Golden latents, produced by the very model being published.
+    latents = UnitEncoder(path_model, index=index).encode(waveform, acg_sample)
+    np.save(example.joinpath("expected_latents.npy"), latents)
+    _logger.info(f"wrote example/ with {len(take)} units")
+    return example
+
+
 def _render_classifier_card(index: dict, repo_id: str, revision: str) -> str:
     """Fill CARD_TEMPLATE from a region-classifier manifest."""
     training = index.get("training") or {}
@@ -418,11 +521,27 @@ def _render_encoder_card(index: dict, repo_id: str, revision: str) -> str:
     )
 
 
+def _render_unit_card(index: dict, repo_id: str, revision: str) -> str:
+    """Fill CARD_TEMPLATE_UNIT from a unit-encoder manifest."""
+    outputs = index.get("outputs") or {}
+    artifacts = index.get("artifacts") or {}
+    return CARD_TEMPLATE_UNIT.format(
+        vintage=index["vintage"],
+        repo_id=repo_id,
+        revision=revision or "main",
+        latent_dim=outputs.get("latent_dim", 32),
+        ae=artifacts.get("autoencoder", model_registry.UNIT_AE_FILE),
+        gmm=artifacts.get("pt_gmm", model_registry.UNIT_GMM_FILE),
+        model_id=index["model_id"],
+    )
+
+
 # The card renderer a task gets. A new family registers here rather than growing an if/elif,
 # mirroring model_registry.TASK_BUILDERS.
 CARD_RENDERERS = {
     model_registry.TASK_REGION_CLASSIFICATION: _render_classifier_card,
     model_registry.TASK_SPATIAL_ENCODING: _render_encoder_card,
+    model_registry.TASK_UNIT_ENCODING: _render_unit_card,
 }
 
 
@@ -458,6 +577,7 @@ def _default_repo_id(task: str) -> str:
     names = {
         model_registry.TASK_REGION_CLASSIFICATION: "ea-decoder-channel-xgboost",
         model_registry.TASK_SPATIAL_ENCODING: "ea-encoder-channel",
+        model_registry.TASK_UNIT_ENCODING: "ea-encoder-unit",
     }
     return f"{model_registry.DEFAULT_HF_ORG}/{names.get(task, 'ea-model')}"
 
@@ -482,6 +602,11 @@ def _write_example_and_selftest(path_model: Path, index: dict, path_features: Pa
 
         build_encoder_example(path_model, index, path_features, n_channels)
         SpatialEncoder(path_model, index=index).selftest()
+    elif task == model_registry.TASK_UNIT_ENCODING:
+        from ephysatlas.models.unit_encoder import UnitEncoder
+
+        build_unit_example(path_model, index, path_features, n_channels)
+        UnitEncoder(path_model, index=index).selftest()
     else:
         raise NotImplementedError(
             f"no packaging path for task {task!r}; add one before publishing this family."

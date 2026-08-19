@@ -49,16 +49,27 @@ def _spatial_encoder(path_model: Path, index: dict, **kwargs):
     return SpatialEncoder(path_model, index=index, device=kwargs.get("device"))
 
 
+def _unit_encoder(path_model: Path, index: dict, **kwargs):
+    """Build the unit-level encoder wrapper. torch is imported inside the module it comes from."""
+    from ephysatlas.models.unit_encoder import UnitEncoder
+
+    return UnitEncoder(path_model, index=index, device=kwargs.get("device"))
+
+
 MODEL_WRAPPERS = {
     "ephysatlas.spatial_encoder.model.NeighborInpaintingModel": _spatial_encoder,
     # The encoder's hand-written meta.yaml files record the bare class name; both are in use.
     "NeighborInpaintingModel": _spatial_encoder,
+    # The unit encoder dispatches on its entry checkpoint's class; UnitEncoder loads the rest.
+    "ephysatlas.unit_level_encoder.model.MultimodalAutoencoder": _unit_encoder,
+    "MultimodalAutoencoder": _unit_encoder,
 }
 
 # One entry per task: the fallback, and what every manifest-less legacy model resolves through.
 TASK_WRAPPERS = {
     model_registry.TASK_REGION_CLASSIFICATION: _region_classifier,
     model_registry.TASK_SPATIAL_ENCODING: _spatial_encoder,
+    model_registry.TASK_UNIT_ENCODING: _unit_encoder,
 }
 
 

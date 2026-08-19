@@ -315,7 +315,11 @@ class TestBuildModelIndexDispatch(unittest.TestCase):
     def test_the_registered_tasks_are_the_ones_with_builders(self):
         self.assertEqual(
             sorted(model_registry.TASK_BUILDERS),
-            [model_registry.TASK_REGION_CLASSIFICATION, model_registry.TASK_SPATIAL_ENCODING],
+            [
+                model_registry.TASK_REGION_CLASSIFICATION,
+                model_registry.TASK_SPATIAL_ENCODING,
+                model_registry.TASK_UNIT_ENCODING,
+            ],
         )
 
     def test_split_is_recorded_as_an_artifact_only_when_present(self):
@@ -1405,6 +1409,35 @@ class TestEncoderPublishPackaging(unittest.TestCase):
         )
         self.assertIn("selftest passed", result.stderr)
         self.assertTrue(model_registry.verify_checksums(self.path_model, missing_ok=False))
+
+
+class TestUnitEncoderDispatch(unittest.TestCase):
+    """The unit-level encoder is wired into the registry as a third family.
+
+    Assertions avoid the mutable ``MODEL_WRAPPERS`` (which TestWrapperDispatch clears) by
+    checking the static ``MODEL_CLASS_TASKS`` map and the task-fallback ``TASK_WRAPPERS``.
+    """
+
+    def test_unit_class_maps_to_unit_task(self):
+        self.assertEqual(
+            model_registry.MODEL_CLASS_TASKS["MultimodalAutoencoder"],
+            model_registry.TASK_UNIT_ENCODING,
+        )
+        self.assertEqual(
+            model_registry.MODEL_CLASS_TASKS[
+                "ephysatlas.unit_level_encoder.model.MultimodalAutoencoder"
+            ],
+            model_registry.TASK_UNIT_ENCODING,
+        )
+
+    def test_unit_task_resolves_to_the_unit_encoder_builder(self):
+        import ephysatlas.models as models
+
+        # No model_class -> resolve falls back to the task, which uses TASK_WRAPPERS.
+        builder = models._resolve_wrapper(
+            Path("/does/not/matter"), {"task": model_registry.TASK_UNIT_ENCODING}
+        )
+        self.assertIs(builder, models._unit_encoder)
 
 
 if __name__ == "__main__":
