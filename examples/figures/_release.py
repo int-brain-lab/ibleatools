@@ -148,6 +148,30 @@ def unit_release(repo_id, vintage=None, *, token=None, device="cpu", cache_dir=N
     return cfg, data, enc.model_ae, enc.model_gmm, enc.scaler, standardized, datasets, loaders
 
 
+# -- pure atlas helpers, copied verbatim from his figure_unit_common ------------------------
+# (figure_unit_common itself is not vendored: it imports the unit hf_io publisher, whose
+# spatial_encoder.model_registry import does not exist on this branch. These helpers are pure.)
+
+
+def cosmos_ids_for_xyz(brain_atlas, xyz_m):
+    return np.asarray(brain_atlas.get_labels(np.asarray(xyz_m), mapping="Cosmos"), dtype=np.int64)
+
+
+def region_color(brain_atlas, acronym: str):
+    hit = np.flatnonzero(np.asarray(brain_atlas.regions.acronym, dtype=object) == acronym)
+    if len(hit) == 0:
+        raise RuntimeError(f"Atlas acronym not found: {acronym}")
+    rgb = np.asarray(brain_atlas.regions.rgb[hit[0]], dtype=float)
+    return rgb / 255.0 if rgb.max() > 1 else rgb
+
+
+def region_id(brain_atlas, acronym: str) -> int:
+    hit = np.flatnonzero(np.asarray(brain_atlas.regions.acronym, dtype=object) == acronym)
+    if len(hit) == 0:
+        raise RuntimeError(f"Atlas acronym not found: {acronym}")
+    return int(brain_atlas.regions.id[hit[0]])
+
+
 def channel_release(repo_id, vintage=None, *, device="cpu"):
     """Reconstruct the variables his channel figures read off ``resolve_release``.
 
