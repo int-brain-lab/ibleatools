@@ -139,6 +139,9 @@ def load_channel_release(
     rel = channel_release(hf_repo_id, vintage, device=str(device))
     return {
         "release_dir": rel.dir,
+        # Where the released context volumes live (per the manifest), rather than assuming a fixed
+        # `<release_dir>/context` subdir -- the volumes may sit at the model-dir root.
+        "context_dir": rel.context_dir,
         "features": rel.features,
         "config": rel.config,
         "split_manifest": rel.split,
@@ -2118,7 +2121,9 @@ def main():
             n_gene_pcs=n_gene_pcs,
         ),
         regenerate_context=False,
-        output_dir=release_dir / "context",
+        output_dir=release[
+            "context_dir"
+        ],
     )
 
     # ------------------------------------------------------------------

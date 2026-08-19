@@ -242,6 +242,20 @@ class SpatialEncoder:
             "ctx_std": model.ctx_std.detach().cpu().numpy(),
         }
 
+    @property
+    def context_dir(self) -> Path:
+        """Directory holding the published context volumes (``agea_vol_pca.npy`` etc.).
+
+        Derived from the manifest's ``artifacts.context`` entries, so it is correct whether those
+        were published at the model-dir root (the training/publish pipeline's layout) or under a
+        ``context/`` subdirectory (the coworker's original release layout). Figure code that builds
+        its own ``ContextAtlasManager`` should read this rather than assuming a fixed subdirectory.
+        """
+        names = (self.index.get("artifacts") or {}).get(ROLE_CONTEXT) or []
+        if not names:
+            return self.path_model
+        return (self.path_model / names[0]).parent
+
     def confidence_model(self):
         """Load the probe-confidence model published alongside, if there is one.
 
@@ -283,9 +297,10 @@ class SpatialEncoder:
             )
             # regenerate_context=False makes it *load* agea_vol_pca.npy / merfish_vol_pca.npy
             # from output_dir rather than refitting the PCA, which is the whole point of
-            # publishing them.
+            # publishing them. output_dir follows where the manifest recorded them (root or a
+            # context/ subdir), via context_dir.
             self._ctx_manager = ContextAtlasManager(
-                cfg, regenerate_context=False, output_dir=self.path_model
+                cfg, regenerate_context=False, output_dir=self.context_dir
             )
         return self._ctx_manager
 

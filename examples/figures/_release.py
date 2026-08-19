@@ -176,8 +176,9 @@ def channel_release(repo_id, vintage=None, *, device="cpu"):
     """Reconstruct the variables his channel figures read off ``resolve_release``.
 
     Returns:
-        SimpleNamespace: with ``dir`` (local model directory), ``features``, ``config``, ``split``,
-        ``stats`` (standardisation buffers), ``model`` (raw torch encoder), ``wrapper`` (the
+        SimpleNamespace: with ``dir`` (local model directory), ``context_dir`` (where the context
+        volumes live, per the manifest), ``features``, ``config``, ``split``, ``stats``
+        (standardisation buffers), ``model`` (raw torch encoder), ``wrapper`` (the
         :class:`SpatialEncoder`) and ``predict`` (its ``predict`` method).
     """
     from ephysatlas import load_pretrained
@@ -186,6 +187,7 @@ def channel_release(repo_id, vintage=None, *, device="cpu"):
     wrapper = load_pretrained(repo_id, revision=vintage, device=device)
     return SimpleNamespace(
         dir=wrapper.path_model,
+        context_dir=wrapper.context_dir,
         features=list(wrapper.outputs.get("columns") or []),
         config=wrapper.config,
         split=model_registry.read_split(wrapper.path_model),
