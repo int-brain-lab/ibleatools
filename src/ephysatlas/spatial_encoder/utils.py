@@ -371,6 +371,7 @@ def build_channels_plus_emptyvoxels_with_neighbors(
     seed: int = 0,
     split_manifest: dict = None,
     preprocessing_stats: dict = None,
+    return_preprocessing_stats: bool = False,
 ):
     """
       • GRID DATASET = voxels that do NOT contain any ephys channels.
@@ -386,9 +387,13 @@ def build_channels_plus_emptyvoxels_with_neighbors(
       preprocessing_stats: dict with ``e_mean``/``e_std``/``ctx_mean``/``ctx_std`` -- use the
         model's train-time standardization instead of recomputing it, so inputs match the weights.
       Both default to None, which preserves the original random-split, recomputed-stats behavior.
+      return_preprocessing_stats: when True, append a dict of the ephys/context stats actually
+        used (``e_mean``/``e_std``/``ctx_mean``/``ctx_std``) as a final return element. Defaults to
+        False, preserving the original return shape.
 
     Returns:
-      train_loader, val_loader, test_loader, e_mean, e_std, ctx_mean, ctx_std
+      train_loader, conf_train_loader, val_loader, test_loader, e_mean, e_std, ctx_mean, ctx_std,
+      split_info (and, if ``return_preprocessing_stats``, a trailing stats dict).
     """
 
     # ----- 200 µm grid over the whole atlas -----
@@ -715,7 +720,7 @@ def build_channels_plus_emptyvoxels_with_neighbors(
         collate_fn=collate,
     )
 
-    return (
+    result = (
         train_loader,  # mixed, for base model
         conf_train_loader,  # recorded-only, for confidence model
         val_loader,
@@ -726,6 +731,18 @@ def build_channels_plus_emptyvoxels_with_neighbors(
         ctx_std,
         split_info,
     )
+    # Optionally hand back the stats actually used, for figures that record what preprocessing the
+    # reconstructed pipeline ran with. Appended (not inlined) so the default return shape is stable.
+    if return_preprocessing_stats:
+        result = result + (
+            {
+                "e_mean": e_mean.cpu().numpy(),
+                "e_std": e_std.cpu().numpy(),
+                "ctx_mean": ctx_mean.cpu().numpy(),
+                "ctx_std": ctx_std.cpu().numpy(),
+            },
+        )
+    return result
 
 
 class RecDS(Dataset):

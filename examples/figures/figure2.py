@@ -1975,7 +1975,7 @@ class RunConfig:
     # Example:
     #   "alonsaguy/ephys-atlas-models"
     # or an IBL organization repo.
-    hf_repo_id: Optional[str] = None
+    hf_repo_id: Optional[str] = "int-brain-lab/ea-encoder-channel"
 
     # Leave None after running `hf auth login`.
     hf_token: Optional[str] = None
