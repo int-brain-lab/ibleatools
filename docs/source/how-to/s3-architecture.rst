@@ -101,3 +101,4 @@ See also
 * :doc:`load-channel-features` — load channel-level features
 * :doc:`load-cells-features` — load cells features (stPC, stLFP)
 * :doc:`load-lfp-features` — load full-recording compressed LFP (lfpack)
+* :doc:`load-encoding-volume` — load the 4-D CCF encoding volume

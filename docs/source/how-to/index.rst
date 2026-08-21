@@ -14,6 +14,7 @@ Getting Started
    load-cells-features
    load-cluster-features
    load-lfp-features
+   load-encoding-volume
    basic-feature-extraction
 
 Overview
