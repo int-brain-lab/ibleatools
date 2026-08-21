@@ -9,7 +9,7 @@ This repository contains tools for computing electrophysiology features and perf
 
 For detailed documentation, installation instructions, usage examples, and API reference, please visit our comprehensive documentation:
 
-**[📚 View Full Documentation](docs/source/index.rst)**
+**[📚 View Full Documentation](https://int-brain-lab.github.io/ibleatools)**
 
 ## Quick Installation
 
