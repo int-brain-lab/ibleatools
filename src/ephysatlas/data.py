@@ -428,7 +428,9 @@ def download_encoding_volume(
                 f"No encoding volume found on S3 for project={project!r}, label={label!r}"
             )
         res_um = resolutions[0]
-        _logger.info(f"res_um not specified, using finest available resolution: {res_um} um")
+        _logger.info(
+            f"res_um not specified, using finest available resolution: {res_um} um"
+        )
     filename = f"brainwide_ephys_atlas_{res_um}um.npz"
     local_file = Path(local_path).joinpath(filename)
     s3_key = f"aggregates/atlas/encoding_volumes/{project}/{label}/{filename}"
