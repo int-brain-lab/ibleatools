@@ -147,8 +147,9 @@ The function returns a pandas DataFrame containing various electrophysiological 
 
 Downloads a pre-computed 4-D volumetric representation of electrophysiological features
 on the Allen Common Coordinate Framework (CCF). Encoding volumes are versioned
-independently by **vintage label** (``label``) and **voxel resolution** (``res_um``) —
-pass both to select the file you want.
+independently by **vintage label** (``label``) and **voxel resolution** (``res_um``).
+``res_um`` can be omitted — it then auto-resolves to the finest resolution available
+on S3 for that ``label``.
 
 .. code-block:: python
 
@@ -158,10 +159,11 @@ pass both to select the file you want.
    from ephysatlas.data import download_encoding_volume
 
    one = ONE()
-   file_path = download_encoding_volume(
-       Path("/path/to/local/storage"), label="2026_W12", res_um=25, one=one
-   )
+   file_path = download_encoding_volume(Path("/path/to/local/storage"), label="2026_W26", one=one)
    data = np.load(file_path, allow_pickle=True)  # allow_pickle required for feature_names
+
+Pass ``res_um`` explicitly to pick a specific resolution when a vintage has more than one,
+e.g. ``download_encoding_volume(local_path, label="2026_W12", res_um=25, one=one)``.
 
 The file contains the following arrays (N = number of features for the vintage, e.g. 41 for
 ``2026_W12`` and ``2026_W26``):

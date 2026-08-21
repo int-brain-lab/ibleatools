@@ -52,7 +52,8 @@ Versioning
 
 Channel features and encoding volumes are versioned with a **weekly label** of the form
 ``YYYY_Www`` (e.g. ``2025_W28``, ``2026_W12``). Encoding volumes are additionally
-versioned by voxel resolution (``res_um``, e.g. 25 or 50) — see
+versioned by voxel resolution (``res_um``, e.g. 25 or 50); if omitted, it auto-resolves
+to the finest resolution available on S3 for that label — see
 :func:`ephysatlas.data.download_encoding_volume`.
 
 .. code-block:: python
