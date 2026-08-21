@@ -23,8 +23,9 @@ Folder Layout
     │
     ├── features/{project}/{label}_extended/     ← large optional data (cross-correlograms …)
     │
-    ├── encoding_volumes/{project}/{label}/      ← 4-D CCF volume
-    │   └── brainwide_ephys_atlas_25um.npz       (456 × 528 × 320 × N_features), ~500 MB
+    ├── encoding_volumes/{project}/{label}/      ← 4-D CCF volume, one file per resolution
+    │   ├── brainwide_ephys_atlas_25um.npz       (456 × 528 × 320 × N_features), ~500 MB
+    │   └── brainwide_ephys_atlas_50um.npz       (228 × 264 × 160 × N_features), ~240 MB
     │
     ├── models/{model_name}/                     ← trained region classifier
     │   ├── model.ubj
@@ -50,7 +51,10 @@ Versioning
 ----------
 
 Channel features and encoding volumes are versioned with a **weekly label** of the form
-``YYYY_Www`` (e.g. ``2025_W28``, ``2026_W12``).
+``YYYY_Www`` (e.g. ``2025_W28``, ``2026_W12``). Encoding volumes are additionally
+versioned by voxel resolution (``res_um``, e.g. 25 or 50); if omitted, it auto-resolves
+to the finest resolution available on S3 for that label — see
+:func:`ephysatlas.data.download_encoding_volume`.
 
 .. code-block:: python
 

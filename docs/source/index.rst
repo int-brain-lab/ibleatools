@@ -146,7 +146,10 @@ The function returns a pandas DataFrame containing various electrophysiological 
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Downloads a pre-computed 4-D volumetric representation of electrophysiological features
-on the 25 µm Allen Common Coordinate Framework (CCF).
+on the Allen Common Coordinate Framework (CCF). Encoding volumes are versioned
+independently by **vintage label** (``label``) and **voxel resolution** (``res_um``).
+``res_um`` can be omitted — it then auto-resolves to the finest resolution available
+on S3 for that ``label``.
 
 .. code-block:: python
 
@@ -156,10 +159,14 @@ on the 25 µm Allen Common Coordinate Framework (CCF).
    from ephysatlas.data import download_encoding_volume
 
    one = ONE()
-   file_path = download_encoding_volume(Path("/path/to/local/storage"), label="2026_W12", one=one)
+   file_path = download_encoding_volume(Path("/path/to/local/storage"), label="2026_W26", one=one)
    data = np.load(file_path, allow_pickle=True)  # allow_pickle required for feature_names
 
-The file contains the following arrays (N = number of features for the vintage, e.g. 41 for ``2026_W12``):
+Pass ``res_um`` explicitly to pick a specific resolution when a vintage has more than one,
+e.g. ``download_encoding_volume(local_path, label="2026_W12", res_um=25, one=one)``.
+
+The file contains the following arrays (N = number of features for the vintage, e.g. 41 for
+``2026_W12`` and ``2026_W26``):
 
 .. list-table::
    :header-rows: 1
@@ -170,7 +177,7 @@ The file contains the following arrays (N = number of features for the vintage, 
      - Dtype
      - Description
    * - ``ephys_atlas_vol``
-     - (456, 528, 320, N)
+     - (nx, ny, nz, N)
      - float16
      - 4-D volume: x × y × z × features
    * - ``feature_names``
@@ -188,14 +195,33 @@ The file contains the following arrays (N = number of features for the vintage, 
    * - ``grid_shape``
      - (3,)
      - int32
-     - Volume grid dimensions [456, 528, 320]
+     - Volume grid dimensions [nx, ny, nz]
    * - ``res_um``
      - (1,)
      - int32
-     - Voxel resolution in µm (25)
+     - Voxel resolution in µm
 
-Encoding volumes are versioned by vintage label and stored on S3 at
-``aggregates/atlas/encoding_volumes/{project}/{label}/brainwide_ephys_atlas_25um.npz``.
+Available vintages/resolutions:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 20 20 20 40
+
+   * - ``label``
+     - ``res_um``
+     - Grid shape
+     - S3 file
+   * - ``2026_W12``
+     - 25
+     - (456, 528, 320)
+     - ``brainwide_ephys_atlas_25um.npz``
+   * - ``2026_W26``
+     - 50
+     - (228, 264, 160)
+     - ``brainwide_ephys_atlas_50um.npz``
+
+Encoding volumes are stored on S3 at
+``aggregates/atlas/encoding_volumes/{project}/{label}/brainwide_ephys_atlas_{res_um}um.npz``.
 Use ``list_available_labels(one=one, project="ea_active")`` to list available vintages.
 
 5. Region Inference (`infer_regions`)
