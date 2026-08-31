@@ -1,4 +1,6 @@
+import tempfile
 import unittest
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -6,7 +8,10 @@ import pandas as pd
 from ephysatlas.cells import (
     compute_burstiness_and_memory,
     compute_log_acg,
+    get_neighbours_members,
     select_good_units_relaxed_rp,
+    spike_triggered_population_coupling,
+    spike_triggered_population_coupling_df,
 )
 
 try:
@@ -247,6 +252,180 @@ class TestSelectGoodUnitsRelaxedRp(unittest.TestCase):
         df = self._df(bitwise_fail=[0, 0], max_confidence=[69.9, 70.0])
         relaxed = select_good_units_relaxed_rp(df)
         np.testing.assert_array_equal(relaxed, [False, True])
+
+
+class TestGetNeighboursMembers(unittest.TestCase):
+    def test_radius_inclusion_and_self_excluded(self):
+        lateral_um = np.array([0.0, 10.0, 1000.0])
+        axial_um = np.array([0.0, 0.0, 0.0])
+        neighbours = get_neighbours_members(lateral_um, axial_um, radius_um=50)
+        expected = np.array(
+            [
+                [False, True, False],
+                [True, False, False],
+                [False, False, False],
+            ]
+        )
+        np.testing.assert_array_equal(neighbours, expected)
+
+    def test_diagonal_always_false(self):
+        neighbours = get_neighbours_members(np.zeros(4), np.zeros(4), radius_um=1e6)
+        self.assertFalse(neighbours.diagonal().any())
+
+
+class TestSpikeTriggeredPopulationCoupling(unittest.TestCase):
+    """
+    Synthetic ground truth: cluster B fires `LAG_S` after every spike of cluster A (a
+    shared, jittered common drive), so their coupling should peak at +/- LAG_S with the
+    expected sign; an isolated cluster C, too far away to be anyone's neighbour, should
+    get an all-nan row.
+    """
+
+    LAG_S = 0.005  # 5 ms
+    RADIUS_UM = 50.0
+    LATERAL_UM = np.array([0.0, 10.0, 5000.0])  # A & B close, C far
+    AXIAL_UM = np.zeros(3)
+
+    def _synthetic_spike_trains(
+        self, seed=0, duration=200.0, common_rate=5.0, far_rate=3.0
+    ):
+        rng = np.random.default_rng(seed)
+        common_times = np.sort(rng.uniform(0, duration, int(common_rate * duration)))
+        jitter = 0.001
+        t_a = np.sort(common_times + rng.normal(0, jitter, common_times.size))
+        t_b = np.sort(
+            common_times + self.LAG_S + rng.normal(0, jitter, common_times.size)
+        )
+        t_c = np.sort(rng.uniform(0, duration, int(far_rate * duration)))
+        spike_times = np.concatenate([t_a, t_b, t_c])
+        spike_clusters = np.concatenate(
+            [np.zeros(t_a.size), np.ones(t_b.size), np.full(t_c.size, 2)]
+        ).astype(int)
+        order = np.argsort(spike_times)
+        return spike_times[order], spike_clusters[order]
+
+    def _coupling(self, **kwargs):
+        spike_times, spike_clusters = self._synthetic_spike_trains()
+        return spike_triggered_population_coupling(
+            spike_times,
+            spike_clusters,
+            np.array([0, 1, 2]),
+            self.LATERAL_UM,
+            self.AXIAL_UM,
+            self.RADIUS_UM,
+            **kwargs,
+        )
+
+    def test_leader_follower_peak_lag(self):
+        """A leads (B follows 5 ms later) -> A's coupling peaks at +5ms, B's at -5ms."""
+        result = self._coupling()
+        peak_a = result["tscale"][np.nanargmax(result["stpc"][0])]
+        peak_b = result["tscale"][np.nanargmax(result["stpc"][1])]
+        self.assertAlmostEqual(peak_a, self.LAG_S)
+        self.assertAlmostEqual(peak_b, -self.LAG_S)
+
+    def test_isolated_cluster_has_no_neighbours_and_is_nan(self):
+        result = self._coupling()
+        self.assertEqual(result["n_neighbours"][2], 0)
+        self.assertTrue(np.all(np.isnan(result["stpc"][2])))
+        self.assertTrue(np.isnan(result["coupling_strength"][2]))
+        self.assertTrue(np.isnan(result["coupling_delay"][2]))
+
+    def test_coupled_clusters_have_one_neighbour_each(self):
+        result = self._coupling()
+        np.testing.assert_array_equal(result["n_neighbours"][:2], [1, 1])
+
+    def test_coupling_strength_is_value_at_zero_lag(self):
+        result = self._coupling()
+        i0 = np.searchsorted(result["tscale"], 0)
+        np.testing.assert_array_equal(
+            result["coupling_strength"], result["stpc"][:, i0]
+        )
+
+    def test_lags_and_binsize_control_output_shape(self):
+        result = self._coupling(lags=0.02, binsize=0.002)
+        # [-20, 20] ms window at 2 ms bins -> 21 samples
+        self.assertEqual(result["tscale"].size, 21)
+        self.assertAlmostEqual(result["tscale"][0], -0.02)
+        self.assertAlmostEqual(result["tscale"][-1], 0.02)
+        self.assertEqual(result["stpc"].shape, (3, 21))
+
+    def test_asymmetric_lags_tuple(self):
+        result = self._coupling(lags=(-0.01, 0.03))
+        self.assertAlmostEqual(result["tscale"][0], -0.01)
+        self.assertAlmostEqual(result["tscale"][-1], 0.03)
+
+
+class TestSpikeTriggeredPopulationCouplingDf(unittest.TestCase):
+    def _synthetic(self, n_clusters=6, seed=1, duration=60.0):
+        rng = np.random.default_rng(seed)
+        spike_times, spike_clusters = [], []
+        for c in range(n_clusters):
+            rate = rng.uniform(2, 8)
+            t = np.sort(rng.uniform(0, duration, int(rate * duration)))
+            spike_times.append(t)
+            spike_clusters.append(np.full(t.size, c))
+        spike_times = np.concatenate(spike_times)
+        spike_clusters = np.concatenate(spike_clusters)
+        order = np.argsort(spike_times)
+        spikes = {"times": spike_times[order], "clusters": spike_clusters[order]}
+        df_clusters = pd.DataFrame(
+            {
+                "lateral_um": rng.uniform(0, 2000, n_clusters),
+                "axial_um": rng.uniform(0, 2000, n_clusters),
+                "bitwise_fail": [0, 0, 0, 1, 0, 1][:n_clusters],
+            }
+        )
+        return spikes, df_clusters
+
+    def test_good_units_only_default_restricts_rows(self):
+        spikes, df_clusters = self._synthetic()
+        result = spike_triggered_population_coupling_df(
+            spikes, df_clusters, radius_um=1000
+        )
+        n_good = int((df_clusters["bitwise_fail"] == 0).sum())
+        self.assertEqual(result["stpc"].shape[0], n_good)
+        np.testing.assert_array_equal(
+            result["i_reported"], np.where(df_clusters["bitwise_fail"] == 0)[0]
+        )
+
+    def test_good_units_only_false_reports_every_cluster(self):
+        spikes, df_clusters = self._synthetic()
+        result = spike_triggered_population_coupling_df(
+            spikes, df_clusters, radius_um=1000, good_units_only=False
+        )
+        self.assertEqual(result["stpc"].shape[0], df_clusters.shape[0])
+
+    def test_df_clusters_columns_written_back(self):
+        spikes, df_clusters = self._synthetic()
+        result = spike_triggered_population_coupling_df(
+            spikes, df_clusters, radius_um=1000
+        )
+        out = result["df_clusters"]
+        self.assertIn("coupling_strength", out.columns)
+        self.assertIn("coupling_delay", out.columns)
+        # units not reported (bitwise_fail != 0, with the default good_units_only) are nan
+        bad = out.index[out["bitwise_fail"] != 0]
+        self.assertTrue(out.loc[bad, "coupling_strength"].isna().all())
+
+    def test_file_stpc_cache_round_trip(self):
+        spikes, df_clusters = self._synthetic()
+        with tempfile.TemporaryDirectory() as tmp:
+            file_stpc = Path(tmp).joinpath("stpc.npy")
+            result_fresh = spike_triggered_population_coupling_df(
+                spikes, df_clusters, radius_um=1000, file_stpc=file_stpc
+            )
+            self.assertTrue(file_stpc.exists())
+            result_cached = spike_triggered_population_coupling_df(
+                spikes, df_clusters, radius_um=1000, file_stpc=file_stpc
+            )
+        np.testing.assert_allclose(result_fresh["stpc"], result_cached["stpc"])
+        np.testing.assert_allclose(
+            result_fresh["coupling_strength"], result_cached["coupling_strength"]
+        )
+        np.testing.assert_allclose(
+            result_fresh["firing_rate"], result_cached["firing_rate"]
+        )
 
 
 if __name__ == "__main__":

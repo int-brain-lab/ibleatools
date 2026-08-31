@@ -21,6 +21,7 @@ import iblatlas.atlas
 from iblutil.numerical import bincount2D
 from ibldsp.utils import WindowGenerator
 from iblutil.numerical import ismember
+from iblutil.util import Bunch
 import brainbox.ephys_plots
 import iblatlas.regions
 
@@ -73,12 +74,331 @@ def select_good_units_relaxed_rp(df_clusters, rp_confidence_threshold=70.0):
     return noise_amp_pass & rp_pass
 
 
-def get_neighbours_members(df_clusters, radius_um):
+def _coupling_lag_axis(lags, binsize):
+    """(n_lags_neg, n_lags_pos, tscale) for a `lags` window/`binsize`, see
+    :func:`spike_triggered_population_coupling`."""
+    lag_min, lag_max = (-abs(lags), abs(lags)) if np.isscalar(lags) else lags
+    n_lags_neg = int(round(-lag_min / binsize))
+    n_lags_pos = int(round(lag_max / binsize))
+    tscale = np.arange(-n_lags_neg, n_lags_pos + 1) * binsize
+    return n_lags_neg, n_lags_pos, tscale
+
+
+def _coupling_strength_and_delay(stpc, tscale):
+    """Zero-lag value and (signed) centre-of-mass delay of `stpc`, see
+    :func:`spike_triggered_population_coupling`."""
+    coupling_strength = stpc[:, np.searchsorted(tscale, 0)]
+    with np.errstate(invalid="ignore", divide="ignore"):
+        coupling_delay = np.sum(tscale * stpc, axis=1) / np.sum(stpc, axis=1)
+    return coupling_strength, coupling_delay
+
+
+def get_neighbours_members(lateral_um, axial_um, radius_um):
     """
-    Get neighbouring clusters but exclude self
-    :param df_clusters:
-    :param radius_um:
-    :return:
+    Boolean adjacency matrix of clusters located within a given radius of one another on
+    the probe (2-D, lateral x axial), excluding self.
+
+    Parameters
+    ----------
+    lateral_um, axial_um : array_like
+        1-D coordinate arrays, one entry per cluster, in micrometres (the
+        ``lateral_um`` / ``axial_um`` columns of :class:`ModelClusters`).
+    radius_um : float
+        Inclusion radius, in micrometres.
+
+    Returns
+    -------
+    numpy.ndarray of bool, shape (n_clusters, n_clusters)
+        ``neighbours[i, j]`` is True if cluster `j` lies within `radius_um` of cluster
+        `i`. The diagonal is always False (a cluster is not its own neighbour).
+    """
+    xy = np.asarray(lateral_um) + 1j * np.asarray(axial_um)
+    distance = np.abs(xy[:, np.newaxis] - xy[np.newaxis, :])
+    neighbours = distance <= radius_um
+    np.fill_diagonal(neighbours, False)
+    return neighbours
+
+
+def spike_triggered_population_coupling(
+    spike_times,
+    spike_clusters,
+    cluster_ids,
+    lateral_um,
+    axial_um,
+    radius_um,
+    lags=0.08,
+    binsize=BINSIZE,
+    lowpass_hz=20.0,
+):
+    """
+    Spike-triggered population coupling of each cluster to its local, spatially-restricted
+    population, as defined in Bimbard, Harris & Carandini, "Invariant activity sequences
+    across the mouse brain" (bioRxiv 2025.12.20.695676), Methods section "Population
+    coupling", itself an extension of Okun et al. 2015 (Nature 521, 511-515).
+
+    For cluster `i`, let :math:`g_i(t)` be the mean, across every *other* cluster within
+    `radius_um` of it on the probe, of the mean-centred binned firing:
+
+    .. math::
+
+        g_i(t) = \\frac{1}{N_i - 1}\\sum_{j \\in \\mathrm{neighbours}(i)} (f_j(t) - \\mu_j)
+
+    The coupling at lag :math:`\\tau` is then the spike-triggered average of :math:`g_i`,
+    i.e. the (normalised) cross-correlation of cluster `i`'s spike train with :math:`g_i`:
+
+    .. math::
+
+        c_{i,\\tau} = 100 \\times \\frac{1}{\\lVert f_i \\rVert}
+            \\int f_i(t - \\tau)\\, g_i(t)\\, dt
+
+    where :math:`\\lVert f_i \\rVert` is the number of spikes fired by cluster `i`. The
+    result is expressed as a percentage and, by construction, is uncorrelated with a
+    neuron's own firing rate.
+
+    Parameters
+    ----------
+    spike_times : array_like
+        Spike times (s), one entry per spike.
+    spike_clusters : array_like
+        Cluster id of each spike (same length as `spike_times`); values are looked up in
+        `cluster_ids`, so ids need not be contiguous or start at 0.
+    cluster_ids : array_like
+        Cluster ids to compute the coupling for, and from which each cluster's local
+        population is built; defines the row order of the outputs and must align with
+        `lateral_um`, `axial_um`.
+    lateral_um, axial_um : array_like
+        Cluster coordinates on the probe, one entry per entry of `cluster_ids`, in
+        micrometres (the ``lateral_um`` / ``axial_um`` columns of :class:`ModelClusters`).
+    radius_um : float
+        Inclusion radius for a cluster's local population, in micrometres. A cluster with
+        no other cluster within `radius_um` gets an all-nan coupling row.
+    lags : float or (float, float), optional
+        Symmetric half-window (single float) or explicit ``(lag_min, lag_max)`` window of
+        lags, in seconds, over which the coupling is returned. Default 0.08, i.e.
+        [-80, 80] ms, as in Bimbard et al. 2025 ("we computed coupling within a
+        [-80, 80] ms window").
+    binsize : float, optional
+        Bin size (s) used to bin the spike trains before cross-correlating. Default 1 ms,
+        as in Bimbard et al. 2025.
+    lowpass_hz : float or None, optional
+        Cutoff (Hz) of the zero-phase, 3rd-order Butterworth low-pass filter applied to
+        each coupling curve ("low-passed filtered the coupling with a 20 Hz cutoff").
+        None disables filtering. Default 20.0.
+
+    Returns
+    -------
+    iblutil.util.Bunch
+        stpc : numpy.ndarray (n_clusters, n_lags)
+            Population coupling, in %, one row per entry of `cluster_ids`.
+        tscale : numpy.ndarray (n_lags,)
+            Lag axis (s) matching axis 1 of `stpc`.
+        coupling_strength : numpy.ndarray (n_clusters,)
+            Coupling at zero lag, ``stpc[:, tscale == 0]``.
+        coupling_delay : numpy.ndarray (n_clusters,)
+            Centre of mass of the (filtered) coupling curve, in seconds, per the literal
+            Methods definition (no absolute value). For a cluster whose coupling is weak
+            and noisy enough that the curve's signed sum is close to zero, this ratio can
+            be ill-conditioned and land outside the `lags` window; such rows are more
+            reliably screened out by `coupling_strength` than trusted for their delay.
+        firing_rate : numpy.ndarray (n_clusters,)
+            Mean firing rate (Hz) of each cluster over
+            ``[spike_times.min(), spike_times.max()]``.
+        n_neighbours : numpy.ndarray (n_clusters,)
+            Number of other clusters within `radius_um`, i.e. :math:`N_i - 1`.
+
+    Notes
+    -----
+    Memory and compute scale with ``n_clusters ** 2 * n_bins`` (the local-population sum)
+    and ``n_clusters * n_bins`` (the batched FFT cross-correlation), where
+    ``n_bins = duration / binsize``. For very long recordings, pre-restrict `spike_times`
+    / `spike_clusters` to the epoch of interest (e.g. spontaneous-activity periods, as in
+    Bimbard et al. 2025) before calling this function.
+    """
+    spike_times = np.asarray(spike_times)
+    spike_clusters = np.asarray(spike_clusters)
+    cluster_ids = np.asarray(cluster_ids)
+    n_clusters = cluster_ids.size
+
+    in_clusters, sc = ismember(spike_clusters, cluster_ids)
+    st = spike_times[in_clusters]
+
+    n_lags_neg, n_lags_pos, tscale = _coupling_lag_axis(lags, binsize)
+
+    counts, _, _ = bincount2D(
+        st,
+        sc,
+        xbin=binsize,
+        ybin=1,
+        xlim=[st.min(), st.max()],
+        ylim=[0, n_clusters - 1],
+    )
+    n_bins = counts.shape[1]
+    n_spikes = np.bincount(sc, minlength=n_clusters).astype(float)
+    firing_rate = n_spikes / (st.max() - st.min())
+
+    neighbours = get_neighbours_members(lateral_um, axial_um, radius_um)
+    n_neighbours = neighbours.sum(axis=1)
+
+    centred = counts - counts.mean(axis=1)[:, np.newaxis]
+    with np.errstate(all="ignore"):
+        # `all="ignore"` also silences a spurious "divide by zero"/"overflow" warning that
+        # some Accelerate/OpenBLAS builds raise on large matmuls (numpy gh-21196); it does
+        # not affect the (correct) result, and the real 0/0 from `n_neighbours == 0` rows
+        # is handled explicitly below.
+        population = (neighbours @ centred) / n_neighbours[:, np.newaxis]
+
+    # Spike-triggered average of `population` for every cluster and every lag at once is a
+    # per-row cross-correlation of `counts` with `population`, computed here in a single
+    # batched FFT rather than per-cluster / per-window loops (order of operands matters:
+    # irfft(rfft(population) * conj(rfft(counts)))[k] == sum_t counts[t] * population[t+k]).
+    # The circular wrap-around this introduces is negligible since n_lags << n_bins.
+    xcorr = np.fft.irfft(
+        np.fft.rfft(population, axis=1) * np.conj(np.fft.rfft(counts, axis=1)),
+        n=n_bins,
+        axis=1,
+    )
+    lag_index = np.arange(-n_lags_neg, n_lags_pos + 1) % n_bins
+    with np.errstate(invalid="ignore", divide="ignore"):
+        stpc = 100 * xcorr[:, lag_index] / n_spikes[:, np.newaxis]
+    stpc[(n_neighbours == 0) | (n_spikes == 0), :] = np.nan
+
+    if lowpass_hz is not None:
+        sos = scipy.signal.butter(3, lowpass_hz, "lp", fs=1 / binsize, output="sos")
+        ok = np.all(np.isfinite(stpc), axis=1)
+        stpc[ok] = scipy.signal.sosfiltfilt(sos, stpc[ok], axis=1)
+
+    coupling_strength, coupling_delay = _coupling_strength_and_delay(stpc, tscale)
+
+    return Bunch(
+        stpc=stpc,
+        tscale=tscale,
+        coupling_strength=coupling_strength,
+        coupling_delay=coupling_delay,
+        firing_rate=firing_rate,
+        n_neighbours=n_neighbours,
+    )
+
+
+def spike_triggered_population_coupling_df(
+    spikes,
+    df_clusters,
+    radius_um=500,
+    lags=0.08,
+    binsize=BINSIZE,
+    lowpass_hz=20.0,
+    good_units_only=True,
+    file_stpc=None,
+):
+    """
+    ``df_clusters`` / ``spikes``-Bunch convenience wrapper around
+    :func:`spike_triggered_population_coupling`, for interoperability with the rest of the
+    ephys-atlas cell-features pipeline.
+
+    The population that couplings are computed against always includes every cluster in
+    `df_clusters` regardless of QC -- matching Bimbard et al. 2025's use of "the summed
+    activity of all neurons" as the reference population -- irrespective of
+    `good_units_only`, which only restricts which clusters are *reported*.
+
+    Parameters
+    ----------
+    spikes : dict-like
+        Must expose ``times`` (s) and ``clusters`` (cluster id, matching `df_clusters`'s
+        index).
+    df_clusters : pandas.DataFrame
+        Cluster metadata, indexed by cluster id. Must contain ``lateral_um``,
+        ``axial_um`` and ``bitwise_fail`` (QC flag, 0 == good).
+    radius_um, lags, binsize, lowpass_hz : see :func:`spike_triggered_population_coupling`.
+    good_units_only : bool, optional
+        If True (default, matching this module's existing cell-features pipeline), only
+        report rows for clusters with ``bitwise_fail == 0``. Set to False to report every
+        cluster. `file_stpc`, if given, only ever holds the reported rows, so a cache
+        written with one setting cannot be reused with the other.
+    file_stpc : Path, optional
+        If given and it exists, load `stpc` (already restricted to the reported
+        clusters) from it instead of recomputing; otherwise compute and save it there.
+
+    Returns
+    -------
+    iblutil.util.Bunch
+        Same as :func:`spike_triggered_population_coupling`, restricted to the reported
+        clusters, plus:
+        df_clusters : pandas.DataFrame
+            `df_clusters` with ``coupling_strength`` / ``coupling_delay`` columns
+            added/overwritten (nan for clusters not reported or with no neighbours).
+        i_reported : numpy.ndarray
+            Positional index into `df_clusters` of the rows reported in `stpc` etc.
+    """
+    cluster_ids = df_clusters.index.to_numpy()
+    lateral_um = df_clusters["lateral_um"].to_numpy()
+    axial_um = df_clusters["axial_um"].to_numpy()
+
+    if good_units_only:
+        i_reported = np.where(df_clusters["bitwise_fail"].to_numpy() == 0)[0]
+    else:
+        i_reported = np.arange(df_clusters.shape[0])
+
+    if file_stpc is not None and file_stpc.exists():
+        stpc = np.load(file_stpc)
+        _, _, tscale = _coupling_lag_axis(lags, binsize)
+        coupling_strength, coupling_delay = _coupling_strength_and_delay(stpc, tscale)
+        in_clusters, sc = ismember(np.asarray(spikes["clusters"]), cluster_ids)
+        st = np.asarray(spikes["times"])[in_clusters]
+        firing_rate_all = np.bincount(sc, minlength=cluster_ids.size) / (
+            st.max() - st.min()
+        )
+        n_neighbours_all = get_neighbours_members(lateral_um, axial_um, radius_um).sum(
+            axis=1
+        )
+        firing_rate = firing_rate_all[i_reported]
+        n_neighbours = n_neighbours_all[i_reported]
+    else:
+        full = spike_triggered_population_coupling(
+            spikes["times"],
+            spikes["clusters"],
+            cluster_ids,
+            lateral_um,
+            axial_um,
+            radius_um,
+            lags=lags,
+            binsize=binsize,
+            lowpass_hz=lowpass_hz,
+        )
+        tscale = full["tscale"]
+        stpc = full["stpc"][i_reported]
+        coupling_strength = full["coupling_strength"][i_reported]
+        coupling_delay = full["coupling_delay"][i_reported]
+        firing_rate = full["firing_rate"][i_reported]
+        n_neighbours = full["n_neighbours"][i_reported]
+        if file_stpc is not None:
+            file_stpc.parent.mkdir(parents=True, exist_ok=True)
+            np.save(file_stpc, stpc)
+
+    df_clusters = df_clusters.copy()
+    df_clusters["coupling_strength"] = np.nan
+    df_clusters["coupling_delay"] = np.nan
+    df_clusters.loc[df_clusters.index[i_reported], "coupling_strength"] = (
+        coupling_strength
+    )
+    df_clusters.loc[df_clusters.index[i_reported], "coupling_delay"] = coupling_delay
+
+    return Bunch(
+        df_clusters=df_clusters,
+        stpc=stpc,
+        tscale=tscale,
+        coupling_strength=coupling_strength,
+        coupling_delay=coupling_delay,
+        firing_rate=firing_rate,
+        n_neighbours=n_neighbours,
+        i_reported=i_reported,
+    )
+
+
+def get_neighbours_members_legacy(df_clusters, radius_um):
+    """
+    Original (pre-fix) implementation, kept only so results can be compared side by side
+    against :func:`spike_triggered_population_coupling_df` on real data. Do not use for
+    new work -- see :func:`spike_triggered_population_coupling_legacy` for what it gets
+    wrong.
     """
     xy = df_clusters["lateral_um"] + 1j * df_clusters["axial_um"]
     xy, xyt = np.meshgrid(xy, xy)
@@ -88,11 +408,21 @@ def get_neighbours_members(df_clusters, radius_um):
     return neighbours
 
 
-def spike_triggered_population_coupling(spikes, df_clusters, file_stpc=None):
+def spike_triggered_population_coupling_legacy(spikes, df_clusters, file_stpc=None):
     """
-    :param spikes:
-    :param df_clusters:
-    :return:
+    Original (pre-fix) implementation of spike-triggered population coupling, kept only
+    for side-by-side comparison against :func:`spike_triggered_population_coupling_df` on
+    real data. Do not use for new work; relative to the Methods of Bimbard et al. 2025 it:
+
+    - sums neighbours' raw (non-mean-centred) counts and divides by their *summed firing
+      rate* rather than averaging their mean-centred counts by neighbour count;
+    - double-counts most bins via overlapping (50%-hop) correlation windows instead of a
+      single pass over the whole recording;
+    - normalises the result by firing rate (Hz) instead of spike count, and uses
+      ``abs(stpc)`` as the centre-of-mass weight instead of the signed curve;
+    - restricts neighbours to `lateral_um`/`axial_um` (2-D, probe-local) coordinates and a
+      hardcoded ``radius_um = 500`` and ``LAG = 0.5`` s (±500 ms) window, both no longer
+      configurable.
     """
     lag = LAG  # one sided correlation lag, in seconds
     binsize = BINSIZE
@@ -119,7 +449,7 @@ def spike_triggered_population_coupling(spikes, df_clusters, file_stpc=None):
     sos = scipy.signal.butter(3, 20, "lp", fs=1 / binsize, output="sos")
 
     sb = ((st - tbounds[0]) / binsize).astype(int)
-    neighbours = get_neighbours_members(df_clusters, radius_um)
+    neighbours = get_neighbours_members_legacy(df_clusters, radius_um)
     nsw = int(wl / binsize)
     icenter = np.searchsorted((np.arange(nsw) - nsw // 2) * binsize, (-lag, lag))
 
@@ -187,51 +517,53 @@ def display_stpc(
     tscale,
     coupling_strength,
     coupling_delay,
-    firing_rates,
+    firing_rate,
+    i_reported,
     br=None,
     label=None,
     save_file=None,
+    **_unused,
 ):
     """
     Display spike-triggered population coupling results.
 
-    This function visualizes STPC traces for the units marked as "good"
-    (i.e. `bitwise_fail == 0`), sorted by probe depth, and shows a compact
-    summary alongside the matrix plot.
+    This function visualizes the STPC traces of the reported units, sorted by probe
+    depth, and shows a compact summary alongside the matrix plot. Intended to be called
+    as ``display_stpc(**result)`` on the :class:`iblutil.util.Bunch` returned by
+    :func:`spike_triggered_population_coupling_df`.
 
     Parameters
     ----------
     df_clusters : pandas.DataFrame
-        Cluster-level metadata. Must include at least:
-        - `bitwise_fail`: QC flag, where 0 indicates a good unit
-        - `depths`: unit depth used for sorting
-        - `atlas_id`: region id used for brain-region plotting
-    stpc : numpy.ndarray
-        STPC traces with shape `(n_units, n_time_bins)`.
+        Cluster-level metadata (all clusters, not just reported ones). Must include at
+        least `depths` (unit depth used for sorting) and `atlas_id` (region id used for
+        brain-region plotting).
+    stpc, coupling_strength, coupling_delay, firing_rate : numpy.ndarray
+        As returned by :func:`spike_triggered_population_coupling_df`: one row/entry per
+        reported cluster (see `i_reported`).
     tscale : numpy.ndarray
         Time axis for `stpc`, in seconds.
-    coupling_strength : numpy.ndarray
-        Coupling strength for each unit, typically the STPC value at zero lag.
-    coupling_delay : numpy.ndarray
-        Coupling delay for each unit, computed from the absolute STPC profile.
-    firing_rates : numpy.ndarray
-        Firing rate for each unit, in Hz.
-    save_file : Path | none, optional
+    i_reported : numpy.ndarray
+        Positional index into `df_clusters` of the clusters reported in `stpc` etc., as
+        returned by :func:`spike_triggered_population_coupling_df`.
+    save_file : Path | None, optional
         If it is a file Path, save the figure to disk instead of keeping it open.
     br : iblatlas.regions.BrainRegions, optional
         Brain regions object. If not provided, a default instance is created.
+    **_unused
+        Swallows extra keys (e.g. ``n_neighbours``) when called as
+        ``display_stpc(**result)``.
 
     Returns
     -------
     None
         The function creates a plot and optionally saves it.
     """
-    br = iblatlas.regions.BrainRegions()
-    i_good = np.where(df_clusters["bitwise_fail"] == 0)[0]
-    idepth_sorted = np.argsort(df_clusters.loc[i_good]["depths"])
-    # firing_rates = np.bincount(sc, minlength=nc_all) / np.diff(tbounds)
+    br = iblatlas.regions.BrainRegions() if br is None else br
+    df_reported = df_clusters.iloc[i_reported]
+    idepth_sorted = np.argsort(df_reported["depths"].to_numpy())
 
-    ch = df_clusters.loc[i_good[idepth_sorted]].reset_index()
+    ch = df_reported.iloc[idepth_sorted].reset_index()
     fig, ax = plt.subplots(
         1,
         5,
@@ -245,15 +577,14 @@ def display_stpc(
 
     ax[0].matshow(
         stpc[idepth_sorted],
-        # stpc[idepth_sorted] / np.mean(np.abs(stpc[idepth_sorted]), axis=1)[:, np.newaxis],
         aspect="auto",
         cmap="magma",
         origin="lower",
-        extent=(-LAG, LAG, 0, len(cdepths)),
+        extent=(tscale[0], tscale[-1], 0, len(cdepths)),
     )
     ax[1].plot(coupling_strength[idepth_sorted], cdepths, color="k", linewidth=1)
     ax[2].plot(coupling_delay[idepth_sorted], cdepths, color="k", linewidth=1)
-    ax[3].plot(firing_rates[i_good[idepth_sorted]], cdepths, color="k", linewidth=1)
+    ax[3].plot(firing_rate[idepth_sorted], cdepths, color="k", linewidth=1)
     ax[1].set(xlabel="coupling strength")
 
     ax[2].set(xlabel="coupling delay")
@@ -264,7 +595,9 @@ def display_stpc(
         brain_regions=br,
         ax=ax[-1],
     )
-    ax[0].set(xlim=(-0.25, 0.25), xlabel="Spike-triggered population average (s)")
+    ax[0].set(
+        xlim=(tscale[0], tscale[-1]), xlabel="Spike-triggered population average (s)"
+    )
     if label is not None:
         fig.suptitle(label)
     if save_file is not None:
