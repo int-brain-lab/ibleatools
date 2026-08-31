@@ -29,7 +29,7 @@ dependencies = [
     "scikit-learn<1.9",       # 1.9.0 broke OneToOneFeatureMixin.get_feature_names_out (NotFittedError in EphysTransformer); 1.6-1.8 OK
     "filelock",               # feature_computation.py, feature_calculators/base.py
     "pyyaml",                 # data.py, regionclassifier.py
-    "pandera>=0.24.0",
+    "pandera>=0.24.0,<0.33",   # 0.33.0 made Optional[T] columns required
     "pydantic>=2.11.4",
     "joblib>=1.5",            # relaxed from ==1.5.1 to reduce resolver conflicts
     "torch",                  # spatial_encoder
