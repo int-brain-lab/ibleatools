@@ -42,8 +42,7 @@ logger = logging.getLogger(__name__)
 
 # S3 prefix the models have always lived under.
 S3_MODEL_PREFIX = "aggregates/atlas/models"
-# Name of the publication manifest inside a model directory. Deliberately project-scoped:
-# `model_index.json` is diffusers' pipeline manifest and `config.json` implies transformers.
+# Name of the publication manifest inside a model directory
 MODEL_MANIFEST_FILE = "ephysatlas_model.json"
 # Hugging Face organisation the models are published under.
 DEFAULT_HF_ORG = "int-brain-lab"
@@ -75,13 +74,6 @@ UNIT_UNCOND_GMM_FILE = "unconditional_gmm_train_only.joblib"
 # .cache/ tree to a snapshot; and the upload already drops the rest, so hashing any of it would
 # make every download fail verification.
 #
-# README.md and LICENSE are excluded deliberately, and it is a trade-off worth naming. They are
-# human-facing documentation, editable in place through the Hub's own model-card editor and by
-# `huggingface_hub.metadata_update`. Covering them would mean a maintainer adding a tag to the
-# card breaks `load_pretrained` for every user until checksums are regenerated -- a routine docs
-# edit taking the model offline. Neither file affects what the model computes, so they are
-# documentation rather than payload. Everything load-bearing stays covered, the manifest and the
-# golden example included.
 DEFAULT_CHECKSUM_IGNORE = DEFAULT_UPLOAD_IGNORE + (
     MODEL_CHECKSUM_FILE,
     "README.md",
@@ -283,6 +275,7 @@ def resolve_model(
     """Resolve a model to a local directory, trying Hugging Face then S3.
 
     Args:
+    # TODO: Add an example here for downloading the channel level encoder model from HF.
         model_id (str): A hub repo id (``owner/name``), or a bare S3 model folder name such
             as ``2024_W50_Cosmos_lid-basket-sense``.
         revision (str, optional): Hugging Face branch/tag. Ignored by the S3 backend.
@@ -326,10 +319,6 @@ def resolve_model(
             logger.info(f"{type(backend).__name__} could not fetch {model_id}: {e}")
             errors.append(f"{type(backend).__name__}: {e}")
             continue
-        # Verify here, at the single chokepoint every download route passes through, rather
-        # than in each caller: load_pretrained, RegionClassifier.from_pretrained and
-        # download_model all arrive via this function, and only one of them would otherwise
-        # have checked. Silent for a model that ships no checksums.json.
         verify_checksums(path_model)
         return path_model
     raise ValueError(f"could not resolve model {model_id!r}. Tried -- " + " | ".join(errors))
@@ -796,6 +785,7 @@ def write_checksums(path_model: Path, ignore_patterns=DEFAULT_CHECKSUM_IGNORE) -
 
 
 def verify_checksums(path_model: Path, missing_ok: bool = True):
+    # TODO - Can I use missing_ok to False, so that I verify everytime. I don't have to maintain backward compatibility.
     """Re-hash the files ``checksums.json`` lists and report every discrepancy at once.
 
     Only *listed* files are checked. Extra files are fine and expected: a Hub snapshot carries
