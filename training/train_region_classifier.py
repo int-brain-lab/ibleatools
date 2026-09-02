@@ -276,6 +276,30 @@ def load_region_features(data_dir: Path, project: str, vintage: str):
 
 
 # %%
+def select_present_features(feature_list, available_columns):
+    """Keep only the resolved features that the loaded table actually carries, in order.
+
+    ``voltage_features_set`` returns every column the feature *schema* declares, including
+    **optional** ones (e.g. ``rms_lf_no_car``, the no-CAR LF RMS, computed only when
+    ``compute_rms_no_car`` was enabled). A given vintage's aggregation may not have produced every
+    optional column, so training on the schema list verbatim raises ``KeyError`` on the missing
+    ones. This intersects the two, preserving the feature order (which is hashed into the manifest),
+    and returns the dropped names so the caller can log them -- nothing is silently discarded.
+
+    Args:
+        feature_list (list): The resolved feature-column names (schema order).
+        available_columns: The columns actually present in the feature table.
+
+    Returns:
+        tuple: ``(present, missing)`` -- the kept features (in order) and the dropped ones.
+    """
+    available = set(available_columns)
+    present = [c for c in feature_list if c in available]
+    missing = [c for c in feature_list if c not in available]
+    return present, missing
+
+
+# %%
 def _parse_args(argv=None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--vintage", required=True, help="feature vintage to train on, e.g. 2025_W39")
@@ -317,6 +341,14 @@ def main(argv=None) -> Path:
     # a column in the table, not a voltage_features_set family).
     feature_list = ephysatlas.features.voltage_features_set(args.feature_set)
     feature_list.append("outside")
+    # Drop schema columns this vintage's aggregation did not produce (optional features like
+    # rms_lf_no_car), training on what is actually present rather than raising a KeyError.
+    feature_list, missing = select_present_features(feature_list, df_features.columns)
+    if missing:
+        logger.warning(
+            f"{len(missing)} feature(s) not present in the {args.vintage} table, dropping them "
+            f"(training on the {len(feature_list)} available): {missing}"
+        )
 
     models_dir = args.models_dir or args.data_dir.joinpath("models")
     path_model = train_region_classifier(
