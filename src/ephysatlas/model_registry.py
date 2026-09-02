@@ -921,10 +921,11 @@ def _artifact_paths(path_model: Path, role: str, value) -> list:
             folds_root = path_model.joinpath("folds")
             base = folds_root if folds_root.is_dir() else path_model
             # Agree with the loader's *predicate*, not just its path prefix. _fold_dirs keeps a
-            # fold only when it holds a meta.yaml, so checking mere existence would pass a
-            # directory the loader then silently drops -- quietly averaging fewer folds than the
-            # manifest and card advertise, and reporting a fold_agreement computed over them.
-            return [base.joinpath(name, "meta.yaml") for name in value]
+            # fold only when it holds its weights (folds ship weights only, no meta.yaml), so
+            # checking mere directory existence would pass a fold the loader then silently
+            # drops -- quietly averaging fewer folds than the manifest and card advertise, and
+            # reporting a fold_agreement computed over them.
+            return [base.joinpath(name, "model.ubj") for name in value]
         return [path_model.joinpath(name) for name in value]
     raise TypeError(
         f"artifacts[{role!r}] has unsupported type {type(value).__name__}; expected a path "

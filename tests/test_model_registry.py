@@ -445,6 +445,49 @@ class TestLoadModelDispatch(unittest.TestCase):
         self.assertIsInstance(classifier, XGBClassifier)
 
 
+class TestMetaFreeFolds(unittest.TestCase):
+    """A3 + D: folds ship weights only -- no per-fold ``meta.yaml``. The ensemble must still
+    discover and load every fold from the manifest and report a real ``fold_agreement``,
+    rather than silently dropping the meta-less folds and degrading to the single global model
+    (the §8 failure mode the plan calls out).
+    """
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.path_model = _make_model_dir(self.tmp)
+        rng = np.random.default_rng(2)
+        index = pd.MultiIndex.from_product(
+            [["pid-a", "pid-b"], range(5)], names=["pid", "channel"]
+        )
+        self.df = pd.DataFrame(
+            rng.normal(size=(len(index), len(FEATURES))), index=index, columns=FEATURES
+        )
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_folds_carry_no_meta_yaml(self):
+        # save_model writes meta.yaml only for the root model; folds hold model.ubj alone.
+        for name in ("FOLD00", "FOLD01"):
+            fold_dir = self.path_model.joinpath("folds", name)
+            self.assertTrue(fold_dir.joinpath("model.ubj").exists())
+            self.assertFalse(fold_dir.joinpath("meta.yaml").exists())
+
+    def test_ensemble_loads_meta_free_folds(self):
+        clf = regionclassifier.RegionClassifier(self.path_model)
+        # both folds discovered by their weights, none dropped
+        self.assertEqual(len(clf._fold_dirs()), 2)
+        out = clf.predict(self.df, estimator="ensemble")
+        # a real agreement over the folds actually consulted, not the all-NaN a
+        # global-only fallback would produce
+        self.assertFalse(np.isnan(out["fold_agreement"]).all())
+
+    def test_validate_artifacts_accepts_meta_free_folds(self):
+        # publish's completeness check must key on the fold weights, not a meta.yaml.
+        index = model_registry.read_manifest(self.path_model)
+        self.assertTrue(model_registry.validate_artifacts(self.path_model, index))
+
+
 class TestRegionClassifier(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
@@ -802,7 +845,7 @@ class TestChecksums(unittest.TestCase):
             "meta.yaml",
             model_registry.MODEL_MANIFEST_FILE,
             "folds/FOLD00/model.ubj",
-            "folds/FOLD01/meta.yaml",
+            "folds/FOLD01/model.ubj",
         ]:
             self.assertIn(expected, paths)
         # A checksum file cannot hash itself, and the manifest *must* be covered -- it is the
@@ -1040,11 +1083,12 @@ class TestValidateArtifacts(unittest.TestCase):
         self.assertIn("FOLD01", message)
 
     def test_a_fold_the_loader_would_drop_does_not_pass(self):
-        # Existence is not enough: _fold_dirs keeps a fold only if it holds a meta.yaml, so a
-        # directory without one passes an existence check and is then silently dropped at load
-        # -- the ensemble quietly averaging fewer models than the manifest advertises. That is
-        # precisely the "looks complete, fails for a stranger" case this gate exists to catch.
-        self.path_model.joinpath("folds", "FOLD01", "meta.yaml").unlink()
+        # Existence is not enough: _fold_dirs keeps a fold only if it holds its weights, so a
+        # directory without model.ubj passes a bare existence check and is then silently
+        # dropped at load -- the ensemble quietly averaging fewer models than the manifest
+        # advertises. That is precisely the "looks complete, fails for a stranger" case this
+        # gate exists to catch.
+        self.path_model.joinpath("folds", "FOLD01", "model.ubj").unlink()
         with self.assertRaises(FileNotFoundError) as ctx:
             model_registry.validate_artifacts(self.path_model)
         self.assertIn("FOLD01", str(ctx.exception))
@@ -1058,7 +1102,7 @@ class TestValidateArtifacts(unittest.TestCase):
     def test_the_loader_warns_when_only_some_folds_survive(self):
         # Complements the gate above for models that were already published damaged: losing
         # every fold already warned, losing some did not, and that is the dangerous direction.
-        self.path_model.joinpath("folds", "FOLD01", "meta.yaml").unlink()
+        self.path_model.joinpath("folds", "FOLD01", "model.ubj").unlink()
         clf = regionclassifier.RegionClassifier(self.path_model)
         with self.assertLogs("ephysatlas.regionclassifier", level="WARNING") as logs:
             clf._fold_dirs()

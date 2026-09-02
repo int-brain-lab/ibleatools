@@ -22,12 +22,18 @@ def save_model(path_model, classifier, meta, subfolder="", identifier=None):
     The model is a set of files in a folder named after the meta-data 'VINTAGE' and 'REGION_MAP' fields,
     with the hash as suffix e.g. 2023_W41_Cosmos_dfd731f0.
 
+    Only the **root** model carries a ``meta.yaml``; fold subfolders are written weights-only.
+    The publication manifest (``ephysatlas_model.json``) lists the folds and supplies their
+    ``model_class``, so a per-fold ``meta.yaml`` would only duplicate the root's -- see
+    :func:`ephysatlas.model_registry.write_manifest`.
+
     Args:
         path_model (Path): Base path where the model will be saved.
         classifier: The classifier object to save.
         meta (dict): Metadata dictionary containing model information.
         subfolder (str, optional): Optional level to add to the model path, for example 'FOLD01' will write to
-            2023_W41_Cosmos_dfd731f0/FOLD01/. Defaults to "".
+            2023_W41_Cosmos_dfd731f0/FOLD01/. When set, marks this as a fold and suppresses
+            the ``meta.yaml`` write. Defaults to "".
         identifier (str, optional): Optional identifier for the model, defaults to a 8 character hexdigest of the meta data.
 
     Returns:
@@ -44,8 +50,10 @@ def save_model(path_model, classifier, meta, subfolder="", identifier=None):
         f"{meta['VINTAGE']}_{meta['REGION_MAP']}_{identifier}", subfolder
     )
     path_model.mkdir(exist_ok=True, parents=True)
-    with open(path_model.joinpath("meta.yaml"), "w+") as fid:
-        fid.write(yaml.dump(dict(meta)))
+    # Folds (subfolder set) hold only model.ubj: the manifest carries their metadata.
+    if not subfolder:
+        with open(path_model.joinpath("meta.yaml"), "w+") as fid:
+            fid.write(yaml.dump(dict(meta)))
     classifier.save_model(path_model.joinpath("model.ubj"))
     return path_model
 
@@ -93,8 +101,9 @@ def _load_xgb(path_model: Path, manifest: dict = None):
 
     Args:
         path_model (Path): Model directory.
-        manifest (dict, optional): Parsed manifest. Empty or None for a fold directory, which
-            carries only a ``meta.yaml`` -- hence the ``model.ubj`` default.
+        manifest (dict, optional): Parsed manifest. For a fold directory the caller passes the
+            *parent* manifest (folds ship weights only, with no manifest of their own); its
+            ``artifacts.weights`` names the file, defaulting to ``model.ubj``.
 
     Returns:
         XGBClassifier: The loaded classifier.
@@ -376,7 +385,11 @@ class RegionClassifier:
         folds_root = self.path_model.joinpath("folds")
         base = folds_root if folds_root.exists() else self.path_model
         names = (self.index.get("artifacts") or {}).get("folds") or []
-        dirs = [d for d in (base.joinpath(n) for n in names) if d.joinpath("meta.yaml").exists()]
+        # A fold is loadable when its weights are present. Folds ship weights only -- no
+        # meta.yaml -- so keying on the weights file (not meta.yaml) is what keeps every fold
+        # in the ensemble instead of silently dropping the meta-less ones.
+        weights = (self.index.get("artifacts") or {}).get("weights", "model.ubj")
+        dirs = [d for d in (base.joinpath(n) for n in names) if d.joinpath(weights).exists()]
         if names and 0 < len(dirs) < len(names):
             # Losing *some* folds is the dangerous case, and it used to pass in silence: the
             # ensemble quietly averages fewer models than the manifest and the model card
@@ -494,10 +507,22 @@ class RegionClassifier:
         classes = np.asarray(self.config["classes"])
         x = df.loc[:, feature_names].values.astype(float)
 
+        # Resolve the loader once from the parent manifest's model_class, then apply it to
+        # each directory. Folds carry no meta.yaml of their own, so load_model (which insists
+        # on a manifest or meta.yaml in the directory) cannot resolve them -- but the family is
+        # known from the root manifest, and every fold stores its weights under the same name.
+        model_class = self.index["model_class"]
+        loader = MODEL_LOADERS.get(model_class)
+        if loader is None:
+            raise ValueError(
+                f"no loader registered for MODEL_CLASS {model_class!r}; "
+                f"known: {sorted(MODEL_LOADERS)}"
+            )
+
         model_dirs = self._model_dirs(estimator)
         probas = np.zeros((len(model_dirs), x.shape[0], classes.size))
         for i, model_dir in enumerate(model_dirs):
-            classifier, _ = load_model(model_dir)
+            classifier = loader(model_dir, self.index)
             p = classifier.predict_proba(x)
             if p.shape[1] != classes.size:
                 raise ValueError(

@@ -188,6 +188,12 @@ if path_model.joinpath('folds').exists():
     shutil.rmtree(path_model.joinpath('folds'))
 shutil.move(path_model_fold.parent, path_model.joinpath('folds'))
 
+# Write the publication manifest straight from the values in hand -- the single source of
+# truth every loader reads. Called after the folds are staged under folds/ (so it lists them)
+# and after save_model has stamped meta["MODEL_CLASS"] on the global save above. No meta.yaml
+# round trip: the fold directories carry only model.ubj, and the manifest supplies the rest.
+ephysatlas.model_registry.write_manifest(path_model, meta, method="xgboost")
+
 # lid_basket_sense
 # fold 0: 384215 channels training set 0.2008120453391981
 # fold 0 Accuracy: 0.6679541183332254
