@@ -14,6 +14,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import yaml
 from xgboost import XGBClassifier
 
 import ephysatlas.model_registry as model_registry
@@ -337,6 +338,43 @@ class TestBuildModelIndexDispatch(unittest.TestCase):
         index = model_registry.build_model_index(self.path_model)
         self.assertEqual(index["artifacts"]["split"], model_registry.MODEL_SPLIT_FILE)
         self.assertTrue(model_registry.validate_artifacts(self.path_model, index))
+
+
+class TestWriteManifest(unittest.TestCase):
+    """``write_manifest`` is the pure assembler: it builds the manifest from an in-memory meta
+    dict, reading no ``meta.yaml`` off disk. ``build_model_index`` is now the thin
+    file-reading wrapper around it, so the two must agree on the same inputs.
+    """
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.path_model = _make_model_dir(self.tmp)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_write_manifest_matches_build_model_index(self):
+        # build_model_index is just write_manifest fed from meta.yaml, so on the same inputs
+        # they must produce the identical manifest.
+        meta = yaml.safe_load(self.path_model.joinpath("meta.yaml").read_text())
+        from_index = model_registry.build_model_index(self.path_model, method="xgboost")
+        from_write = model_registry.write_manifest(self.path_model, meta, method="xgboost")
+        self.assertEqual(from_write, from_index)
+
+    def test_write_manifest_reads_no_meta_yaml(self):
+        # The whole point: training hands write_manifest the values directly, with no
+        # meta.yaml on disk at all.
+        meta = yaml.safe_load(self.path_model.joinpath("meta.yaml").read_text())
+        self.path_model.joinpath("meta.yaml").unlink()
+        self.path_model.joinpath(model_registry.MODEL_MANIFEST_FILE).unlink()
+        index = model_registry.write_manifest(self.path_model, meta)
+        self.assertEqual(index["task"], model_registry.TASK_REGION_CLASSIFICATION)
+        self.assertEqual(index["model_class"], "xgboost.sklearn.XGBClassifier")
+        # and it actually wrote the manifest file, matching the returned dict
+        written = json.loads(
+            self.path_model.joinpath(model_registry.MODEL_MANIFEST_FILE).read_text()
+        )
+        self.assertEqual(written, index)
 
 
 class TestLoadModelDispatch(unittest.TestCase):
