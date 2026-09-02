@@ -1378,12 +1378,14 @@ class TestEncoderCard(unittest.TestCase):
         self.assertIn("predicted_acronym", path_clf.joinpath("README.md").read_text())
 
 
-class TestEncoderSourceReader(unittest.TestCase):
-    """``_read_encoder_source`` joins channel positions to features and drops incomplete rows.
+class TestResolveIndex(unittest.TestCase):
+    """publish must read a directly-written manifest, not require ``meta.yaml``.
 
-    The encoder is fed positions, so its source table must carry both the coordinates (from
-    ``channels.pqt``) and the feature columns (from ``raw_ephys_features_denoised.pqt``) -- the
-    bank stores standardised features keyed by position.
+    New training scripts (the spatial encoder first) write ``ephysatlas_model.json`` as the
+    single source of truth and no longer emit ``meta.yaml``. Publishing such a directory used to
+    fail on the ``meta.yaml`` precondition. ``_resolve_index`` prefers an existing manifest and
+    falls back to the ``meta.yaml``/``build_model_index`` route only for the older region and unit
+    directories that still ship one.
     """
 
     def setUp(self):
@@ -1393,30 +1395,52 @@ class TestEncoderSourceReader(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    def _write_source(self):
-        idx = pd.MultiIndex.from_tuples(
-            [("pidA", 0), ("pidA", 1), ("pidB", 0)], names=["pid", "channel"]
-        )
-        feats = pd.DataFrame(
-            {"rms_ap": [1.0, 2.0, np.nan], "psd_delta": [0.1, 0.2, 0.3]}, index=idx
-        )
-        chans = pd.DataFrame(
-            {"x": [0.001, 0.002, 0.003], "y": [0.0, 0.0, 0.0], "z": [0.0, 0.0, 0.0]},
-            index=idx,
-        )
-        feats.to_parquet(self.tmp.joinpath("raw_ephys_features_denoised.pqt"))
-        chans.to_parquet(self.tmp.joinpath("channels.pqt"))
+    def test_prefers_existing_manifest_without_meta_yaml(self):
+        # The new layout: a manifest on disk, no meta.yaml alongside it.
+        path_model = _make_encoder_dir(self.tmp)
+        path_model.joinpath("meta.yaml").unlink()
+        index = self.script._resolve_index(path_model, method="transformer")
+        self.assertEqual(index["task"], model_registry.TASK_SPATIAL_ENCODING)
 
-    def test_join_carries_positions_and_features_and_drops_nan(self):
-        self._write_source()
-        df = self.script._read_encoder_source(self.tmp, ["rms_ap", "psd_delta"])
-        for col in ["x", "y", "z", "rms_ap", "psd_delta"]:
-            self.assertIn(col, df.columns)
-        # The row whose feature is NaN (pidB, 0) is dropped, so the bank has no holes.
-        self.assertEqual(len(df), 2)
-        self.assertNotIn(("pidB", 0), df.index)
-        # Index identity is preserved, so a caller can trace a channel back.
-        self.assertEqual(list(df.index.names), ["pid", "channel"])
+    def test_falls_back_to_meta_yaml_when_no_manifest(self):
+        # The legacy layout: only meta.yaml, so the manifest is built from it.
+        import yaml
+
+        path_model = self.tmp.joinpath("legacy")
+        path_model.mkdir()
+        path_model.joinpath("meta.yaml").write_text(
+            yaml.safe_dump(
+                dict(
+                    RANDOM_SEED=42,
+                    VINTAGE="2026_W26",
+                    MODEL_CLASS="NeighborInpaintingModel",
+                    FEATURES=FEATURES,
+                    D_MODEL=128,
+                    NHEAD=8,
+                    DEPTH=2,
+                    DROP=0.1,
+                    F_CTX=100,
+                    RADIUS_UM=600.0,
+                    M_MAX=64,
+                    ALLOW_SAME_PROBE=False,
+                )
+            )
+        )
+        self.assertFalse(
+            path_model.joinpath(model_registry.MODEL_MANIFEST_FILE).exists()
+        )
+        index = self.script._resolve_index(path_model, method="transformer")
+        self.assertEqual(index["task"], model_registry.TASK_SPATIAL_ENCODING)
+        # build_model_index wrote the manifest on the way through.
+        self.assertTrue(
+            path_model.joinpath(model_registry.MODEL_MANIFEST_FILE).exists()
+        )
+
+    def test_errors_when_neither_present(self):
+        empty = self.tmp.joinpath("empty")
+        empty.mkdir()
+        with self.assertRaises(FileNotFoundError):
+            self.script._resolve_index(empty, method="transformer")
 
 
 _W26 = Path.home().joinpath("ea_active", "2026_W26", "agg_full")
@@ -1434,10 +1458,11 @@ class TestEncoderPublishPackaging(unittest.TestCase):
     """End-to-end packaging of a spatial encoder through the publish script (no upload).
 
     Runs the script as a subprocess -- a fresh process that loads torch but never xgboost, so it
-    is safe here even though this file imports xgboost at module scope. Exercises the whole
-    encoder path the unit tests cannot: build the neighbour bank, re-scan so it is recorded,
-    render the encoder card, write the golden example, self-test, and checksum. Only runs where
-    the real data lives.
+    is safe here even though this file imports xgboost at module scope. The neighbour bank and
+    manifest are now written at *training* time, not by publish, so ``setUp`` builds them first (in
+    its own torch-only subprocess, for the same reason). This test then exercises the packaging
+    path publish still owns: render the encoder card, write the golden example, self-test, and
+    checksum -- and it must *not* rebuild the bank. Only runs where the real data lives.
     """
 
     def setUp(self):
@@ -1447,9 +1472,45 @@ class TestEncoderPublishPackaging(unittest.TestCase):
         for name in _ENCODER_FILES:
             shutil.copy2(_SE_SOURCE.joinpath(name), self.path_model.joinpath(name))
         self.repo_root = Path(__file__).resolve().parents[1]
+        self._build_training_output()
 
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _build_training_output(self):
+        """Write the manifest + neighbour bank the trainer now emits, out-of-process.
+
+        build_neighbor_bank imports torch, which segfaults alongside the module-scope xgboost in
+        this file; so this is done in a subprocess, exactly as publish is. Mirrors what
+        ``training/train_spatial_encoder.py`` does at the end of a run.
+        """
+        import subprocess
+        import sys
+
+        script = (
+            "import sys; from pathlib import Path; import pandas as pd; "
+            "import ephysatlas.model_registry as mr; "
+            "from ephysatlas.models.encoder_inpainting import build_neighbor_bank; "
+            "pm=Path(sys.argv[1]); w26=Path(sys.argv[2]); "
+            "idx=mr.build_model_index(pm, method='transformer'); "
+            "cols=idx['outputs']['columns']; "
+            "feats=pd.read_parquet(w26/'raw_ephys_features_denoised.pqt'); "
+            "chans=pd.read_parquet(w26/'channels.pqt'); "
+            "df=feats.join(chans.loc[:, ['x','y','z']], how='inner')"
+            ".dropna(subset=['x','y','z']+list(cols)); "
+            "build_neighbor_bank(pm, df, idx); "
+            "mr.write_manifest(pm, __import__('yaml').safe_load("
+            "pm.joinpath('meta.yaml').read_text()), method='transformer')"
+        )
+        r = subprocess.run(
+            [sys.executable, "-c", script, str(self.path_model), str(_W26)],
+            capture_output=True,
+            text=True,
+            cwd=str(self.repo_root),
+        )
+        self.assertEqual(r.returncode, 0, msg=r.stderr[-3000:])
+        # Sanity: the training output already carries a recorded bank.
+        self.assertTrue(self.path_model.joinpath("neighbor_bank.npz").exists())
 
     def _run(self):
         import subprocess
@@ -1464,7 +1525,7 @@ class TestEncoderPublishPackaging(unittest.TestCase):
                 "--features",
                 str(_W26),
                 "--method",
-                "inpainting",
+                "transformer",
                 "--n-example-channels",
                 "32",
             ],
@@ -1473,11 +1534,16 @@ class TestEncoderPublishPackaging(unittest.TestCase):
             cwd=str(self.repo_root),
         )
 
-    def test_packaging_builds_bank_card_example_and_selftests(self):
+    def test_packaging_cards_examples_and_selftests_without_rebuilding_bank(self):
+        # The bank was written by the training step; capture it so we can prove publish left it be.
+        bank = self.path_model.joinpath("neighbor_bank.npz")
+        bank_mtime = bank.stat().st_mtime_ns
+
         result = self._run()
         self.assertEqual(result.returncode, 0, msg=result.stderr[-3000:])
-        # The bank a stranger cannot recompute must be shipped and recorded in the manifest.
-        self.assertTrue(self.path_model.joinpath("neighbor_bank.npz").exists())
+        # The bank a stranger cannot recompute is shipped and recorded -- and publish did not touch it.
+        self.assertTrue(bank.exists())
+        self.assertEqual(bank.stat().st_mtime_ns, bank_mtime)
         idx = model_registry.read_manifest(self.path_model)
         self.assertEqual(idx["task"], model_registry.TASK_SPATIAL_ENCODING)
         self.assertEqual(idx["artifacts"]["neighbor_bank"], "neighbor_bank.npz")

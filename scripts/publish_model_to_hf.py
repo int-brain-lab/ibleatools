@@ -378,31 +378,6 @@ def build_example(path_model: Path, path_features: Path, n_channels: int, seed: 
     return example
 
 
-def _read_encoder_source(path_features: Path, feature_names) -> "pd.DataFrame":
-    """Read an ``agg_full`` directory into the ``(pid, channel)`` table the encoder needs.
-
-    The encoder is fed positions, so its source must carry both the coordinates (from
-    ``channels.pqt``) and the feature columns (from ``raw_ephys_features_denoised.pqt``): the
-    bank stores standardised features keyed by position. Rows missing any coordinate or feature
-    are dropped, so neither the bank nor the example carries holes. Mirrors the join the training
-    pipeline does.
-
-    Args:
-        path_features (Path): An ``agg_full`` features directory.
-        feature_names (list): The feature columns the model predicts, from ``outputs.columns``.
-
-    Returns:
-        pd.DataFrame: Indexed by ``(pid, channel)``, carrying ``x, y, z`` and every feature.
-    """
-    import pandas as pd
-
-    path_features = Path(path_features)
-    feats = pd.read_parquet(path_features.joinpath("raw_ephys_features_denoised.pqt"))
-    chans = pd.read_parquet(path_features.joinpath("channels.pqt"))
-    df = feats.join(chans.loc[:, ["x", "y", "z"]], how="inner")
-    return df.dropna(subset=["x", "y", "z"] + list(feature_names))
-
-
 def build_encoder_example(
     path_model: Path, index: dict, path_features: Path, n_channels: int, seed: int = 0
 ):
@@ -413,9 +388,12 @@ def build_encoder_example(
     all the same, because ``SpatialEncoder.selftest`` -- shared machinery with the classifier --
     looks for that name.
 
+    Positions are the only thing needed, and they live in ``channels.pqt`` -- so this reads that
+    directly rather than joining the feature tables (no brain atlas, no feature validation).
+
     Args:
         path_model (Path): Model directory to write ``example/`` into.
-        index (dict): The manifest, read for ``outputs.columns``.
+        index (dict): The manifest, passed to the model to produce the golden output.
         path_features (Path): An ``agg_full`` features directory to sample positions from.
         n_channels (int): Number of channels to include.
         seed (int, optional): Sampling seed, so the sample is reproducible.
@@ -423,10 +401,12 @@ def build_encoder_example(
     Returns:
         Path: The ``example/`` directory.
     """
+    import pandas as pd
+
     from ephysatlas.models.encoder_inpainting import SpatialEncoder
 
-    features = index["outputs"]["columns"]
-    df = _read_encoder_source(path_features, features)
+    chans = pd.read_parquet(Path(path_features).joinpath("channels.pqt"))
+    df = chans.loc[:, ["x", "y", "z"]].dropna()
     # Sample whole channels deterministically, spanning many insertions.
     rng = np.random.default_rng(seed)
     take = rng.choice(df.shape[0], size=min(n_channels, df.shape[0]), replace=False)
@@ -614,6 +594,36 @@ def _write_example_and_selftest(path_model: Path, index: dict, path_features: Pa
     _logger.info("selftest passed against the freshly written golden file")
 
 
+def _resolve_index(path_model: Path, method: str = None) -> dict:
+    """Resolve a model directory's manifest, preferring one already on disk.
+
+    New training scripts write ``ephysatlas_model.json`` directly -- the single source of truth
+    every loader reads -- so publishing reads it rather than rebuilding it. Older region and unit
+    directories that still ship only ``meta.yaml`` keep working: ``build_model_index`` reads the
+    ``meta.yaml`` and writes the manifest from it.
+
+    Args:
+        path_model (Path): The local model directory.
+        method (str, optional): Semantic label recorded when building from ``meta.yaml``. Ignored
+            when a manifest already exists (its ``method`` was set when it was written).
+
+    Returns:
+        dict: The parsed manifest.
+
+    Raises:
+        FileNotFoundError: If the directory holds neither a manifest nor a ``meta.yaml``.
+    """
+    path_model = Path(path_model)
+    if path_model.joinpath(model_registry.MODEL_MANIFEST_FILE).exists():
+        return model_registry.read_manifest(path_model)
+    if path_model.joinpath("meta.yaml").exists():
+        return model_registry.build_model_index(path_model, method=method)
+    raise FileNotFoundError(
+        f"{path_model} is not a model directory: neither "
+        f"{model_registry.MODEL_MANIFEST_FILE} nor meta.yaml is present"
+    )
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model-dir", type=Path, default=None, help="local model directory")
@@ -667,22 +677,14 @@ def main(argv=None):
     if args.model_dir is None:
         parser.error("--model-dir is required")
     path_model = args.model_dir.resolve()
-    if not path_model.joinpath("meta.yaml").exists():
-        parser.error(f"{path_model} does not look like a model directory (no meta.yaml)")
-
-    index = model_registry.build_model_index(path_model, method=args.method)
+    # Prefer a manifest the training script wrote directly; fall back to meta.yaml for the older
+    # region/unit directories that still ship one. The spatial encoder now writes its manifest and
+    # neighbour bank at training time, so there is nothing left for publish to build here.
+    try:
+        index = _resolve_index(path_model, method=args.method)
+    except FileNotFoundError as err:
+        parser.error(str(err))
     task = index.get("task")
-
-    # The spatial encoder cannot even be validated until its neighbour bank is written: the bank
-    # is a runtime input the manifest must list, and build_model_index records only artifacts
-    # already on disk. Build it from the same feature source the example uses, then re-scan so
-    # artifacts.neighbor_bank is recorded. Skipped without --features, since the bank needs data.
-    if task == model_registry.TASK_SPATIAL_ENCODING and args.features is not None:
-        from ephysatlas.models.encoder_inpainting import build_neighbor_bank
-
-        df_source = _read_encoder_source(args.features, index["outputs"]["columns"])
-        build_neighbor_bank(path_model, df_source, index)
-        index = model_registry.build_model_index(path_model, method=args.method)
 
     # Fail here rather than shipping a repository that looks complete and only breaks when a
     # stranger loads it.
