@@ -6,6 +6,8 @@ from typing import Tuple
 
 import torch
 
+from ephysatlas.model_registry import UNIT_AE_FILE, UNIT_GMM_FILE
+
 
 @dataclass
 class Config:
@@ -89,8 +91,10 @@ class Config:
         "Isocortex", "MB", "OLF", "TH", "root",
     )
 
-    # Runtime-only fields populated by run_unit_level_encoder.py.
+    # Runtime-only fields populated by the training runner.
     output_dir: Path | str = Path(".")
-    ae_checkpoint_name: str = "best_multimodal_autoencoder.pt"
-    pt_checkpoint_name: str = "best_point_transformer_gmm.pt"
+    # The trainers write the canonical release filenames directly into output_dir (the model-dir
+    # root), so the training output IS the publish-ready layout -- no working-name -> rename stage.
+    ae_checkpoint_name: str = UNIT_AE_FILE
+    pt_checkpoint_name: str = UNIT_GMM_FILE
     summary_name: str = "summary.json"

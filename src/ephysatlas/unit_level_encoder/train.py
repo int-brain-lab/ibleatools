@@ -150,7 +150,7 @@ def fit_and_evaluate(model_ae, data: PreparedData, cfg: Config, training_outputs
     out = Path(cfg.output_dir); out.mkdir(parents=True, exist_ok=True)
     split_audit = assert_strict_probe_split(data.pids, data.split)
     shared = encode_all(model_ae, data, cfg)
-    model_gmm, scaler, datasets, loaders, gmm_info = fit_point_transformer_gmm(shared, data, cfg, out / "pt_gmm")
+    model_gmm, scaler, datasets, loaders, gmm_info = fit_point_transformer_gmm(shared, data, cfg, out)
     observed, predicted = collect_mean_predictions(model_gmm, loaders[2], cfg)
     summary = {
         "split_audit": split_audit,
