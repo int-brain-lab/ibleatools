@@ -182,8 +182,8 @@ def write_unit_release(
     and the held-out split for provenance. There is no ``meta.yaml`` scaffold and no staging copy.
 
     Mirrors ``training/train_spatial_encoder.write_spatial_release``: the manifest is written
-    straight from the in-memory ``meta`` dict via :func:`model_registry.write_manifest`, no
-    ``build_model_index(meta.yaml)`` round trip.
+    straight from the in-memory ``meta`` dict via :func:`model_registry.write_manifest`, with no
+    ``meta.yaml`` round trip.
 
     Args:
         path_model (Path): Model-dir root the trainers wrote into.

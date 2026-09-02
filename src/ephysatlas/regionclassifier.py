@@ -22,18 +22,21 @@ def save_model(path_model, classifier, meta, subfolder="", identifier=None):
     The model is a set of files in a folder named after the meta-data 'VINTAGE' and 'REGION_MAP' fields,
     with the hash as suffix e.g. 2023_W41_Cosmos_dfd731f0.
 
-    Only the **root** model carries a ``meta.yaml``; fold subfolders are written weights-only.
-    The publication manifest (``ephysatlas_model.json``) lists the folds and supplies their
-    ``model_class``, so a per-fold ``meta.yaml`` would only duplicate the root's -- see
-    :func:`ephysatlas.model_registry.write_manifest`.
+    Weights-only, at every level: the model directory carries no ``meta.yaml``. The publication
+    manifest (``ephysatlas_model.json``), written once by the training script via
+    :func:`ephysatlas.model_registry.write_manifest`, is the single source of truth -- it lists the
+    folds and supplies their ``model_class``, so neither the root nor a fold needs a ``meta.yaml``.
+
+    The ``meta`` dict is still stamped with ``MODEL_CLASS`` here (a side effect the training script
+    reads before it calls ``write_manifest``); it is simply no longer written to disk.
 
     Args:
         path_model (Path): Base path where the model will be saved.
         classifier: The classifier object to save.
-        meta (dict): Metadata dictionary containing model information.
+        meta (dict): Metadata dictionary containing model information. ``MODEL_CLASS`` is stamped
+            onto it in place.
         subfolder (str, optional): Optional level to add to the model path, for example 'FOLD01' will write to
-            2023_W41_Cosmos_dfd731f0/FOLD01/. When set, marks this as a fold and suppresses
-            the ``meta.yaml`` write. Defaults to "".
+            2023_W41_Cosmos_dfd731f0/FOLD01/. Defaults to "".
         identifier (str, optional): Optional identifier for the model, defaults to a 8 character hexdigest of the meta data.
 
     Returns:
@@ -50,10 +53,6 @@ def save_model(path_model, classifier, meta, subfolder="", identifier=None):
         f"{meta['VINTAGE']}_{meta['REGION_MAP']}_{identifier}", subfolder
     )
     path_model.mkdir(exist_ok=True, parents=True)
-    # Folds (subfolder set) hold only model.ubj: the manifest carries their metadata.
-    if not subfolder:
-        with open(path_model.joinpath("meta.yaml"), "w+") as fid:
-            fid.write(yaml.dump(dict(meta)))
     classifier.save_model(path_model.joinpath("model.ubj"))
     return path_model
 

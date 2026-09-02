@@ -123,19 +123,18 @@ class TestSpatialEncoderParity(unittest.TestCase):
         )
         model.eval()
         torch.save(model.state_dict(), cls.path_model.joinpath("spatial_encoder.pt"))
-        yaml.safe_dump(
-            {
-                "VINTAGE": "2026_W26", "FEATURES": cls.features,
-                "MODEL_CLASS": "NeighborInpaintingModel",
-                "D_MODEL": 32, "NHEAD": 4, "DEPTH": 2, "DROP": 0.0,
-                "M_MAX": cls.M_MAX, "RADIUS_UM": cls.RADIUS_UM,
-            },
-            cls.path_model.joinpath("meta.yaml").open("w"),
-        )
-        cls.index = model_registry.build_model_index(cls.path_model, method="inpainting")
+        # The manifest is written straight from the in-memory meta dict (no meta.yaml scaffold),
+        # exactly as training/train_spatial_encoder.py does.
+        meta = {
+            "VINTAGE": "2026_W26", "FEATURES": cls.features,
+            "MODEL_CLASS": "NeighborInpaintingModel",
+            "D_MODEL": 32, "NHEAD": 4, "DEPTH": 2, "DROP": 0.0,
+            "M_MAX": cls.M_MAX, "RADIUS_UM": cls.RADIUS_UM,
+        }
+        cls.index = model_registry.write_manifest(cls.path_model, meta, method="inpainting")
         build_neighbor_bank(cls.path_model, cls.df_bank, cls.index)
-        # Rebuild so artifacts.neighbor_bank is recorded now the bank exists.
-        cls.index = model_registry.build_model_index(cls.path_model, method="inpainting")
+        # Rewrite so artifacts.neighbor_bank is recorded now the bank exists.
+        cls.index = model_registry.write_manifest(cls.path_model, meta, method="inpainting")
 
     @classmethod
     def tearDownClass(cls):

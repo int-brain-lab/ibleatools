@@ -1,7 +1,7 @@
 """Tests for ephysatlas.model_registry and the public RegionClassifier wrapper.
 
 All offline: a small synthetic model is trained, saved through ``save_model``, and packaged
-with ``build_model_index``, so the whole save -> manifest -> load -> predict round trip is
+with ``write_manifest``, so the whole save -> manifest -> load -> predict round trip is
 exercised without touching S3 or the Hugging Face Hub.
 """
 
@@ -51,9 +51,11 @@ def _make_model_dir(path_models: Path, n_folds: int = 2) -> Path:
         return clf
 
     # The global model sees every row; each fold holds one block out. That is what makes the
-    # ensemble and the global model genuinely different estimators, as in production.
+    # ensemble and the global model genuinely different estimators, as in production. save_model
+    # stamps MODEL_CLASS onto the dict it is handed, so keep that dict to feed write_manifest.
+    global_meta = dict(meta_template)
     path_model = regionclassifier.save_model(
-        path_models, _fit(), dict(meta_template), identifier="test"
+        path_models, _fit(), global_meta, identifier="test"
     )
     block = len(y) // n_folds
     for i in range(n_folds):
@@ -72,8 +74,29 @@ def _make_model_dir(path_models: Path, n_folds: int = 2) -> Path:
     folds.mkdir(exist_ok=True)
     for i in range(n_folds):
         shutil.move(str(path_model.joinpath(f"FOLD{i:02d}")), str(folds.joinpath(f"FOLD{i:02d}")))
-    model_registry.build_model_index(path_model)
+    # The training script writes the manifest directly from the in-memory meta; no meta.yaml.
+    model_registry.write_manifest(path_model, global_meta)
     return path_model
+
+
+def _region_meta() -> dict:
+    """The UPPER_CASE meta dict for the synthetic region model, as ``save_model`` stamps it.
+
+    ``save_model`` no longer writes a ``meta.yaml`` to disk (the manifest is the single source of
+    truth), so tests that need the training metadata -- to drive ``write_manifest`` directly, or to
+    stage a legacy ``meta.yaml`` for the load-side fallback -- build it here instead of reading it
+    back off disk. ``MODEL_CLASS`` matches what ``save_model`` stamps for an ``XGBClassifier``.
+    """
+    return dict(
+        RANDOM_SEED=42,
+        VINTAGE="2026_W32",
+        REGION_MAP="Cosmos",
+        FEATURES=FEATURES,
+        CLASSES=CLASSES,
+        ACCURACY=0.5,
+        TRAINING=dict(training_size=10, testing_size=2),
+        MODEL_CLASS="xgboost.sklearn.XGBClassifier",
+    )
 
 
 class TestClassAcronyms(unittest.TestCase):
@@ -191,6 +214,9 @@ class TestLoadPretrained(unittest.TestCase):
         self.assertNotIn("no revision pinned", "\n".join(logs.output))
 
     def test_manifestless_model_defaults_to_region_classification(self):
+        # A legacy model published before the manifest existed: only meta.yaml on disk. save_model
+        # no longer writes one, so stage it, then drop the manifest to reach the fallback path.
+        self.path_model.joinpath("meta.yaml").write_text(yaml.safe_dump(_region_meta()))
         self.path_model.joinpath(model_registry.MODEL_MANIFEST_FILE).unlink()
         import ephysatlas
 
@@ -289,7 +315,7 @@ class TestUpload(unittest.TestCase):
             model_registry.HFModelSource().upload(self.path_model)
 
 
-class TestBuildModelIndexDispatch(unittest.TestCase):
+class TestWriteManifestDispatch(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
         self.path_model = _make_model_dir(self.tmp)
@@ -298,19 +324,15 @@ class TestBuildModelIndexDispatch(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_unknown_model_class_cannot_infer_task(self):
-        meta_file = self.path_model.joinpath("meta.yaml")
-        meta_file.write_text(
-            meta_file.read_text().replace(
-                "MODEL_CLASS: xgboost.sklearn.XGBClassifier", "MODEL_CLASS: some.other.Model"
-            )
-        )
+        meta = _region_meta()
+        meta["MODEL_CLASS"] = "some.other.Model"
         with self.assertRaises(ValueError):
-            model_registry.build_model_index(self.path_model)
+            model_registry.write_manifest(self.path_model, meta)
 
     def test_unregistered_task_raises(self):
         # "spatial-encoding" is a registered task now, so this needs a genuinely unknown one.
         with self.assertRaises(ValueError) as ctx:
-            model_registry.build_model_index(self.path_model, task="cell-mixture")
+            model_registry.write_manifest(self.path_model, _region_meta(), task="cell-mixture")
         self.assertIn("cell-mixture", str(ctx.exception))
 
     def test_the_registered_tasks_are_the_ones_with_builders(self):
@@ -326,7 +348,7 @@ class TestBuildModelIndexDispatch(unittest.TestCase):
     def test_split_is_recorded_as_an_artifact_only_when_present(self):
         # A model packaged without a published split must not claim one -- validate_artifacts
         # would then look for a file that was never written.
-        index = model_registry.build_model_index(self.path_model)
+        index = model_registry.write_manifest(self.path_model, _region_meta())
         self.assertNotIn("split", index["artifacts"])
 
         import uuid
@@ -335,15 +357,15 @@ class TestBuildModelIndexDispatch(unittest.TestCase):
         model_registry.write_split(
             self.path_model, pids, np.floor(np.arange(4) / 4 * 2), n_folds=2
         )
-        index = model_registry.build_model_index(self.path_model)
+        index = model_registry.write_manifest(self.path_model, _region_meta())
         self.assertEqual(index["artifacts"]["split"], model_registry.MODEL_SPLIT_FILE)
         self.assertTrue(model_registry.validate_artifacts(self.path_model, index))
 
 
 class TestWriteManifest(unittest.TestCase):
     """``write_manifest`` is the pure assembler: it builds the manifest from an in-memory meta
-    dict, reading no ``meta.yaml`` off disk. ``build_model_index`` is now the thin
-    file-reading wrapper around it, so the two must agree on the same inputs.
+    dict, reading no ``meta.yaml`` off disk. It is the single manifest writer -- every producer
+    (the training scripts, the repackage tool) calls it directly.
     """
 
     def setUp(self):
@@ -353,21 +375,11 @@ class TestWriteManifest(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    def test_write_manifest_matches_build_model_index(self):
-        # build_model_index is just write_manifest fed from meta.yaml, so on the same inputs
-        # they must produce the identical manifest.
-        meta = yaml.safe_load(self.path_model.joinpath("meta.yaml").read_text())
-        from_index = model_registry.build_model_index(self.path_model, method="xgboost")
-        from_write = model_registry.write_manifest(self.path_model, meta, method="xgboost")
-        self.assertEqual(from_write, from_index)
-
     def test_write_manifest_reads_no_meta_yaml(self):
         # The whole point: training hands write_manifest the values directly, with no
-        # meta.yaml on disk at all.
-        meta = yaml.safe_load(self.path_model.joinpath("meta.yaml").read_text())
-        self.path_model.joinpath("meta.yaml").unlink()
+        # meta.yaml on disk at all (there is none -- save_model no longer writes one).
         self.path_model.joinpath(model_registry.MODEL_MANIFEST_FILE).unlink()
-        index = model_registry.write_manifest(self.path_model, meta)
+        index = model_registry.write_manifest(self.path_model, _region_meta())
         self.assertEqual(index["task"], model_registry.TASK_REGION_CLASSIFICATION)
         self.assertEqual(index["model_class"], "xgboost.sklearn.XGBClassifier")
         # and it actually wrote the manifest file, matching the returned dict
@@ -399,37 +411,38 @@ class TestLoadModelDispatch(unittest.TestCase):
             regionclassifier.load_model(self.path_model)
 
     def test_manifest_takes_precedence_over_meta_yaml(self):
-        # meta.yaml is the training artifact; the manifest is the publication contract and
-        # wins when both are present.
-        meta_file = self.path_model.joinpath("meta.yaml")
-        meta_file.write_text(
-            meta_file.read_text().replace(
-                "MODEL_CLASS: xgboost.sklearn.XGBClassifier", "MODEL_CLASS: some.other.Model"
-            )
-        )
+        # meta.yaml is a legacy training artifact; the manifest is the publication contract and
+        # wins when both are present. save_model no longer emits a meta.yaml, so stage a legacy
+        # one (with a wrong MODEL_CLASS) to prove the manifest still overrides it.
+        legacy = dict(_region_meta())
+        legacy["MODEL_CLASS"] = "some.other.Model"
+        self.path_model.joinpath("meta.yaml").write_text(yaml.safe_dump(legacy))
         classifier, _ = regionclassifier.load_model(self.path_model)
         self.assertIsInstance(classifier, XGBClassifier)
 
     def test_legacy_model_without_manifest_falls_back_to_meta_yaml(self):
+        # A model published before the manifest existed: only meta.yaml on disk. The load-side
+        # fallback (kept until the legacy models are republished) must still load it.
+        self.path_model.joinpath("meta.yaml").write_text(yaml.safe_dump(_region_meta()))
         self.path_model.joinpath(model_registry.MODEL_MANIFEST_FILE).unlink()
         classifier, info = regionclassifier.load_model(self.path_model)
         self.assertIsInstance(classifier, XGBClassifier)
         self.assertEqual(info["MODEL_CLASS"], "xgboost.sklearn.XGBClassifier")
 
     def test_manifest_alone_is_sufficient(self):
-        # Families that never go through save_model (e.g. the torch spatial encoder) ship no
-        # meta.yaml at all, so the manifest must be enough on its own.
-        self.path_model.joinpath("meta.yaml").unlink()
+        # The current layout: a manifest and no meta.yaml (save_model writes none). The manifest
+        # must be enough on its own, and model_info stays meta-shaped for infer_regions callers.
+        self.assertFalse(self.path_model.joinpath("meta.yaml").exists())
         classifier, info = regionclassifier.load_model(self.path_model)
         self.assertIsInstance(classifier, XGBClassifier)
-        # model_info is still meta-shaped, so infer_regions-style callers keep working
         self.assertEqual(info["FEATURES"], FEATURES)
         self.assertEqual(info["CLASSES"], CLASSES)
         self.assertEqual(info["MODEL_CLASS"], "xgboost.sklearn.XGBClassifier")
 
     def test_neither_manifest_nor_meta_raises(self):
+        # No manifest and no meta.yaml (none is written): nothing to load from.
         self.path_model.joinpath(model_registry.MODEL_MANIFEST_FILE).unlink()
-        self.path_model.joinpath("meta.yaml").unlink()
+        self.assertFalse(self.path_model.joinpath("meta.yaml").exists())
         with self.assertRaises(FileNotFoundError):
             regionclassifier.load_model(self.path_model)
 
@@ -467,7 +480,8 @@ class TestMetaFreeFolds(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_folds_carry_no_meta_yaml(self):
-        # save_model writes meta.yaml only for the root model; folds hold model.ubj alone.
+        # save_model writes no meta.yaml at any level; folds hold model.ubj alone.
+        self.assertFalse(self.path_model.joinpath("meta.yaml").exists())
         for name in ("FOLD00", "FOLD01"):
             fold_dir = self.path_model.joinpath("folds", name)
             self.assertTrue(fold_dir.joinpath("model.ubj").exists())
@@ -529,11 +543,11 @@ class TestRegionClassifier(unittest.TestCase):
     def test_method_and_compatibility_recorded_only_when_given(self):
         # Omitted rather than guessed: an unverified probe-compatibility claim in a public
         # manifest is the silent failure the field exists to prevent.
-        index = model_registry.build_model_index(self.path_model)
+        index = model_registry.write_manifest(self.path_model, _region_meta())
         self.assertNotIn("method", index)
         self.assertNotIn("compatibility", index)
-        index = model_registry.build_model_index(
-            self.path_model, method="xgboost", compatibility={"probe": ["NP1"]}
+        index = model_registry.write_manifest(
+            self.path_model, _region_meta(), method="xgboost", compatibility={"probe": ["NP1"]}
         )
         self.assertEqual(index["method"], "xgboost")
         self.assertEqual(index["compatibility"]["probe"], ["NP1"])
@@ -541,7 +555,7 @@ class TestRegionClassifier(unittest.TestCase):
     def test_method_is_independent_of_model_class(self):
         # The point of keeping both: model_class is the implementation used for dispatch,
         # method is the stable semantic label. Two methods can share one model_class.
-        index = model_registry.build_model_index(self.path_model, method="xgboost")
+        index = model_registry.write_manifest(self.path_model, _region_meta(), method="xgboost")
         self.assertEqual(index["model_class"], "xgboost.sklearn.XGBClassifier")
         self.assertEqual(index["method"], "xgboost")
         self.assertNotEqual(index["method"], index["model_class"])
@@ -805,7 +819,7 @@ class TestWrapperDispatch(unittest.TestCase):
 
     def test_artifacts_now_come_from_the_task_builder(self):
         # Moved out of the shared core so a second family can declare different roles.
-        index = model_registry.build_model_index(self.path_model)
+        index = model_registry.write_manifest(self.path_model, _region_meta())
         self.assertEqual(index["artifacts"]["weights"], "model.ubj")
         self.assertEqual(index["artifacts"]["folds"], ["FOLD00", "FOLD01"])
         blocks = model_registry._blocks_region_classification(
@@ -842,12 +856,13 @@ class TestChecksums(unittest.TestCase):
         self.assertEqual(payload["algo"], "sha256")
         for expected in [
             "model.ubj",
-            "meta.yaml",
             model_registry.MODEL_MANIFEST_FILE,
             "folds/FOLD00/model.ubj",
             "folds/FOLD01/model.ubj",
         ]:
             self.assertIn(expected, paths)
+        # No meta.yaml scaffold ships any more, so it is not among the hashed files.
+        self.assertNotIn("meta.yaml", paths)
         # A checksum file cannot hash itself, and the manifest *must* be covered -- it is the
         # publication contract, so tampering with it has to be detectable.
         self.assertNotIn(model_registry.MODEL_CHECKSUM_FILE, paths)
@@ -859,8 +874,8 @@ class TestChecksums(unittest.TestCase):
 
         model_registry.write_checksums(self.path_model)
         payload, _ = self._entries()
-        entry = next(e for e in payload["files"] if e["path"] == "meta.yaml")
-        target = self.path_model.joinpath("meta.yaml")
+        entry = next(e for e in payload["files"] if e["path"] == "model.ubj")
+        target = self.path_model.joinpath("model.ubj")
         self.assertEqual(entry["bytes"], target.stat().st_size)
         self.assertEqual(entry["sha256"], hashlib.sha256(target.read_bytes()).hexdigest())
 
@@ -990,13 +1005,13 @@ class TestChecksums(unittest.TestCase):
     def test_verify_reports_every_failure_at_once(self):
         model_registry.write_checksums(self.path_model)
         self.path_model.joinpath("model.ubj").unlink()
-        self.path_model.joinpath("meta.yaml").unlink()
+        self.path_model.joinpath("folds", "FOLD00", "model.ubj").unlink()
         with self.assertRaises(ValueError) as ctx:
             model_registry.verify_checksums(self.path_model)
         message = str(ctx.exception)
         # One traversal, one error: fixing them one round trip at a time is miserable.
         self.assertIn("model.ubj", message)
-        self.assertIn("meta.yaml", message)
+        self.assertIn("folds/FOLD00/model.ubj", message)
 
     def test_verify_tolerates_files_added_after_writing(self):
         # A Hub snapshot carries .gitattributes and a .cache/ tree, and selftest writes
@@ -1298,14 +1313,12 @@ def _load_publish_script():
 
 
 def _make_encoder_dir(path_models: Path) -> Path:
-    """Write a minimal spatial-encoder directory (meta.yaml only) and build its manifest.
+    """Write a minimal spatial-encoder directory (manifest only) from an in-memory meta dict.
 
-    No weights or volumes are needed: ``build_model_index`` records only the artifacts that
+    No weights or volumes are needed: ``write_manifest`` records only the artifacts that
     exist, and the card renders purely from manifest fields -- so this exercises card
     generation without importing torch.
     """
-    import yaml
-
     path_model = path_models.joinpath("2026_W26_encoder")
     path_model.mkdir(parents=True)
     meta = dict(
@@ -1322,8 +1335,7 @@ def _make_encoder_dir(path_models: Path) -> Path:
         M_MAX=64,
         ALLOW_SAME_PROBE=False,
     )
-    path_model.joinpath("meta.yaml").write_text(yaml.safe_dump(meta))
-    model_registry.build_model_index(path_model, method="inpainting")
+    model_registry.write_manifest(path_model, meta, method="inpainting")
     return path_model
 
 
@@ -1379,13 +1391,12 @@ class TestEncoderCard(unittest.TestCase):
 
 
 class TestResolveIndex(unittest.TestCase):
-    """publish must read a directly-written manifest, not require ``meta.yaml``.
+    """publish reads a directly-written manifest and nothing else.
 
-    New training scripts (the spatial encoder first) write ``ephysatlas_model.json`` as the
-    single source of truth and no longer emit ``meta.yaml``. Publishing such a directory used to
-    fail on the ``meta.yaml`` precondition. ``_resolve_index`` prefers an existing manifest and
-    falls back to the ``meta.yaml``/``build_model_index`` route only for the older region and unit
-    directories that still ship one.
+    Every producer (the training scripts and the repackage tool) writes ``ephysatlas_model.json``
+    as the single source of truth and emits no ``meta.yaml``, so ``_resolve_index`` reads the
+    manifest; a directory without one is not a publishable model. There is no ``meta.yaml``
+    fallback any more (``build_model_index`` was removed with it).
     """
 
     def setUp(self):
@@ -1395,46 +1406,26 @@ class TestResolveIndex(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    def test_prefers_existing_manifest_without_meta_yaml(self):
-        # The new layout: a manifest on disk, no meta.yaml alongside it.
+    def test_reads_the_manifest(self):
+        # The layout every producer writes: a manifest on disk, no meta.yaml alongside it.
         path_model = _make_encoder_dir(self.tmp)
-        path_model.joinpath("meta.yaml").unlink()
+        self.assertFalse(path_model.joinpath("meta.yaml").exists())
         index = self.script._resolve_index(path_model, method="transformer")
         self.assertEqual(index["task"], model_registry.TASK_SPATIAL_ENCODING)
 
-    def test_falls_back_to_meta_yaml_when_no_manifest(self):
-        # The legacy layout: only meta.yaml, so the manifest is built from it.
+    def test_meta_yaml_only_is_rejected(self):
+        # A legacy meta.yaml-only directory is no longer publishable: publish requires a manifest,
+        # which the training/ scripts (or the repackage tool) must have written.
         import yaml
 
         path_model = self.tmp.joinpath("legacy")
         path_model.mkdir()
         path_model.joinpath("meta.yaml").write_text(
-            yaml.safe_dump(
-                dict(
-                    RANDOM_SEED=42,
-                    VINTAGE="2026_W26",
-                    MODEL_CLASS="NeighborInpaintingModel",
-                    FEATURES=FEATURES,
-                    D_MODEL=128,
-                    NHEAD=8,
-                    DEPTH=2,
-                    DROP=0.1,
-                    F_CTX=100,
-                    RADIUS_UM=600.0,
-                    M_MAX=64,
-                    ALLOW_SAME_PROBE=False,
-                )
-            )
+            yaml.safe_dump(dict(MODEL_CLASS="NeighborInpaintingModel", FEATURES=FEATURES))
         )
-        self.assertFalse(
-            path_model.joinpath(model_registry.MODEL_MANIFEST_FILE).exists()
-        )
-        index = self.script._resolve_index(path_model, method="transformer")
-        self.assertEqual(index["task"], model_registry.TASK_SPATIAL_ENCODING)
-        # build_model_index wrote the manifest on the way through.
-        self.assertTrue(
-            path_model.joinpath(model_registry.MODEL_MANIFEST_FILE).exists()
-        )
+        self.assertFalse(path_model.joinpath(model_registry.MODEL_MANIFEST_FILE).exists())
+        with self.assertRaises(FileNotFoundError):
+            self.script._resolve_index(path_model, method="transformer")
 
     def test_errors_when_neither_present(self):
         empty = self.tmp.joinpath("empty")
@@ -1492,15 +1483,15 @@ class TestEncoderPublishPackaging(unittest.TestCase):
             "import ephysatlas.model_registry as mr; "
             "from ephysatlas.models.encoder_inpainting import build_neighbor_bank; "
             "pm=Path(sys.argv[1]); w26=Path(sys.argv[2]); "
-            "idx=mr.build_model_index(pm, method='transformer'); "
+            "meta=__import__('yaml').safe_load(pm.joinpath('meta.yaml').read_text()); "
+            "idx=mr.write_manifest(pm, meta, method='transformer'); "
             "cols=idx['outputs']['columns']; "
             "feats=pd.read_parquet(w26/'raw_ephys_features_denoised.pqt'); "
             "chans=pd.read_parquet(w26/'channels.pqt'); "
             "df=feats.join(chans.loc[:, ['x','y','z']], how='inner')"
             ".dropna(subset=['x','y','z']+list(cols)); "
             "build_neighbor_bank(pm, df, idx); "
-            "mr.write_manifest(pm, __import__('yaml').safe_load("
-            "pm.joinpath('meta.yaml').read_text()), method='transformer')"
+            "mr.write_manifest(pm, meta, method='transformer')"
         )
         r = subprocess.run(
             [sys.executable, "-c", script, str(self.path_model), str(_W26)],

@@ -595,33 +595,32 @@ def _write_example_and_selftest(path_model: Path, index: dict, path_features: Pa
 
 
 def _resolve_index(path_model: Path, method: str = None) -> dict:
-    """Resolve a model directory's manifest, preferring one already on disk.
+    """Read a model directory's manifest -- the single source of truth publishing packages.
 
-    New training scripts write ``ephysatlas_model.json`` directly -- the single source of truth
-    every loader reads -- so publishing reads it rather than rebuilding it. Older region and unit
-    directories that still ship only ``meta.yaml`` keep working: ``build_model_index`` reads the
-    ``meta.yaml`` and writes the manifest from it.
+    Every training script (and the repackage tool) now writes ``ephysatlas_model.json`` directly,
+    so publishing reads it rather than rebuilding it from a ``meta.yaml`` scaffold. A directory with
+    no manifest is not a publishable model.
 
     Args:
         path_model (Path): The local model directory.
-        method (str, optional): Semantic label recorded when building from ``meta.yaml``. Ignored
-            when a manifest already exists (its ``method`` was set when it was written).
+        method (str, optional): Unused; kept for call-site compatibility. The manifest's ``method``
+            was recorded when it was written.
 
     Returns:
         dict: The parsed manifest.
 
     Raises:
-        FileNotFoundError: If the directory holds neither a manifest nor a ``meta.yaml``.
+        FileNotFoundError: If the directory holds no manifest.
     """
     path_model = Path(path_model)
-    if path_model.joinpath(model_registry.MODEL_MANIFEST_FILE).exists():
-        return model_registry.read_manifest(path_model)
-    if path_model.joinpath("meta.yaml").exists():
-        return model_registry.build_model_index(path_model, method=method)
-    raise FileNotFoundError(
-        f"{path_model} is not a model directory: neither "
-        f"{model_registry.MODEL_MANIFEST_FILE} nor meta.yaml is present"
-    )
+    index = model_registry.read_manifest(path_model)
+    if index is None:
+        raise FileNotFoundError(
+            f"{path_model} is not a publishable model directory: no "
+            f"{model_registry.MODEL_MANIFEST_FILE}. Train it with a training/ script (or "
+            f"repackage it) so the manifest is written."
+        )
+    return index
 
 
 def main(argv=None):
@@ -677,9 +676,9 @@ def main(argv=None):
     if args.model_dir is None:
         parser.error("--model-dir is required")
     path_model = args.model_dir.resolve()
-    # Prefer a manifest the training script wrote directly; fall back to meta.yaml for the older
-    # region/unit directories that still ship one. The spatial encoder now writes its manifest and
-    # neighbour bank at training time, so there is nothing left for publish to build here.
+    # Read the manifest the training script (or the repackage tool) wrote directly -- the single
+    # source of truth. Every family now writes it at training time, so there is nothing left for
+    # publish to build here; a directory without a manifest is not a publishable model.
     try:
         index = _resolve_index(path_model, method=args.method)
     except FileNotFoundError as err:

@@ -3,9 +3,9 @@
 The heavy path (download + real weights) is exercised manually; these tests pin the two things
 that can silently go wrong without touching the network:
 
-1. the pure ``meta.yaml`` synthesis maps the release config onto the keys the manifest builder
+1. the pure metadata synthesis maps the release config onto the keys the manifest builder
    reads, and
-2. that synthesized ``meta.yaml`` actually drives ``model_registry.build_model_index`` to a
+2. that synthesized metadata dict actually drives ``model_registry.write_manifest`` to a
    correct, per-family manifest (dummy artifact files stand in for the real weights, since the
    builder only scans for their presence).
 """
@@ -84,9 +84,7 @@ def _touch(path: Path):
     path.write_bytes(b"")
 
 
-def test_channel_meta_drives_build_model_index(tmp_path):
-    import yaml
-
+def test_channel_meta_drives_write_manifest(tmp_path):
     # The builder scans for artifacts by presence, so dummy files stand in for real weights.
     for name in (
         model_registry.ENCODER_WEIGHTS_FILE,
@@ -95,10 +93,10 @@ def test_channel_meta_drives_build_model_index(tmp_path):
         *model_registry.ENCODER_CONTEXT_FILES,
     ):
         _touch(tmp_path.joinpath(name))
+    # repackage hands its synthesized meta dict straight to write_manifest (no meta.yaml on disk).
     meta = repackage.build_channel_meta(CHANNEL_CONFIG, FEATURES, "2026_W26")
-    tmp_path.joinpath("meta.yaml").write_text(yaml.safe_dump(meta))
 
-    index = model_registry.build_model_index(tmp_path, method="transformer")
+    index = model_registry.write_manifest(tmp_path, meta, method="transformer")
 
     assert index["task"] == model_registry.TASK_SPATIAL_ENCODING
     assert index["model_class"] == "NeighborInpaintingModel"
@@ -115,9 +113,7 @@ def test_channel_meta_drives_build_model_index(tmp_path):
     assert tmp_path.joinpath(model_registry.MODEL_MANIFEST_FILE).exists()
 
 
-def test_unit_meta_drives_build_model_index(tmp_path):
-    import yaml
-
+def test_unit_meta_drives_write_manifest(tmp_path):
     for name in (
         model_registry.UNIT_AE_FILE,
         model_registry.UNIT_GMM_FILE,
@@ -127,9 +123,8 @@ def test_unit_meta_drives_build_model_index(tmp_path):
     ):
         _touch(tmp_path.joinpath(name))
     meta = repackage.build_unit_meta(UNIT_CONFIG, "2026_W26", "ibl_neuropixel_brainwide_01")
-    tmp_path.joinpath("meta.yaml").write_text(yaml.safe_dump(meta))
 
-    index = model_registry.build_model_index(tmp_path, method="gmm")
+    index = model_registry.write_manifest(tmp_path, meta, method="gmm")
 
     assert index["task"] == model_registry.TASK_UNIT_ENCODING
     assert index["model_class"] == "MultimodalAutoencoder"

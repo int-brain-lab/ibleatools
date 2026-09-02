@@ -13,11 +13,12 @@ one per family, each in this branch's format:
     <out-root>/ea-encoder-channel/   # spatial encoder (figure1/2/5, supp_fig4/5)
     <out-root>/ea-encoder-unit/      # unit-level encoder (figure3, supp_fig2)
 
-For each family it reconstructs a training-style ``meta.yaml`` from the release's own
-``config.json``/``features.json`` and then calls the *real*
-:func:`ephysatlas.model_registry.build_model_index` -- so the synthesized
+For each family it reconstructs a training-style metadata dict from the release's own
+``config.json``/``features.json`` and hands it straight to the *real*
+:func:`ephysatlas.model_registry.write_manifest` -- so the synthesized
 ``ephysatlas_model.json`` is correct by construction, identical in shape to what the training
-pipeline writes. Checksums are written last.
+pipeline writes, and the output is meta-free (no ``meta.yaml`` scaffold). Checksums are written
+last.
 
 ``load_pretrained("<out-root>/ea-encoder-channel")`` then loads the model. Once verified locally,
 the same directories upload to ``int-brain-lab/ea-encoder-channel`` / ``ea-encoder-unit`` with
@@ -32,8 +33,8 @@ Usage::
     python scripts/repackage_release_from_hf.py --out-root /tmp/ea_release --with-unit-data
 
 Design note: two departures from ``publish_model_to_hf.py``. That script packages from a *training
-output* directory (it already has ``meta.yaml`` + live feature data); this one re-wraps an
-*existing release*, so it synthesizes ``meta.yaml`` and copies weights out of the combined repo.
+output* directory (it already has a manifest + live feature data); this one re-wraps an
+*existing release*, so it synthesizes the metadata dict and copies weights out of the combined repo.
 The neighbour bank a channel ``predict`` needs is not in the release and needs the ``agg_full``
 feature table to rebuild -- see ``--features``; ``figure2`` does not need it.
 """
@@ -46,8 +47,6 @@ import shutil
 import sys
 from pathlib import Path
 
-import yaml
-
 import ephysatlas.model_registry as model_registry
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)-8s %(name)s: %(message)s")
@@ -57,7 +56,7 @@ _logger = logging.getLogger("repackage_release_from_hf")
 DEFAULT_SOURCE_REPO = "AlonSaguy/ephys-atlas-models"
 DEFAULT_REVISION = "2026_W26"
 
-# Per-family output directory names. build_model_index records `model_id = <dir name>`, so these
+# Per-family output directory names. write_manifest records `model_id = <dir name>`, so these
 # double as the model ids and mirror the intended Hub repo names (int-brain-lab/<name>).
 CHANNEL_DIR_NAME = "ea-encoder-channel"
 UNIT_DIR_NAME = "ea-encoder-unit"
@@ -72,10 +71,10 @@ UNIT_ATLAS_ARRAYS = ("waveforms", "acgs", "ctx", "xyz", "pids")
 # Pure manifest-synthesis helpers (no I/O -- unit-tested directly).
 # ----------------------------------------------------------------------------------------------
 def build_channel_meta(config: dict, features: list, vintage: str) -> dict:
-    """Reconstruct the ``meta.yaml`` dict a spatial-encoder publish would have carried.
+    """Reconstruct the metadata dict a spatial-encoder publish would have carried.
 
     Maps the release's ``config.json`` onto the ``UPPER_CASE`` keys
-    :func:`model_registry.build_model_index` / :func:`_blocks_spatial_encoding` read. The
+    :func:`model_registry.write_manifest` / :func:`_blocks_spatial_encoding` read. The
     architecture hints are advisory: the loader re-derives ``f_ctx``/``f_ephys`` from the
     checkpoint's normalisation buffers, so a wrong hint here cannot corrupt a load.
 
@@ -86,7 +85,7 @@ def build_channel_meta(config: dict, features: list, vintage: str) -> dict:
         vintage (str): Release tag, e.g. ``"2026_W26"``.
 
     Returns:
-        dict: A ``meta.yaml``-shaped dict, ready to ``yaml.safe_dump``.
+        dict: An ``UPPER_CASE`` metadata dict, ready to hand to ``write_manifest``.
     """
     channel = config.get("channel_level") or {}
     arch = channel.get("architecture") or {}
@@ -115,7 +114,7 @@ def build_channel_meta(config: dict, features: list, vintage: str) -> dict:
 
 
 def build_unit_meta(unit_config: dict, vintage: str, project: str) -> dict:
-    """Reconstruct the ``meta.yaml`` dict a unit-encoder publish would have carried.
+    """Reconstruct the metadata dict a unit-encoder publish would have carried.
 
     The unit wrapper reads the *real* latent dim and component count from the GMM checkpoint at
     load; the values here only populate the manifest's informational ``outputs``/``config``. The
@@ -128,7 +127,7 @@ def build_unit_meta(unit_config: dict, vintage: str, project: str) -> dict:
         project (str): ONE/S3 project the atlas arrays come from.
 
     Returns:
-        dict: A ``meta.yaml``-shaped dict, ready to ``yaml.safe_dump``.
+        dict: An ``UPPER_CASE`` metadata dict, ready to hand to ``write_manifest``.
     """
     # The training Config may name the latent dim under either key; accept both.
     latent_dim = int(
@@ -209,22 +208,26 @@ def download_release(revision: str, dst: Path, source_repo: str, with_data: bool
 
 
 def _finalize(out_dir: Path, meta: dict, method: str) -> dict:
-    """Write ``meta.yaml``, build the manifest, validate artifacts, and checksum -- in that order.
+    """Write the manifest, validate artifacts, and checksum -- in that order.
+
+    The reconstructed ``meta`` dict is handed straight to :func:`model_registry.write_manifest`, the
+    same assembler a from-scratch publish uses -- so the repackaged output is a meta-free release
+    (the manifest is the single source of truth), identical in shape to a training-script output. No
+    ``meta.yaml`` is written to disk.
 
     Args:
         out_dir (Path): The staged per-family directory (weights already copied in).
-        meta (dict): The reconstructed ``meta.yaml`` dict.
+        meta (dict): The reconstructed UPPER_CASE metadata dict (see the ``build_*_meta`` helpers).
         method (str): Semantic method label recorded in the manifest.
 
     Returns:
         dict: The written manifest (``ephysatlas_model.json``).
     """
-    out_dir.joinpath("meta.yaml").write_text(yaml.safe_dump(meta, sort_keys=False))
-    # The real manifest builder: reads our meta.yaml, scans the artifacts on disk, writes the
-    # manifest. Using it (not a hand-written dict) keeps our output identical to a true publish.
-    index = model_registry.build_model_index(out_dir, method=method)
+    # write_manifest scans the artifacts on disk and writes the manifest from the in-memory meta
+    # dict -- no meta.yaml round trip, so the output carries only the manifest.
+    index = model_registry.write_manifest(out_dir, meta, method=method)
     model_registry.validate_artifacts(out_dir, index)
-    # Checksums last, so they cover the manifest and meta.yaml too.
+    # Checksums last, so they cover the manifest too.
     model_registry.write_checksums(out_dir)
     model_registry.verify_checksums(out_dir, missing_ok=False)
     _logger.info(f"packaged {out_dir.name}: task={index.get('task')} model_class={index.get('model_class')}")
@@ -235,7 +238,7 @@ def stage_channel(src: Path, out_root: Path, vintage: str) -> Path:
     """Emit the channel spatial-encoder directory in this branch's format.
 
     Copies the weights, confidence model and context volumes to the directory root (where the
-    wrappers expect bare filenames), reconstructs ``meta.yaml`` from the release config, and
+    wrappers expect bare filenames), reconstructs the metadata dict from the release config, and
     finalizes. The neighbour bank is *not* built here (it needs feature data); ``figure2`` does
     not require it, and ``predict``-based figures build it separately.
 
@@ -271,7 +274,7 @@ def stage_unit(src: Path, out_root: Path, vintage: str) -> Path:
     """Emit the unit-level encoder directory in this branch's format.
 
     Copies the autoencoder, GMM, scaler and unconditional-GMM baseline to the directory root,
-    reconstructs ``meta.yaml`` from the release's unit config, and finalizes.
+    reconstructs the metadata dict from the release's unit config, and finalizes.
 
     Returns:
         Path: The staged directory.

@@ -168,7 +168,6 @@ class TestUnitPublishPackaging(unittest.TestCase):
     def setUp(self):
         import joblib
         import torch
-        import yaml
         from sklearn.preprocessing import StandardScaler
 
         from ephysatlas.unit_level_encoder.config import Config
@@ -207,16 +206,21 @@ class TestUnitPublishPackaging(unittest.TestCase):
             self.stage.joinpath("shared_latent_scaler.joblib"),
         )
         joblib.dump({"placeholder": True}, self.stage.joinpath("unconditional_gmm_train_only.joblib"))
-        self.stage.joinpath("meta.yaml").write_text(
-            yaml.safe_dump(
-                {
-                    "VINTAGE": "2026_W26",
-                    "MODEL_CLASS": "MultimodalAutoencoder",
-                    "LATENT_DIM": self.LATENT,
-                    "GMM_COMPONENTS": self.N_COMPONENTS,
-                    "PROJECT": "ibl_neuropixel_brainwide_01",
-                }
-            )
+        # The trainer writes the manifest directly (no meta.yaml); publish reads it as-is. Mirror
+        # that here so this exercises the real publish path.
+        import ephysatlas.model_registry as model_registry
+
+        model_registry.write_manifest(
+            self.stage,
+            {
+                "VINTAGE": "2026_W26",
+                "MODEL_CLASS": "MultimodalAutoencoder",
+                "LATENT_DIM": self.LATENT,
+                "GMM_COMPONENTS": self.N_COMPONENTS,
+                "PROJECT": "ibl_neuropixel_brainwide_01",
+            },
+            task=model_registry.TASK_UNIT_ENCODING,
+            method="gmm",
         )
 
         # A small prepared-arrays directory, the example's unit source.

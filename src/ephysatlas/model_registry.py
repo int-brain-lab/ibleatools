@@ -36,7 +36,6 @@ import logging
 from pathlib import Path
 
 import numpy as np
-import yaml
 
 logger = logging.getLogger(__name__)
 
@@ -364,7 +363,7 @@ def _blocks_region_classification(meta: dict, path_model: Path) -> dict:
     """Return the task-specific manifest blocks for a region-classification model.
 
     Returns the ``granularity``, ``artifacts``, ``inputs``, ``outputs`` and ``config`` entries,
-    which :func:`build_model_index` merges into the shared core.
+    which :func:`write_manifest` merges into the shared core.
 
     ``artifacts`` belongs here rather than in the shared core because its *roles* are
     family-specific: ``folds`` is a cross-validation concept the spatial encoder has no
@@ -593,14 +592,13 @@ def write_manifest(
 
     It reads nothing off disk except to *scan the model directory for artifacts* -- the
     ``_blocks_*`` builders list the folds / checkpoints actually present. In particular it
-    does **not** read ``meta.yaml``: training can pass the values directly, so the
-    ``meta.yaml`` scaffold need never be written. :func:`build_model_index` is the thin
-    back-compat wrapper that feeds this assembler from a ``meta.yaml`` file.
+    does **not** read ``meta.yaml``: every producer (the training scripts and the repackage
+    tool) passes the values directly, so no ``meta.yaml`` scaffold is ever written.
 
     Args:
         path_model (Path): Model directory to write the manifest into, and to scan for
             artifacts. Optionally holds a ``folds/`` subdirectory.
-        meta (dict): Training metadata in the UPPER_CASE ``meta.yaml`` shape (``MODEL_CLASS``,
+        meta (dict): Training metadata in the UPPER_CASE ``meta.yaml``-style shape (``MODEL_CLASS``,
             ``VINTAGE``, ``FEATURES`` ...) that the ``_blocks_*`` task builders read from.
         task (str, optional): Task discriminator. Inferred from ``MODEL_CLASS`` if omitted.
         method (str, optional): Semantic label for the approach -- ``"xgboost"``,
@@ -650,39 +648,6 @@ def write_manifest(
     path_model.joinpath(MODEL_MANIFEST_FILE).write_text(json.dumps(index, indent=2) + "\n")
     logger.info(f"wrote {path_model.joinpath(MODEL_MANIFEST_FILE)}")
     return index
-
-
-def build_model_index(
-    path_model: Path,
-    task: str = None,
-    method: str = None,
-    compatibility: dict = None,
-) -> dict:
-    """Build and write the publication manifest (``ephysatlas_model.json``) from ``meta.yaml``.
-
-    Thin back-compat wrapper over :func:`write_manifest`: it reads the training-time
-    ``meta.yaml`` off disk and hands the parsed dict to the assembler. New training code
-    should call :func:`write_manifest` directly with the values in hand, so no ``meta.yaml``
-    need be written; this wrapper stays for the models and tools that still produce one.
-
-    Args:
-        path_model (Path): Model directory containing ``meta.yaml``, and optionally a
-            ``folds/`` subdirectory.
-        task (str, optional): Task discriminator. Inferred from ``MODEL_CLASS`` if omitted.
-        method (str, optional): Semantic label for the approach. See :func:`write_manifest`.
-        compatibility (dict, optional): Probe/species compatibility. See :func:`write_manifest`.
-
-    Returns:
-        dict: The manifest, also written to ``path_model/ephysatlas_model.json``.
-
-    Raises:
-        ValueError: If the task cannot be inferred, or has no registered builder.
-    """
-    path_model = Path(path_model)
-    meta = yaml.safe_load(path_model.joinpath("meta.yaml").read_text())
-    return write_manifest(
-        path_model, meta, task=task, method=method, compatibility=compatibility
-    )
 
 
 def meta_from_manifest(manifest: dict) -> dict:

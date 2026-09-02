@@ -43,6 +43,19 @@ dependencies = [
 # Explicit alias so `pip install ibleatools[lite]` (e.g. the GUI dependency line) is
 # valid. Adds nothing — the base install is already the lite set.
 lite = []
+# The end-to-end training scripts under training/ (train_region_classifier / train_spatial_encoder
+# / train_unit_encoder) need nothing beyond base: torch, xgboost, one (via ibllib), scikit-learn
+# and huggingface_hub are all base dependencies. Declared as an alias so
+# `pip install ibleatools[training]` is valid and documents the one-way segregation (public
+# inference must not import training/ — enforced by tests/test_repo_segregation.py).
+training = []
+# Figure reproduction (examples/figures/) only — not needed to install or run the models. Adds the
+# plotting stack the figure scripts import: matplotlib plus the IBL style / alignment-GUI libs.
+figures = [
+    "matplotlib",
+    "ibl-style",
+    "ibl-alignment-gui @ git+https://github.com/int-brain-lab/ibl-alignment-gui",
+]
 # Full install: the base (lite) plus the spike/waveform-computation stack AND the
 # SDSC supercomputing-pipeline deps (luigi, iblscripts).
 full = [

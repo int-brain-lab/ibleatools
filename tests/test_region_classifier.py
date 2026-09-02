@@ -5,6 +5,7 @@ import shutil
 
 import numpy as np
 import numpy.testing
+import yaml
 
 from xgboost import XGBClassifier
 from sklearn.datasets import load_iris
@@ -31,6 +32,10 @@ class TestModelIO(unittest.TestCase):
             model_path = ephysatlas.regionclassifier.save_model(
                 temp_dir, classifier=classifier, meta=model_info
             )
+            # save_model writes weights only (no meta.yaml) and stamps MODEL_CLASS onto model_info;
+            # the training script writes the manifest separately. This round-trip test predates the
+            # manifest, so stage a legacy meta.yaml to exercise load_model's meta.yaml fallback.
+            model_path.joinpath("meta.yaml").write_text(yaml.safe_dump(dict(model_info)))
             _classifier, _model_info = ephysatlas.regionclassifier.load_model(
                 model_path
             )
