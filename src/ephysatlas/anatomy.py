@@ -74,6 +74,23 @@ class ClassifierRegions(iblatlas.regions.BrainRegions):
         return nr, nr + 1
 
 
+def classifier_regions():
+    """Return the classifier's brain regions, including the extra 'void_fluid' region.
+
+    ``ClassifierAtlas`` adds ``void_fluid`` (id 2000) to its regions while relabelling the
+    voids inside the skull, so plain ``BrainRegions`` cannot map every class a trained
+    classifier emits: ``id2acronym`` silently drops id 2000 and returns a shorter array than
+    it was given. This helper builds the same region set without loading the label volume,
+    which is all that is needed to translate class ids to acronyms.
+
+    Returns:
+        ClassifierRegions: Regions object covering all classifier region ids.
+    """
+    regions = ClassifierRegions()
+    regions.add_new_region(NEW_VOID)
+    return regions
+
+
 class ClassifierAtlas(AllenAtlas):
     """The Encoding Atlas is a version of the Allen Atlas where the regions labels volume is reworked.
 
