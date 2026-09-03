@@ -369,6 +369,9 @@ def build_channels_plus_emptyvoxels_with_neighbors(
     batch_size_eval: int = 1024,
     shuffle_train: bool = True,
     seed: int = 0,
+    split_manifest: dict = None,
+    preprocessing_stats: dict = None,
+    return_preprocessing_stats: bool = False,
 ):
     """
       • GRID DATASET = voxels that do NOT contain any ephys channels.
@@ -378,8 +381,19 @@ def build_channels_plus_emptyvoxels_with_neighbors(
     Context standardization: mean/std over ALL grid voxels (full atlas grid, same as before).
     Ephys standardization: mean/std over TRAIN split of recorded channels only.
 
+    Optional (figure reproduction against a released model):
+      split_manifest: dict with ``train_pids``/``validation_pids``/``test_pids`` -- use the model's
+        own saved split instead of a fresh random one, so evaluation runs on its real held-out set.
+      preprocessing_stats: dict with ``e_mean``/``e_std``/``ctx_mean``/``ctx_std`` -- use the
+        model's train-time standardization instead of recomputing it, so inputs match the weights.
+      Both default to None, which preserves the original random-split, recomputed-stats behavior.
+      return_preprocessing_stats: when True, append a dict of the ephys/context stats actually
+        used (``e_mean``/``e_std``/``ctx_mean``/``ctx_std``) as a final return element. Defaults to
+        False, preserving the original return shape.
+
     Returns:
-      train_loader, val_loader, test_loader, e_mean, e_std, ctx_mean, ctx_std
+      train_loader, conf_train_loader, val_loader, test_loader, e_mean, e_std, ctx_mean, ctx_std,
+      split_info (and, if ``return_preprocessing_stats``, a trailing stats dict).
     """
 
     # ----- 200 µm grid over the whole atlas -----
@@ -421,6 +435,14 @@ def build_channels_plus_emptyvoxels_with_neighbors(
     ctx_all_t = torch.from_numpy(ctx_all).float()
     ctx_mean = ctx_all_t[grid_mask].mean(dim=0)
     ctx_std = ctx_all_t[grid_mask].std(dim=0, unbiased=False).clamp_min(1e-6)
+
+    # Prefer the released model's own train-time context stats when supplied, so standardization
+    # matches what the weights were trained with rather than being recomputed from this data.
+    if preprocessing_stats is not None and "ctx_mean" in preprocessing_stats:
+        ctx_mean = torch.as_tensor(preprocessing_stats["ctx_mean"], dtype=torch.float32)
+        ctx_std = torch.as_tensor(
+            preprocessing_stats["ctx_std"], dtype=torch.float32
+        ).clamp_min(1e-6)
 
     def _stdz_ctx(t):
         mask = np.where(t.sum(axis=1) != 0)[0]
@@ -519,22 +541,36 @@ def build_channels_plus_emptyvoxels_with_neighbors(
 
         return set(ids)
 
-    rng = np.random.default_rng(seed)
-    shuffled = rng.permutation(uniq_p)
+    if split_manifest is not None:
+        # Use the model's authoritative saved split (figure reproduction): map its train/val/test
+        # insertion pids onto the probe indices loaded here. Insertions absent from the loaded data
+        # (e.g. excluded pids) are dropped with a warning by the helper.
+        p_tr_ids = _pid_strings_to_probe_indices(
+            split_manifest.get("train_pids", []), split_name="train"
+        )
+        p_va_ids = _pid_strings_to_probe_indices(
+            split_manifest.get("validation_pids", []), split_name="validation"
+        )
+        p_te_ids = _pid_strings_to_probe_indices(
+            split_manifest.get("test_pids", []), split_name="test"
+        )
+    else:
+        rng = np.random.default_rng(seed)
+        shuffled = rng.permutation(uniq_p)
 
-    p_tr = 0.7
-    p_va = 0.1
+        p_tr = 0.7
+        p_va = 0.1
 
-    nP = len(shuffled)
-    n_tr_p = int(round(p_tr * nP))
-    n_va_p = int(round(p_va * nP))
+        nP = len(shuffled)
+        n_tr_p = int(round(p_tr * nP))
+        n_va_p = int(round(p_va * nP))
 
-    n_tr_p = int(np.clip(n_tr_p, 1, nP))
-    n_va_p = int(np.clip(n_va_p, 0, nP - n_tr_p))
+        n_tr_p = int(np.clip(n_tr_p, 1, nP))
+        n_va_p = int(np.clip(n_va_p, 0, nP - n_tr_p))
 
-    p_tr_ids = set(shuffled[:n_tr_p].astype(int).tolist())
-    p_va_ids = set(shuffled[n_tr_p : n_tr_p + n_va_p].astype(int).tolist())
-    p_te_ids = set(shuffled[n_tr_p + n_va_p :].astype(int).tolist())
+        p_tr_ids = set(shuffled[:n_tr_p].astype(int).tolist())
+        p_va_ids = set(shuffled[n_tr_p : n_tr_p + n_va_p].astype(int).tolist())
+        p_te_ids = set(shuffled[n_tr_p + n_va_p :].astype(int).tolist())
 
     # safety checks
     all_split_ids = set(p_tr_ids) | set(p_va_ids) | set(p_te_ids)
@@ -590,6 +626,14 @@ def build_channels_plus_emptyvoxels_with_neighbors(
     # Now compute ephys stats from CLIPPED TRAIN data
     e_mean = rec_ephys[I_tr].mean(dim=0)
     e_std = rec_ephys[I_tr].std(dim=0, unbiased=False).clamp_min(1e-6)
+
+    # As with context, prefer the released model's own train-time ephys stats when supplied. The
+    # train-split clipping above still runs, matching how those published stats were produced.
+    if preprocessing_stats is not None and "e_mean" in preprocessing_stats:
+        e_mean = torch.as_tensor(preprocessing_stats["e_mean"], dtype=torch.float32)
+        e_std = torch.as_tensor(
+            preprocessing_stats["e_std"], dtype=torch.float32
+        ).clamp_min(1e-6)
 
     # Standardize all splits
     rec_ephys_std = (rec_ephys - e_mean) / e_std
@@ -676,7 +720,7 @@ def build_channels_plus_emptyvoxels_with_neighbors(
         collate_fn=collate,
     )
 
-    return (
+    result = (
         train_loader,  # mixed, for base model
         conf_train_loader,  # recorded-only, for confidence model
         val_loader,
@@ -687,6 +731,18 @@ def build_channels_plus_emptyvoxels_with_neighbors(
         ctx_std,
         split_info,
     )
+    # Optionally hand back the stats actually used, for figures that record what preprocessing the
+    # reconstructed pipeline ran with. Appended (not inlined) so the default return shape is stable.
+    if return_preprocessing_stats:
+        result = result + (
+            {
+                "e_mean": e_mean.cpu().numpy(),
+                "e_std": e_std.cpu().numpy(),
+                "ctx_mean": ctx_mean.cpu().numpy(),
+                "ctx_std": ctx_std.cpu().numpy(),
+            },
+        )
+    return result
 
 
 class RecDS(Dataset):
