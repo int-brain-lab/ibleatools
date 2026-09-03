@@ -1,3 +1,10 @@
+"""Inference example for the published spatial (neighbour-inpainting) encoder.
+
+Downloads a published spatial encoder and evaluates its per-feature R2 on the held-out test set.
+Training from scratch lives in ``training/train_spatial_encoder.py``, which writes the canonical
+publish-ready layout directly -- this file only demonstrates loading and evaluating.
+"""
+
 from pathlib import Path
 
 import numpy as np
@@ -17,24 +24,10 @@ from ephysatlas.spatial_encoder.utils import (
 from ephysatlas.spatial_encoder.model import (
     NeighborInpaintingModel,
     ProbeConfidenceTrainConfig,
-    build_probe_confidence_datasets,
-    train_hybrid,
     evaluate_r2_per_feature,
-    train_probe_confidence_model,
-    evaluate_probe_confidence_model,
     predict_probe_confidence_classes,
     ProbeSequenceConfidenceTransformer,
 )
-
-def build_neighbor_handles(train_loader) -> dict:
-    """Extract the train-neighbor bank from the DataLoader collate function."""
-    collate = train_loader.collate_fn
-    return {
-        "bank_xyz": collate.bank_xyz,
-        "bank_feat": collate.bank_feat,
-        "bank_pid": collate.bank_pid,
-        "nn_bank": collate.nn,
-    }
 
 @torch.no_grad()
 def run_base_inference(model, data_loader, device: torch.device, output_dir: Path):
@@ -78,7 +71,6 @@ class RunConfig:
     agg: str = "agg_full"
     vintage: str = "2026_W12"
 
-    train_models: bool = False
     n_cell_pcs: int = 50
     n_gene_pcs: int = 50
 
@@ -107,7 +99,7 @@ class RunConfig:
 
 
 def main():
-    cfg = RunConfig(train_models=False)
+    cfg = RunConfig()
     torch.manual_seed(cfg.seed)
     np.random.seed(cfg.seed)
 
@@ -119,15 +111,14 @@ def main():
 
     one = ONE()
 
-    if not cfg.train_models:
-        from ephysatlas.regionclassifier import download_model
-        model_path = download_model(cfg.model_base_dir, f"encoding_models/{cfg.vintage}", one=one)
+    from ephysatlas.regionclassifier import download_model
+    model_path = download_model(cfg.model_base_dir, f"encoding_models/{cfg.vintage}", one=one)
 
     # ------------------------- data/context -------------------------
     ctx_cfg = AtlasPCAConfig(n_cell_pcs=cfg.n_cell_pcs, n_gene_pcs=cfg.n_gene_pcs)
     ctx_manager = ContextAtlasManager(
         ctx_cfg,
-        regenerate_context=cfg.train_models,
+        regenerate_context=False,
         output_dir=cfg.model_base_dir / f"encoding_models/{cfg.vintage}",
     )
 
@@ -197,75 +188,20 @@ def main():
         drop=conf_cfg.drop,
     ).to(device)
 
-    if cfg.train_models:
-        opt = torch.optim.AdamW(base_model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+    # Load the published checkpoints. Training now lives in
+    # training/train_spatial_encoder.py, which writes the canonical publish-ready layout;
+    # this example only demonstrates inference.
+    base_ckpt = torch.load(
+        model_path / f"SE_model_{cfg.vintage}.pt",
+        map_location=device,
+    )
+    conf_ckpt = torch.load(
+        model_path / f"Confidence_model_{cfg.vintage}.pt",
+        map_location=device,
+    )
 
-        base_ckpt = cfg.model_base_dir / "base_model_best.pt"
-        base_model, base_meters, best_epoch, best_value = train_hybrid(
-            base_model,
-            train_loader,
-            val_loader,
-            opt,
-            epochs=cfg.epochs,
-            device=device,
-            lambda_sup=1.0,
-            lambda_ctr=cfg.lambda_ctr,
-            pos_radius_um=cfg.pos_radius_um,
-            patience=cfg.patience,
-            checkpoint_path=str(base_ckpt),
-        )
-        torch.save({"model_state": base_model.state_dict(), "meters": base_meters, "split_info": split_info}, cfg.model_base_dir / f"encoding_models/SE_model_{cfg.vintage}.pt")
-        print(f"[base] best_epoch={best_epoch}, best_value={best_value}")
-
-        # ------------------------- confidence model -------------------------
-        handles = build_neighbor_handles(train_loader)
-
-        train_conf_ds, val_conf_ds, conf_ds_info = build_probe_confidence_datasets(
-            one=one,
-            pid_names=pid_names,
-            ctx_manager=ctx_manager,
-            ephys=ephys,
-            probe_positions=probe_positions,
-            split_info=split_info,
-            base_model=base_model.to(device),
-            cfg=conf_cfg,
-            handles=handles,
-        )
-        print("[confidence dataset]", conf_ds_info)
-
-        conf_ckpt = cfg.model_base_dir / "probe_confidence_best.pt"
-        conf_model, conf_info, conf_meters = train_probe_confidence_model(
-            conf_model,
-            train_ds=train_conf_ds,
-            val_ds=val_conf_ds,
-            device=device,
-            f_ctx=f_ctx,
-            f_e=f_e,
-            cfg=conf_cfg,
-            checkpoint_path=str(conf_ckpt),
-        )
-        torch.save({"model_state": conf_model.state_dict(), "info": conf_info, "meters": conf_meters}, cfg.model_base_dir / f"encoding_models/Confidence_model_{cfg.vintage}.pt")
-
-        conf_eval = evaluate_probe_confidence_model(
-            conf_model=conf_model,
-            dataset=val_conf_ds,
-            device=device,
-            batch_size=cfg.conf_batch_size,
-            title="Validation synthetic probe confidence",
-        )
-        torch.save(conf_eval, cfg.model_base_dir / "probe_confidence_val_eval.pt")
-    else:
-        base_ckpt = torch.load(
-            model_path / f"SE_model_{cfg.vintage}.pt",
-            map_location=device,
-        )
-        conf_ckpt = torch.load(
-            model_path / f"Confidence_model_{cfg.vintage}.pt",
-            map_location=device,
-        )
-
-        base_model.load_state_dict(base_ckpt["model_state"])
-        conf_model.load_state_dict(conf_ckpt["model_state"])
+    base_model.load_state_dict(base_ckpt["model_state"])
+    conf_model.load_state_dict(conf_ckpt["model_state"])
 
     # Evaluation
     r2 = evaluate_r2_per_feature(base_model, test_loader, e_mean, e_std, device=device)
