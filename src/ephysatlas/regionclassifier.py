@@ -1,15 +1,19 @@
 import hashlib
+import logging
 from typing import List, Tuple
 from pathlib import Path
 import yaml
 
 import numpy as np
+import pandas as pd
 from xgboost import XGBClassifier
 
-from one.remote import aws
 from one.api import ONE
 import iblutil.random
 from ephysatlas import features
+from ephysatlas import model_registry
+
+logger = logging.getLogger(__name__)
 
 
 def save_model(path_model, classifier, meta, subfolder="", identifier=None):
@@ -18,10 +22,19 @@ def save_model(path_model, classifier, meta, subfolder="", identifier=None):
     The model is a set of files in a folder named after the meta-data 'VINTAGE' and 'REGION_MAP' fields,
     with the hash as suffix e.g. 2023_W41_Cosmos_dfd731f0.
 
+    Weights-only, at every level: the model directory carries no ``meta.yaml``. The publication
+    manifest (``ephysatlas_model.json``), written once by the training script via
+    :func:`ephysatlas.model_registry.write_manifest`, is the single source of truth -- it lists the
+    folds and supplies their ``model_class``, so neither the root nor a fold needs a ``meta.yaml``.
+
+    ``MODEL_CLASS`` is stamped onto the ``meta`` dict here (the training script reads it back before
+    calling ``write_manifest``); the manifest is the only on-disk record.
+
     Args:
         path_model (Path): Base path where the model will be saved.
         classifier: The classifier object to save.
-        meta (dict): Metadata dictionary containing model information.
+        meta (dict): Metadata dictionary containing model information. ``MODEL_CLASS`` is stamped
+            onto it in place.
         subfolder (str, optional): Optional level to add to the model path, for example 'FOLD01' will write to
             2023_W41_Cosmos_dfd731f0/FOLD01/. Defaults to "".
         identifier (str, optional): Optional identifier for the model, defaults to a 8 character hexdigest of the meta data.
@@ -40,65 +53,119 @@ def save_model(path_model, classifier, meta, subfolder="", identifier=None):
         f"{meta['VINTAGE']}_{meta['REGION_MAP']}_{identifier}", subfolder
     )
     path_model.mkdir(exist_ok=True, parents=True)
-    with open(path_model.joinpath("meta.yaml"), "w+") as fid:
-        fid.write(yaml.dump(dict(meta)))
     classifier.save_model(path_model.joinpath("model.ubj"))
     return path_model
 
 
 def download_model(
-    local_path: Path, model_name: str, one: ONE, overwrite=False
+    local_path: Path,
+    model_name: str,
+    one: ONE = None,
+    overwrite=False,
+    revision: str = None,
+    source: str = "auto",
 ) -> Path:
-    """Download a trained model from AWS S3.
+    """Download a trained model, from the Hugging Face Hub or from AWS S3.
+
+    Delegates to :func:`ephysatlas.model_registry.resolve_model`, which tries the public
+    Hugging Face Hub first and falls back to the private S3 bucket. ``one`` is therefore
+    optional: it is only needed for the S3 route.
 
     Example:
         >>> download_model(Path('/mnt/s0/ephys-atlas-decoding/models'), '2024_W50_Cosmos_lid-basket-sense', one=one)
 
     Args:
         local_path (Path): Local directory where the model will be downloaded.
-        model_name (str): Name of the model to download from S3.
-        one (ONE): ONE client instance for AWS authentication.
+        model_name (str): Model folder name, or a ``org/repo`` Hugging Face id.
+        one (ONE, optional): ONE client instance, required only for the S3 fallback.
         overwrite (bool, optional): If True, overwrite existing files. Defaults to False.
+        revision (str, optional): Hugging Face branch/tag to pin. Ignored by S3.
+        source (str, optional): ``"auto"``, ``"hf"`` or ``"s3"``. Defaults to ``"auto"``.
 
     Returns:
         Path: Path to the downloaded model directory.
     """
-    local_path = Path(local_path)
-    s3, bucket_name = aws.get_s3_from_alyx(alyx=one.alyx)
-    aws.s3_download_folder(
-        f"aggregates/atlas/models/{model_name}",
-        local_path.joinpath(model_name),
-        s3=s3,
-        bucket_name=bucket_name,
+    return model_registry.resolve_model(
+        model_name,
+        revision=revision,
+        source=source,
+        cache_dir=Path(local_path),
+        one=one,
         overwrite=overwrite,
     )
-    return local_path.joinpath(model_name)
+
+
+def _load_xgb(path_model: Path, manifest: dict = None):
+    """Load an XGBoost classifier from the weights file its manifest names.
+
+    Args:
+        path_model (Path): Model directory.
+        manifest (dict, optional): Parsed manifest. For a fold directory the caller passes the
+            *parent* manifest (folds ship weights only, with no manifest of their own); its
+            ``artifacts.weights`` names the file, defaulting to ``model.ubj``.
+
+    Returns:
+        XGBClassifier: The loaded classifier.
+    """
+    weights = ((manifest or {}).get("artifacts") or {}).get("weights", "model.ubj")
+    classifier = XGBClassifier()
+    classifier.load_model(path_model.joinpath(weights))
+    return classifier
+
+
+# Dispatch table keyed on the model class named by the manifest. Every loader
+# takes ``(path_model, manifest)`` and returns an in-memory model: passing the whole manifest
+# rather than one hand-picked ``weights`` string is what lets a family whose model is several
+# files (the spatial encoder: weights, context volumes, a neighbour bank) register here at all.
+# Deliberately xgboost-only. The spatial encoder is NOT registered here even though it has a
+# loader, because this module imports xgboost at scope (line 9): any process that reached a torch
+# loader through this table would hold both runtimes at once, and on macOS arm64 that segfaults
+# at the first torch tensor copy. The encoder is loaded through
+# `ephysatlas.models.encoder_inpainting` instead, which is the path `load_pretrained` uses.
+# This is the concrete cost the design doc's §9 split (move the registry out of this module)
+# would remove.
+MODEL_LOADERS = {
+    "xgboost.sklearn.XGBClassifier": _load_xgb,
+}
 
 
 def load_model(path_model):
-    """Load a trained XGBoost classifier model from disk.
+    """Load a trained model from disk, from its publication manifest.
 
-    This function loads both the model binary and its associated metadata from the
-    specified directory. The model is expected to be in UBJ format, and the metadata
-    in YAML format.
+    The manifest (``ephysatlas_model.json``) is the single source of truth: it names the model
+    class and the weights file. Every published model ships one, so it is required.
+
+    The returned ``model_info`` is projected onto the ``meta.yaml`` key shape via
+    :func:`model_registry.meta_from_manifest`, so callers that read ``model_info["FEATURES"]``
+    keep working without a ``meta.yaml`` file on disk.
 
     Args:
-        path_model (Path or str): Path to the directory containing the model files.
-            The directory should contain 'model.ubj' and 'meta.yaml' files.
+        path_model (Path or str): Directory containing the model files.
 
     Returns:
         tuple: A tuple containing:
             - classifier: The loaded classifier object (usually an XGBClassifier).
-            - model_info (dict): Dictionary containing the model metadata.
+            - model_info (dict): Model metadata, in ``meta.yaml`` key shape.
+
+    Raises:
+        FileNotFoundError: If the directory has no manifest.
+        ValueError: If the model class has no registered loader.
     """
     path_model = Path(path_model)
-    # load model
-    with open(path_model.joinpath("meta.yaml")) as f:
-        model_info = yaml.safe_load(f)
-    # todo: this should support multiple model classes
-    classifier = XGBClassifier(model_file=path_model.joinpath("model.ubj"))
-    classifier.load_model(path_model.joinpath("model.ubj"))
-    return classifier, model_info
+    manifest = model_registry.read_manifest(path_model)
+    if manifest is None:
+        raise FileNotFoundError(
+            f"{path_model} has no {model_registry.MODEL_MANIFEST_FILE}"
+        )
+
+    model_class = manifest.get("model_class") or "xgboost.sklearn.XGBClassifier"
+    if model_class not in MODEL_LOADERS:
+        raise ValueError(
+            f"no loader registered for MODEL_CLASS {model_class!r}; "
+            f"known: {sorted(MODEL_LOADERS)}"
+        )
+    classifier = MODEL_LOADERS[model_class](path_model, manifest)
+    return classifier, model_registry.meta_from_manifest(manifest)
 
 
 def _step_viterbi(
@@ -188,37 +255,337 @@ def viterbi(
 
 
 def infer_regions(df_inference, path_model, n_folds=5, denoise=False):
-    """Infer brain regions using a trained classifier model across multiple folds.
+    """Infer brain regions per fold, returning the raw (un-averaged) per-fold predictions.
 
-    This function loads a trained model for each fold and performs inference on the input data.
-    It applies denoising to the input features before prediction and aggregates results across all folds.
+    A thin wrapper over :class:`RegionClassifier`: it builds one from ``path_model`` and returns
+    the per-fold probability tensor its ensemble path produces, plus each fold's argmax. The folds
+    (and their ``model_class``) come from the model's manifest, so this reads the weights-only
+    fold layout (``folds/FOLD0k/model.ubj``, no per-fold metadata). Denoising, if requested, is
+    applied once, before the fold loop.
 
     Args:
-        df_inference (pd.DataFrame): DataFrame containing features for inference.
-        path_model (Path): Path to the directory containing the trained model folds.
-        n_folds (int, optional): Number of folds to use for inference. Defaults to 5.
+        df_inference (pd.DataFrame): Features for inference, indexed by ``(pid, channel)``.
+        path_model (Path): The model directory (its manifest lists the folds).
+        n_folds (int, optional): **Ignored** -- retained for backward compatibility. The folds used
+            are those the manifest lists; a mismatch with this value logs a warning.
+        denoise (bool, optional): Apply :func:`ephysatlas.features.denoise_dataframe` first.
 
     Returns:
-        tuple: A tuple containing:
-            - predicted_probas (np.ndarray): Array of shape (n_folds, n_samples, n_classes) containing
-              prediction probabilities for each fold.
-            - predicted_region (np.ndarray): Array of shape (n_folds, n_samples) containing
-              predicted region labels for each fold.
+        tuple:
+            - predicted_probas (np.ndarray): ``(n_folds, n_samples, n_classes)`` per-fold
+              probabilities.
+            - predicted_region (np.ndarray): ``(n_folds, n_samples)`` per-fold predicted class
+              **indices** (the argmax of each fold's probabilities, in the manifest's class order).
     """
-    for fold in range(n_folds):
-        classifier, model_info = load_model(path_model.joinpath(f"FOLD0{fold}"))
-
-        if denoise:
-            df_inference = features.denoise_dataframe(df_inference)
-
-        x_test = df_inference.loc[:, model_info["FEATURES"]].values
-        y_pred = classifier.predict(x_test)
-        y_probas = classifier.predict_proba(x_test)
-
-        if fold == 0:
-            predicted_probas = np.zeros((n_folds, y_probas.shape[0], y_probas.shape[1]))
-            predicted_region = np.zeros((n_folds, y_pred.shape[0]))
-        predicted_probas[fold] = y_probas
-        predicted_region[fold] = y_pred
-
+    classifier = RegionClassifier(Path(path_model))
+    predicted_probas = classifier._fold_probas(
+        df_inference, denoise=denoise, estimator="ensemble"
+    )
+    if n_folds is not None and predicted_probas.shape[0] != n_folds:
+        logger.warning(
+            f"n_folds={n_folds} is ignored: inference uses the {predicted_probas.shape[0]} "
+            f"fold(s) the manifest lists. The parameter is retained for backward compatibility."
+        )
+    predicted_region = np.argmax(predicted_probas, axis=2)
     return predicted_probas, predicted_region
+
+
+class RegionClassifier:
+    """A trained region classifier, ready to predict on a features DataFrame.
+
+    Wraps the fold models and the ``model_index.json`` manifest so that a caller needs
+    neither ``iblatlas`` to read the output nor prior knowledge of the feature list.
+
+    Example:
+        >>> clf = RegionClassifier.from_pretrained('international-brain-lab/ephys-atlas-region-classifier')
+        >>> out = clf.predict(df_features)
+        >>> out.head()
+
+    Attributes:
+        path_model (Path): Local model directory.
+        index (dict): Contents of ``ephysatlas_model.json`` (the publication manifest).
+        config (dict): The manifest's task-specific ``config`` block -- class ids, acronyms,
+            region map and accuracy.
+        inputs (dict): The manifest's ``inputs`` block -- row identity and feature list.
+    """
+
+    def __init__(self, path_model, index: dict = None):
+        self.path_model = Path(path_model)
+        self.index = index if index is not None else self._read_index()
+        self.config = self.index["config"]
+        self.inputs = self.index["inputs"]
+
+    def _read_index(self) -> dict:
+        """Read the publication manifest -- the single source of truth every model ships."""
+        manifest = model_registry.read_manifest(self.path_model)
+        if manifest is None:
+            raise FileNotFoundError(
+                f"{self.path_model} has no {model_registry.MODEL_MANIFEST_FILE}"
+            )
+        return manifest
+
+    @classmethod
+    def from_pretrained(
+        cls,
+        model_id: str,
+        revision: str = None,
+        cache_dir: Path = None,
+        one=None,
+        source: str = "auto",
+    ) -> "RegionClassifier":
+        """Fetch a model by id and return a ready-to-use classifier.
+
+        Args:
+            model_id (str): Hugging Face ``org/repo``, or an S3 model folder name.
+            revision (str, optional): Hugging Face branch/tag to pin.
+            cache_dir (Path, optional): Download location.
+            one (optional): ONE client, needed only for the S3 fallback.
+            source (str, optional): ``"auto"``, ``"hf"`` or ``"s3"``.
+
+        Returns:
+            RegionClassifier: Classifier backed by the downloaded directory.
+        """
+        return cls(
+            model_registry.resolve_model(
+                model_id, revision=revision, source=source, cache_dir=cache_dir, one=one
+            )
+        )
+
+    def _fold_dirs(self) -> list:
+        """Return the fold model directories, or the model root if there are no folds."""
+        folds_root = self.path_model.joinpath("folds")
+        base = folds_root if folds_root.exists() else self.path_model
+        names = (self.index.get("artifacts") or {}).get("folds") or []
+        # A fold is loadable when its weights are present. Folds ship weights only -- no
+        # meta.yaml -- so keying on the weights file (not meta.yaml) is what keeps every fold
+        # in the ensemble instead of silently dropping the meta-less ones.
+        weights = (self.index.get("artifacts") or {}).get("weights", "model.ubj")
+        dirs = [
+            d for d in (base.joinpath(n) for n in names) if d.joinpath(weights).exists()
+        ]
+        if names and 0 < len(dirs) < len(names):
+            # Losing *some* folds is the dangerous case and easy to miss: the ensemble quietly
+            # averages fewer models than the manifest and the model card advertise, and
+            # fold_agreement is then computed over the survivors -- reporting unanimity among two
+            # folds while claiming five.
+            logger.warning(
+                f"manifest declares {len(names)} folds but only {len(dirs)} are loadable "
+                f"({sorted(d.name for d in dirs)}); predictions and fold_agreement will be "
+                f"computed from those alone"
+            )
+        if not dirs:
+            # No folds published: fall back to the single global model.
+            dirs = [self.path_model]
+        return dirs
+
+    def _model_dirs(self, estimator: str) -> list:
+        """Resolve which model directories an estimator mode should use.
+
+        Args:
+            estimator (str): ``"ensemble"`` or ``"global"``.
+
+        Returns:
+            list[Path]: Directories to load and average over.
+
+        Raises:
+            ValueError: On an unknown mode, or if ``"global"`` is asked of a model that
+                publishes only folds.
+        """
+        if estimator == "global":
+            weights = (self.index.get("artifacts") or {}).get("weights", "model.ubj")
+            if not self.path_model.joinpath(weights).exists():
+                raise ValueError(
+                    f"estimator='global' needs {weights} at {self.path_model}, which this "
+                    f"model does not publish; use estimator='ensemble'"
+                )
+            return [self.path_model]
+        if estimator == "ensemble":
+            dirs = self._fold_dirs()
+            if dirs == [self.path_model]:
+                logger.warning(
+                    "estimator='ensemble' but this model publishes no folds; "
+                    "falling back to the single global model and fold_agreement will be NaN"
+                )
+            return dirs
+        raise ValueError(
+            f"unknown estimator {estimator!r}; expected 'ensemble' or 'global'"
+        )
+
+    def _acronyms(self) -> np.ndarray:
+        """Class acronyms, from the manifest if present, otherwise resolved from the atlas."""
+        acronyms = self.config.get("class_acronyms")
+        if acronyms is None:
+            acronyms = model_registry.class_acronyms(
+                self.config["classes"], self.config["region_map"]
+            )
+        if acronyms is None or len(acronyms) != len(self.config["classes"]):
+            raise ValueError(
+                f"cannot label predictions: {len(self.config['classes'])} classes but "
+                f"{0 if acronyms is None else len(acronyms)} acronyms"
+            )
+        return np.asarray(acronyms)
+
+    def _fold_probas(
+        self, df, denoise: bool = False, estimator: str = "ensemble"
+    ) -> np.ndarray:
+        """Per-fold class probabilities, ``[n_model_dirs, n_samples, n_classes]``.
+
+        The shared core of :meth:`predict` (which averages these into a labelled DataFrame) and
+        :func:`infer_regions` (which returns them per fold). It validates the required feature
+        columns and their recorded order, applies optional denoising **once**, resolves the loader
+        from the parent manifest's ``model_class`` (folds carry no metadata of their own), and
+        stacks ``predict_proba`` over the directories the estimator selects.
+
+        Args:
+            df (pd.DataFrame): Features, indexed by ``(pid, channel)``; must carry every column in
+                the manifest's ``features``.
+            denoise (bool, optional): Apply :func:`ephysatlas.features.denoise_dataframe` first.
+            estimator (str, optional): ``"ensemble"`` (the folds) or ``"global"`` (the root model).
+
+        Returns:
+            np.ndarray: ``[n_model_dirs, n_samples, n_classes]`` probabilities.
+
+        Raises:
+            KeyError: If any required feature column is absent, naming the missing ones.
+            ValueError: If the recorded feature-order digest no longer matches, or a model emits a
+                class count other than the manifest declares.
+        """
+        feature_names = list(self.inputs["features"])
+        missing = [c for c in feature_names if c not in df.columns]
+        if missing:
+            raise KeyError(
+                f"{len(missing)} feature(s) required by this model are missing from the "
+                f"input DataFrame: {missing}. Expected all of: {feature_names}"
+            )
+        # After the missing-column check on purpose: someone who simply forgot a column should
+        # get the KeyError that names it, not an integrity error about the manifest.
+        model_registry.validate_feature_order(
+            self.inputs["features"], self.inputs.get("feature_order_sha256")
+        )
+        if denoise:
+            df = features.denoise_dataframe(df)
+
+        classes = np.asarray(self.config["classes"])
+        x = df.loc[:, feature_names].values.astype(float)
+
+        # Resolve the loader once from the parent manifest's model_class, then apply it to
+        # each directory. Folds carry no manifest of their own, so load_model (which requires
+        # one in the directory) cannot resolve them -- but the family is known from the root
+        # manifest, and every fold stores its weights under the same name.
+        model_class = self.index["model_class"]
+        loader = MODEL_LOADERS.get(model_class)
+        if loader is None:
+            raise ValueError(
+                f"no loader registered for MODEL_CLASS {model_class!r}; "
+                f"known: {sorted(MODEL_LOADERS)}"
+            )
+
+        model_dirs = self._model_dirs(estimator)
+        probas = np.zeros((len(model_dirs), x.shape[0], classes.size))
+        for i, model_dir in enumerate(model_dirs):
+            classifier = loader(model_dir, self.index)
+            p = classifier.predict_proba(x)
+            if p.shape[1] != classes.size:
+                raise ValueError(
+                    f"{model_dir.name}: model emits {p.shape[1]} classes but the manifest "
+                    f"declares {classes.size}"
+                )
+            probas[i] = p
+        return probas
+
+    def predict(
+        self, df, denoise: bool = False, estimator: str = "ensemble"
+    ) -> pd.DataFrame:
+        """Predict a brain region per channel.
+
+        Args:
+            df (pd.DataFrame): Features, indexed by ``(pid, channel)``. Must contain every
+                column listed in the manifest's ``features``.
+            denoise (bool, optional): Apply :func:`ephysatlas.features.denoise_dataframe`
+                first. Leave False if ``df`` already holds denoised features.
+            estimator (str, optional): Which weights to use.
+
+                * ``"ensemble"`` (default) -- average the per-fold models. Slightly better
+                  calibrated, and the only mode that yields a meaningful ``fold_agreement``.
+                * ``"global"`` -- the single model trained on all channels. One fifth of the
+                  inference cost; ``fold_agreement`` comes back as NaN because no folds were
+                  consulted.
+
+                The two disagree on a small fraction of channels, so do not mix them within
+                one analysis.
+
+        Returns:
+            pd.DataFrame: Indexed like ``df``, with columns ``predicted_acronym``,
+            ``predicted_atlas_id``, ``prediction_probability`` (fold-averaged probability of
+            the winning class), ``fold_agreement`` (fraction of folds voting for the winner),
+            and one ``p_<acronym>`` column per class holding the fold-averaged probability.
+
+            The prediction columns are deliberately namespaced: both the channel feature
+            table and the cluster table already carry histology-derived ``acronym`` and
+            ``atlas_id`` columns, so bare names would collide on ``df.join(out)`` and would
+            silently overwrite ground truth on assignment.
+
+        Raises:
+            KeyError: If any required feature column is absent, naming the missing ones.
+            ValueError: If the manifest's ``inputs.features`` no longer matches its recorded
+                order digest, i.e. the published feature list has been edited or reordered.
+        """
+        probas = self._fold_probas(df, denoise=denoise, estimator=estimator)
+        classes = np.asarray(self.config["classes"])
+
+        mean_probas = probas.mean(axis=0)
+        winner = np.argmax(mean_probas, axis=1)
+        if probas.shape[0] > 1:
+            per_fold_winner = np.argmax(probas, axis=2)
+            agreement = (per_fold_winner == winner[np.newaxis, :]).mean(axis=0)
+        else:
+            # A single model has nothing to agree with. NaN rather than 1.0, which would
+            # imply unanimity among folds that were never consulted.
+            agreement = np.full(probas.shape[1], np.nan)
+
+        acronyms = self._acronyms()
+        out = pd.DataFrame(index=df.index)
+        out["predicted_acronym"] = acronyms[winner]
+        out["predicted_atlas_id"] = classes[winner]
+        out["prediction_probability"] = mean_probas[np.arange(winner.size), winner]
+        out["fold_agreement"] = agreement
+        for j, acronym in enumerate(acronyms):
+            out[f"p_{acronym}"] = mean_probas[:, j]
+        return out
+
+    def selftest(self, rtol: float = 1e-5) -> bool:
+        """Reproduce the shipped golden predictions, if the model ships an example.
+
+        Converts silent numerical drift (changed transforms, an incompatible xgboost, a
+        reordered class vector) into one explicit failure.
+
+        Args:
+            rtol (float, optional): Relative tolerance on the probability comparison.
+
+        Returns:
+            bool: True when the recomputed predictions match the shipped ones.
+
+        Raises:
+            FileNotFoundError: If the model does not ship ``example/`` files.
+            AssertionError: If the predictions differ.
+        """
+        example = self.path_model.joinpath("example")
+        sample_file = example.joinpath("features_sample.parquet")
+        expected_file = example.joinpath("expected_predictions.parquet")
+        if not (sample_file.exists() and expected_file.exists()):
+            raise FileNotFoundError(f"no example/golden files under {example}")
+        # Pin the estimator: the golden file was produced by the ensemble, so the comparison
+        # must not silently follow a future change to predict()'s default.
+        got = self.predict(pd.read_parquet(sample_file), estimator="ensemble")
+        expected = pd.read_parquet(expected_file)
+        mismatched = (
+            got["predicted_acronym"].values != expected["predicted_acronym"].values
+        ).sum()
+        assert mismatched == 0, f"{mismatched} of {len(got)} predicted acronyms differ"
+        np.testing.assert_allclose(
+            got["prediction_probability"].values,
+            expected["prediction_probability"].values,
+            rtol=rtol,
+        )
+        logger.info(f"selftest passed on {len(got)} channels")
+        return True
