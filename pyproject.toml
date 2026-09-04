@@ -4,20 +4,20 @@ description = "Tools for IBL data analysis and processing"
 authors = [
     {name = "International Brain Laboratory", email = "software-devs@internationalbrainlab.org"},
 ]
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 readme = "README.md"
 license = {text = "MIT"}
 classifiers = [
     "Intended Audience :: Science/Research",
     "Topic :: Neuroscience :: Data analysis",
-    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
 ]
 dynamic = ["version"]
 # Lite by default: data download (S3), model download + region inference, lf/csd/ap
 # feature computation, aggregation/denoising, and the torch-based spatial encoder.
-# No git dependencies — the git/spike-sorting deps (dartsort, dredge, iblscripts) live
-# in the optional [full] extra below. (spikeinterface is still pulled in transitively
-# by ibl-neuropixel, which is fine; the dartsort spike path is the part gated by [full].)
+# No waveform dependencies in the base install: DARTsort and its dependencies
+# live in the optional [full] extra below. (SpikeInterface is still pulled in
+# transitively by ibl-neuropixel)
 dependencies = [
     "ibllib>=3.3.1",          # brainbox, ibllib.pipes, ONE-api (one.api/one.remote.aws), iblutil
     "ibl-neuropixel>=1.12.0", # ibldsp, neuropixel, spikeglx
@@ -45,9 +45,9 @@ lite = []
 # Full install: the base (lite) plus the spike/waveform-computation stack AND the
 # SDSC supercomputing-pipeline deps (luigi, iblscripts).
 full = [
-    "dartsort @ git+https://github.com/cwindolf/dartsort@iblsorter",
-    "dredge @ git+https://github.com/evarol/dredge@v0.2.2",
-    "spikeinterface>=0.101.2",
+    # Use the reproducible PyPI release; DARTsort installs dredge-ephys itself.
+    "dartsort>=0.5.23",
+    "spikeinterface>=0.104.0",
     "hdbscan>=0.8.40",
     "h5py==3.15.1", #Some dartsort error arises in the unit tests, if I don't fix this.
     "linear-operator>=0.6",
@@ -70,7 +70,7 @@ build-backend = "pdm.backend"
 
 [tool.ruff]
 line-length = 88
-target-version = "py310"
+target-version = "py311"
 exclude = [
   ".git",
   ".venv",
