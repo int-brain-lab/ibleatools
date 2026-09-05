@@ -357,6 +357,145 @@ def concat_context(cell_pc: np.ndarray, gene_pc: np.ndarray) -> np.ndarray:
     return np.concatenate([cell_pc, gene_pc], axis=-1)
 
 
+def _coerce_preprocessing_stats(preprocessing_stats: dict | None):
+    """
+    Convert a saved channel_stats.npz payload to torch tensors.
+
+    Returns None when no frozen stats were supplied (first training of a vintage).
+    """
+    if preprocessing_stats is None:
+        return None
+
+    required = {
+        "rec_ephys_low_pctl",
+        "rec_ephys_high_pctl",
+        "e_mean",
+        "e_std",
+        "ctx_mean",
+        "ctx_std",
+    }
+    missing = required.difference(preprocessing_stats)
+    if missing:
+        raise ValueError(
+            "Saved channel preprocessing statistics are incomplete. "
+            f"Missing keys: {sorted(missing)}"
+        )
+
+    return {
+        "rec_ephys_low_pctl": torch.as_tensor(
+            preprocessing_stats["rec_ephys_low_pctl"], dtype=torch.float32
+        ),
+        "rec_ephys_high_pctl": torch.as_tensor(
+            preprocessing_stats["rec_ephys_high_pctl"], dtype=torch.float32
+        ),
+        "e_mean": torch.as_tensor(
+            preprocessing_stats["e_mean"], dtype=torch.float32
+        ),
+        "e_std": torch.as_tensor(
+            preprocessing_stats["e_std"], dtype=torch.float32
+        ).clamp_min(1e-6),
+        "ctx_mean": torch.as_tensor(
+            preprocessing_stats["ctx_mean"], dtype=torch.float32
+        ),
+        "ctx_std": torch.as_tensor(
+            preprocessing_stats["ctx_std"], dtype=torch.float32
+        ).clamp_min(1e-6),
+    }
+
+
+def _resolve_probe_split(
+    *,
+    uniq_p: np.ndarray,
+    pid_names: np.ndarray,
+    split_manifest: dict | None,
+    seed: int,
+):
+    """
+    Resolve probe indices for train/validation/test.
+
+    If split_manifest is supplied it is authoritative. Loaded PIDs that are not
+    listed in the manifest are excluded rather than silently assigned to a split.
+    """
+    uniq_p = np.asarray(uniq_p, dtype=int)
+    pid_names = np.asarray(pid_names).astype(str)
+
+    if split_manifest is None:
+        rng = np.random.default_rng(seed)
+        shuffled = rng.permutation(uniq_p)
+
+        p_tr = 0.7
+        p_va = 0.1
+        nP = len(shuffled)
+        n_tr_p = int(round(p_tr * nP))
+        n_va_p = int(round(p_va * nP))
+        n_tr_p = int(np.clip(n_tr_p, 1, nP))
+        n_va_p = int(np.clip(n_va_p, 0, nP - n_tr_p))
+
+        p_tr_ids = set(shuffled[:n_tr_p].astype(int).tolist())
+        p_va_ids = set(shuffled[n_tr_p:n_tr_p + n_va_p].astype(int).tolist())
+        p_te_ids = set(shuffled[n_tr_p + n_va_p:].astype(int).tolist())
+        source = "generated"
+    else:
+        train_names = {str(x) for x in split_manifest.get("train_pids", [])}
+        val_names = {str(x) for x in split_manifest.get("validation_pids", [])}
+        test_names = {str(x) for x in split_manifest.get("test_pids", [])}
+
+        overlap = (
+            (train_names & val_names)
+            | (train_names & test_names)
+            | (val_names & test_names)
+        )
+        if overlap:
+            raise ValueError(
+                "PID overlap in supplied split manifest. "
+                f"First examples: {sorted(overlap)[:5]}"
+            )
+
+        pid_to_probe_idx = {str(pid_names[i]): int(i) for i in uniq_p}
+
+        def _to_ids(names, split_name):
+            missing = sorted(name for name in names if name not in pid_to_probe_idx)
+            if missing:
+                print(
+                    f"[warn] {split_name}: {len(missing)} PIDs from the saved split "
+                    f"are absent from the currently loaded data. First few: {missing[:5]}"
+                )
+            return {pid_to_probe_idx[name] for name in names if name in pid_to_probe_idx}
+
+        p_tr_ids = _to_ids(train_names, "train")
+        p_va_ids = _to_ids(val_names, "validation")
+        p_te_ids = _to_ids(test_names, "test")
+        source = "manifest"
+
+        assigned_names = train_names | val_names | test_names
+        loaded_unassigned = [
+            str(pid_names[i]) for i in uniq_p
+            if str(pid_names[i]) not in assigned_names
+        ]
+        if loaded_unassigned:
+            print(
+                f"[warn] {len(loaded_unassigned)} loaded PIDs are not present in the "
+                "saved split and will be excluded. "
+                f"First few: {loaded_unassigned[:5]}"
+            )
+
+    if not p_tr_ids:
+        raise ValueError("Train split is empty after resolving loaded PIDs.")
+
+    overlap_tv = p_tr_ids & p_va_ids
+    overlap_tt = p_tr_ids & p_te_ids
+    overlap_vt = p_va_ids & p_te_ids
+    if overlap_tv or overlap_tt or overlap_vt:
+        raise ValueError(
+            "Split overlap detected after PID resolution: "
+            f"train/val={len(overlap_tv)}, "
+            f"train/test={len(overlap_tt)}, "
+            f"val/test={len(overlap_vt)}"
+        )
+
+    return p_tr_ids, p_va_ids, p_te_ids, source
+
+
 def build_channels_plus_emptyvoxels_with_neighbors(
     ctx_manager: ContextAtlasManager,
     ephys: np.ndarray,
@@ -369,21 +508,30 @@ def build_channels_plus_emptyvoxels_with_neighbors(
     batch_size_eval: int = 1024,
     shuffle_train: bool = True,
     seed: int = 0,
+    split_manifest: dict | None = None,
+    preprocessing_stats: dict | None = None,
+    return_preprocessing_stats: bool = False,
 ):
     """
-      • GRID DATASET = voxels that do NOT contain any ephys channels.
-      • RECORDED DATASET = per-channel samples (no voxel averaging):
-            one sample per (probe, channel) with valid xyz; context/allen are sampled at that xyz.
+    Build channel/grid datasets and the TRAIN-ONLY neighbor bank.
 
-    Context standardization: mean/std over ALL grid voxels (full atlas grid, same as before).
-    Ephys standardization: mean/std over TRAIN split of recorded channels only.
+    Release semantics
+    -----------------
+    - First training of a new vintage:
+        split_manifest=None, preprocessing_stats=None
+        -> create a deterministic probe split and compute preprocessing stats.
+    - Existing/released vintage:
+        split_manifest=<saved split>, preprocessing_stats=<saved channel_stats>
+        -> use those artifacts exactly; never regenerate the split or stats.
 
-    Returns:
-      train_loader, val_loader, test_loader, e_mean, e_std, ctx_mean, ctx_std
+    The function remains backward compatible: when
+    return_preprocessing_stats=False it returns the historical 9 values.
     """
 
-    # ----- 200 µm grid over the whole atlas -----
-    P_cell, Xh, Zh, Yh = ctx_manager.cell_pca.shape
+    # ------------------------------------------------------------------
+    # 200 µm context grid used for empty-voxel contrastive samples.
+    # ------------------------------------------------------------------
+    _, Xh, Zh, Yh = ctx_manager.cell_pca.shape
     sx, sy, sz = compute_grid_strides_200um(ctx_manager.bc)
 
     xs = np.arange(0, Xh, dtype=int)
@@ -396,202 +544,149 @@ def build_channels_plus_emptyvoxels_with_neighbors(
     N = xi.size
 
     ijk = np.stack([xi, yi, zi], axis=1)
-    xyz_m = ctx_manager.bc.i2xyz(ijk * 8).astype(np.float32)  # [N,3] meters
+    xyz_m = ctx_manager.bc.i2xyz(ijk * 8).astype(np.float32)
     xyz_m = mirror_xyz_to_left(xyz_m)
 
-    # Sample context for ALL voxels
-    allen_all, ctx_all = [], []
-    for i in range(N):
-        ctx = ctx_manager.sample_context_numpy_i(
-            np.array((xi[i], yi[i], zi[i]))[None, :], np.array((sx, sy, sz))
+    # Vectorized context sampling in manageable chunks.
+    ctx_parts = []
+    chunk = 100_000
+    grid_i = np.stack([xi, yi, zi], axis=1)
+    for start_i in range(0, N, chunk):
+        stop_i = min(N, start_i + chunk)
+        pack = ctx_manager.sample_context_numpy_i(
+            grid_i[start_i:stop_i],
+            np.array((sx, sy, sz)),
         )
-        ctx_all.append(concat_context(ctx["cell_pc"], ctx["gene_pc"])[0])
-        allen_all.append(ctx["allen_ix"][0])
+        ctx_parts.append(concat_context(pack["cell_pc"], pack["gene_pc"]))
+    ctx_all = np.concatenate(ctx_parts, axis=0).astype(np.float32)
 
-    ctx_all = np.asarray(ctx_all, dtype=np.float32)  # [N, F_ctx]
     F_e = int(ephys.shape[-1])
 
-    # --- mark voxels that have any ephys channels, to keep only "empty" ones for grid_ds ---
     has_eph = compute_voxel_with_ephys(ctx_manager, probe_positions, xi, yi, zi)
-    has_ctx = ~(ctx_all.sum(axis=1) == 0)
-
+    has_ctx = np.any(ctx_all != 0.0, axis=1)
     grid_mask = ~has_eph & has_ctx
 
-    # Context stats over ALL grid voxels (rec + non-rec) per your original rule
-    ctx_all_t = torch.from_numpy(ctx_all).float()
-    ctx_mean = ctx_all_t[grid_mask].mean(dim=0)
-    ctx_std = ctx_all_t[grid_mask].std(dim=0, unbiased=False).clamp_min(1e-6)
+    saved_stats = _coerce_preprocessing_stats(preprocessing_stats)
 
-    def _stdz_ctx(t):
-        mask = np.where(t.sum(axis=1) != 0)[0]
+    if saved_stats is None:
+        ctx_all_t = torch.from_numpy(ctx_all).float()
+        ctx_mean = ctx_all_t[grid_mask].mean(dim=0)
+        ctx_std = ctx_all_t[grid_mask].std(dim=0, unbiased=False).clamp_min(1e-6)
+    else:
+        ctx_mean = saved_stats["ctx_mean"]
+        ctx_std = saved_stats["ctx_std"]
+
+    def _stdz_ctx(t: torch.Tensor) -> torch.Tensor:
         t_clone = t.clone()
-        t_clone[mask] = (t[mask] - ctx_mean) / ctx_std
+        mask = torch.any(t != 0.0, dim=1)
+        if mask.any():
+            t_clone[mask] = (t[mask] - ctx_mean) / ctx_std
         return t_clone
 
-    # GRID DATASET (only voxels WITHOUT ephys)
     ctx_grid = _stdz_ctx(torch.from_numpy(ctx_all[grid_mask]).float())
     xyz_grid = torch.from_numpy(xyz_m[grid_mask]).float()
     grid_ds = GridDS(ctx_grid, xyz_grid, F_e)
 
-    # ----- RECORDED CHANNEL DATASET (per-channel; NO voxel averaging) -----
+    # ------------------------------------------------------------------
+    # Recorded channels.
+    # ------------------------------------------------------------------
     P, C, _ = probe_positions.shape
-    rec_ctx_list, rec_xyz_list, rec_ephys_list, rec_pid_list = [], [], [], []
+    rec_ctx_list = []
+    rec_xyz_list = []
+    rec_ephys_list = []
+    rec_pid_list = []
 
     for p in range(P):
-        xyz_p = probe_positions[p].astype(np.float32)  # [C,3]
-        eph_p = ephys[p].astype(np.float32)  # [C,F]
-        valid = ~(np.all(xyz_p == 0.0, axis=1))
+        xyz_p = probe_positions[p].astype(np.float32)
+        eph_p = ephys[p].astype(np.float32)
+
+        valid = (
+            np.isfinite(xyz_p).all(axis=1)
+            & ~np.all(xyz_p == 0.0, axis=1)
+        )
         if not valid.any():
             continue
 
-        xyz_valid = xyz_p[valid]  # [C_valid,3]
-        xyz_valid = mirror_xyz_to_left(xyz_valid)  # <<< add this
-
+        xyz_valid = mirror_xyz_to_left(xyz_p[valid])
         pack = ctx_manager.sample_context_numpy_m(xyz_valid, mode="clip")
-
-        ctx_p = np.concatenate([pack["cell_pc"], pack["gene_pc"]], axis=1).astype(
-            np.float32
-        )
-        eph_valid = eph_p[valid]
+        ctx_p = concat_context(pack["cell_pc"], pack["gene_pc"]).astype(np.float32)
 
         rec_ctx_list.append(ctx_p)
-        rec_xyz_list.append(xyz_valid)
-        rec_ephys_list.append(eph_valid)
-        rec_pid_list.append(p * np.ones(valid.sum(), dtype=np.float32))
+        rec_xyz_list.append(xyz_valid.astype(np.float32))
+        rec_ephys_list.append(eph_p[valid])
+        rec_pid_list.append(np.full(valid.sum(), p, dtype=np.int64))
 
-    if len(rec_ctx_list) == 0:
-        raise RuntimeError(
-            "No valid recorded channels found to build recorded dataset."
-        )
+    if not rec_ctx_list:
+        raise RuntimeError("No valid recorded channels found.")
 
-    rec_ctx = torch.from_numpy(
-        np.concatenate(rec_ctx_list, axis=0)
-    ).float()  # [Nc,F_ctx]
-    rec_xyz = torch.from_numpy(np.concatenate(rec_xyz_list, axis=0)).float()  # [Nc,3]
-    rec_ephys = torch.from_numpy(
-        np.concatenate(rec_ephys_list, axis=0)
-    ).float()  # [Nc,F_e]
-    rec_pids = torch.from_numpy(np.concatenate(rec_pid_list, axis=0)).float()  # [Nc,]
+    rec_ctx = torch.from_numpy(np.concatenate(rec_ctx_list, axis=0)).float()
+    rec_xyz = torch.from_numpy(np.concatenate(rec_xyz_list, axis=0)).float()
+    rec_ephys = torch.from_numpy(np.concatenate(rec_ephys_list, axis=0)).float()
+    rec_pids_i = np.concatenate(rec_pid_list, axis=0).astype(np.int64)
+    rec_pids = torch.from_numpy(rec_pids_i).float()
 
-    # Standardize context (use global grid stats)
     rec_ctx_std = _stdz_ctx(rec_ctx)
-
-    # ----- Split RECORDED by PROBE (probe-level split) -----
-    # rec_pids is [Nc] float right now; convert to int probe ids
-    rec_pids_i = rec_pids.to(torch.int64).cpu().numpy()  # [Nc]
 
     uniq_p = np.array(sorted(np.unique(rec_pids_i).astype(int)))
 
-    if pid_names is not None:
+    if pid_names is None:
+        pid_names = np.asarray(
+            [str(i) for i in range(int(uniq_p.max()) + 1)],
+            dtype=str,
+        )
+    else:
         pid_names = np.asarray(pid_names).astype(str)
         if len(pid_names) < int(uniq_p.max()) + 1:
             raise ValueError(
-                f"pid_names length={len(pid_names)} is too short for max probe index={uniq_p.max()}"
-            )
-    else:
-        pid_names = np.asarray(
-            [str(i) for i in range(int(uniq_p.max()) + 1)], dtype=str
-        )
-
-    def _read_pid_txt(path):
-        path = Path(path)
-        with open(path, "r") as f:
-            return [line.strip() for line in f if line.strip()]
-
-    def _pid_strings_to_probe_indices(pid_list, *, split_name):
-        pid_to_probe_idx = {str(pid_names[i]): int(i) for i in uniq_p}
-
-        ids = []
-        missing = []
-
-        for pid in pid_list:
-            pid = str(pid).strip()
-            if pid in pid_to_probe_idx:
-                ids.append(pid_to_probe_idx[pid])
-            else:
-                missing.append(pid)
-
-        if len(missing) > 0:
-            print(
-                f"[warn] {split_name}: {len(missing)} pids from txt were not found "
-                f"in loaded data. First few: {missing[:5]}"
+                f"pid_names length={len(pid_names)} is too short for "
+                f"max probe index={uniq_p.max()}"
             )
 
-        return set(ids)
+    p_tr_ids, p_va_ids, p_te_ids, split_source = _resolve_probe_split(
+        uniq_p=uniq_p,
+        pid_names=pid_names,
+        split_manifest=split_manifest,
+        seed=seed,
+    )
 
-    rng = np.random.default_rng(seed)
-    shuffled = rng.permutation(uniq_p)
-
-    p_tr = 0.7
-    p_va = 0.1
-
-    nP = len(shuffled)
-    n_tr_p = int(round(p_tr * nP))
-    n_va_p = int(round(p_va * nP))
-
-    n_tr_p = int(np.clip(n_tr_p, 1, nP))
-    n_va_p = int(np.clip(n_va_p, 0, nP - n_tr_p))
-
-    p_tr_ids = set(shuffled[:n_tr_p].astype(int).tolist())
-    p_va_ids = set(shuffled[n_tr_p : n_tr_p + n_va_p].astype(int).tolist())
-    p_te_ids = set(shuffled[n_tr_p + n_va_p :].astype(int).tolist())
-
-    # safety checks
-    all_split_ids = set(p_tr_ids) | set(p_va_ids) | set(p_te_ids)
-
-    if len(p_tr_ids) == 0:
-        raise ValueError("Train split is empty.")
-    if len(p_te_ids) == 0:
-        print("[warn] Test split is empty.")
-
-    overlap_tv = set(p_tr_ids) & set(p_va_ids)
-    overlap_tt = set(p_tr_ids) & set(p_te_ids)
-    overlap_vt = set(p_va_ids) & set(p_te_ids)
-
-    if overlap_tv or overlap_tt or overlap_vt:
-        raise ValueError(
-            f"Split overlap detected: "
-            f"train/val={len(overlap_tv)}, train/test={len(overlap_tt)}, val/test={len(overlap_vt)}"
-        )
-
-    missing_loaded = set(uniq_p.tolist()) - all_split_ids
-    if len(missing_loaded) > 0:
-        print(
-            f"[warn] {len(missing_loaded)} loaded probes are not assigned to any split."
-        )
-
-    # map probe split -> row indices
     I_tr = np.flatnonzero(np.isin(rec_pids_i, list(p_tr_ids)))
     I_va = np.flatnonzero(np.isin(rec_pids_i, list(p_va_ids)))
     I_te = np.flatnonzero(np.isin(rec_pids_i, list(p_te_ids)))
 
-    # Compute clipping thresholds from TRAIN only
-    rec_ephys_low_pctl = torch.tensor(
-        [
-            np.percentile(rec_ephys[I_tr, feat_ind].cpu().numpy(), 0.5)
-            for feat_ind in range(rec_ephys.shape[1])
-        ],
-        dtype=rec_ephys.dtype,
-    )
+    # ------------------------------------------------------------------
+    # Frozen or newly-computed ephys preprocessing.
+    # ------------------------------------------------------------------
+    if saved_stats is None:
+        rec_ephys_low_pctl = torch.tensor(
+            [
+                np.percentile(rec_ephys[I_tr, j].cpu().numpy(), 0.5)
+                for j in range(rec_ephys.shape[1])
+            ],
+            dtype=rec_ephys.dtype,
+        )
+        rec_ephys_high_pctl = torch.tensor(
+            [
+                np.percentile(rec_ephys[I_tr, j].cpu().numpy(), 99.5)
+                for j in range(rec_ephys.shape[1])
+            ],
+            dtype=rec_ephys.dtype,
+        )
+    else:
+        rec_ephys_low_pctl = saved_stats["rec_ephys_low_pctl"]
+        rec_ephys_high_pctl = saved_stats["rec_ephys_high_pctl"]
 
-    rec_ephys_high_pctl = torch.tensor(
-        [
-            np.percentile(rec_ephys[I_tr, feat_ind].cpu().numpy(), 99.5)
-            for feat_ind in range(rec_ephys.shape[1])
-        ],
-        dtype=rec_ephys.dtype,
-    )
-
-    # Clip all splits using train thresholds
     rec_ephys = torch.maximum(
-        torch.minimum(rec_ephys, rec_ephys_high_pctl), rec_ephys_low_pctl
+        torch.minimum(rec_ephys, rec_ephys_high_pctl),
+        rec_ephys_low_pctl,
     )
 
-    # Now compute ephys stats from CLIPPED TRAIN data
-    e_mean = rec_ephys[I_tr].mean(dim=0)
-    e_std = rec_ephys[I_tr].std(dim=0, unbiased=False).clamp_min(1e-6)
+    if saved_stats is None:
+        e_mean = rec_ephys[I_tr].mean(dim=0)
+        e_std = rec_ephys[I_tr].std(dim=0, unbiased=False).clamp_min(1e-6)
+    else:
+        e_mean = saved_stats["e_mean"]
+        e_std = saved_stats["e_std"]
 
-    # Standardize all splits
     rec_ephys_std = (rec_ephys - e_mean) / e_std
 
     rec_train = RecDS(
@@ -606,13 +701,10 @@ def build_channels_plus_emptyvoxels_with_neighbors(
 
     train_concat = ConcatDataset([rec_train, grid_ds])
 
-    # =========================
-    # Neighbor bank (TRAIN ONLY) built from REC arrays (same indexing!)
-    # =========================
+    # TRAIN ONLY neighbor bank.
     bank_xyz = rec_xyz[I_tr].cpu().numpy()
     bank_feat_std = rec_ephys_std[I_tr].cpu().numpy()
     bank_pid = rec_pids[I_tr].cpu().numpy()
-
     nn_bank = ChannelNN(bank_xyz)
 
     collate = NeighborCollate(
@@ -626,16 +718,30 @@ def build_channels_plus_emptyvoxels_with_neighbors(
         radius_um=RADIUS_UM,
     )
 
-    split_info = dict(
-        p_tr_ids=sorted([int(x) for x in p_tr_ids]),
-        p_va_ids=sorted([int(x) for x in p_va_ids]),
-        p_te_ids=sorted([int(x) for x in p_te_ids]),
-        p_tr_names=[str(pid_names[int(i)]) for i in sorted(p_tr_ids)],
-        p_va_names=[str(pid_names[int(i)]) for i in sorted(p_va_ids)],
-        p_te_names=[str(pid_names[int(i)]) for i in sorted(p_te_ids)],
-    )
+    # Attach release-defining neighbor settings so arbitrary-XYZ inference
+    # does not need to hard-code them.
+    collate.radius_um = int(RADIUS_UM)
+    collate.m_max = int(M_MAX)
 
-    # original mixed train loader for base model
+    split_info = {
+        "source": split_source,
+        "p_tr_ids": sorted(int(x) for x in p_tr_ids),
+        "p_va_ids": sorted(int(x) for x in p_va_ids),
+        "p_te_ids": sorted(int(x) for x in p_te_ids),
+        "p_tr_names": [str(pid_names[i]) for i in sorted(p_tr_ids)],
+        "p_va_names": [str(pid_names[i]) for i in sorted(p_va_ids)],
+        "p_te_names": [str(pid_names[i]) for i in sorted(p_te_ids)],
+    }
+
+    preprocessing_stats_out = {
+        "rec_ephys_low_pctl": rec_ephys_low_pctl.detach().cpu().numpy(),
+        "rec_ephys_high_pctl": rec_ephys_high_pctl.detach().cpu().numpy(),
+        "e_mean": e_mean.detach().cpu().numpy(),
+        "e_std": e_std.detach().cpu().numpy(),
+        "ctx_mean": ctx_mean.detach().cpu().numpy(),
+        "ctx_std": ctx_std.detach().cpu().numpy(),
+    }
+
     train_loader = DataLoader(
         train_concat,
         batch_size=batch_size_train,
@@ -645,8 +751,6 @@ def build_channels_plus_emptyvoxels_with_neighbors(
         drop_last=False,
         collate_fn=collate,
     )
-
-    # recorded-only train loader for confidence training
     conf_train_loader = DataLoader(
         rec_train,
         batch_size=batch_size_train,
@@ -656,7 +760,6 @@ def build_channels_plus_emptyvoxels_with_neighbors(
         drop_last=False,
         collate_fn=collate,
     )
-
     val_loader = DataLoader(
         rec_val,
         batch_size=batch_size_eval,
@@ -676,9 +779,9 @@ def build_channels_plus_emptyvoxels_with_neighbors(
         collate_fn=collate,
     )
 
-    return (
-        train_loader,  # mixed, for base model
-        conf_train_loader,  # recorded-only, for confidence model
+    base_return = (
+        train_loader,
+        conf_train_loader,
         val_loader,
         test_loader,
         e_mean,
@@ -687,6 +790,105 @@ def build_channels_plus_emptyvoxels_with_neighbors(
         ctx_std,
         split_info,
     )
+    if return_preprocessing_stats:
+        return base_return + (preprocessing_stats_out,)
+    return base_return
+
+
+def build_training_neighbor_bank_from_release(
+    *,
+    pid_names,
+    ephys: np.ndarray,
+    probe_positions: np.ndarray,
+    split_manifest: dict,
+    preprocessing_stats: dict,
+    radius_um: int,
+    m_max: int,
+):
+    """
+    Lightweight inference-only reconstruction of the released TRAIN neighbor bank.
+
+    Unlike build_channels_plus_emptyvoxels_with_neighbors(), this does not build
+    the 200 µm empty-voxel training dataset. It is therefore preferred for dense
+    atlas inference.
+    """
+    stats = _coerce_preprocessing_stats(preprocessing_stats)
+    if stats is None:
+        raise ValueError("preprocessing_stats is required for released inference.")
+
+    pid_names = np.asarray(pid_names).astype(str)
+    train_names = {str(x) for x in split_manifest.get("train_pids", [])}
+    val_names = {str(x) for x in split_manifest.get("validation_pids", [])}
+    test_names = {str(x) for x in split_manifest.get("test_pids", [])}
+
+    overlap = (
+        (train_names & val_names)
+        | (train_names & test_names)
+        | (val_names & test_names)
+    )
+    if overlap:
+        raise ValueError(
+            f"Saved split contains overlapping PIDs: {sorted(overlap)[:5]}"
+        )
+
+    loaded = set(pid_names.tolist())
+    missing_train = sorted(train_names - loaded)
+    if missing_train:
+        raise ValueError(
+            f"{len(missing_train)} saved training PIDs are absent from loaded data. "
+            f"First few: {missing_train[:5]}"
+        )
+
+    low = stats["rec_ephys_low_pctl"].cpu().numpy()
+    high = stats["rec_ephys_high_pctl"].cpu().numpy()
+    e_mean = stats["e_mean"].cpu().numpy()
+    e_std = stats["e_std"].cpu().numpy()
+
+    xyz_parts = []
+    feat_parts = []
+    pid_parts = []
+
+    for p, pid in enumerate(pid_names):
+        if str(pid) not in train_names:
+            continue
+
+        xyz_p = np.asarray(probe_positions[p], dtype=np.float32)
+        eph_p = np.asarray(ephys[p], dtype=np.float32)
+        valid = (
+            np.isfinite(xyz_p).all(axis=1)
+            & ~np.all(xyz_p == 0.0, axis=1)
+        )
+        if not valid.any():
+            continue
+
+        xyz_valid = mirror_xyz_to_left(xyz_p[valid])
+        eph_valid = np.clip(eph_p[valid], low[None, :], high[None, :])
+        eph_std = (eph_valid - e_mean[None, :]) / e_std[None, :]
+
+        xyz_parts.append(xyz_valid.astype(np.float32))
+        feat_parts.append(eph_std.astype(np.float32))
+        pid_parts.append(np.full(valid.sum(), p, dtype=np.float32))
+
+    if not xyz_parts:
+        raise RuntimeError("Released training neighbor bank is empty.")
+
+    bank_xyz = np.concatenate(xyz_parts, axis=0)
+    bank_feat = np.concatenate(feat_parts, axis=0)
+    bank_pid = np.concatenate(pid_parts, axis=0)
+
+    print(
+        f"[neighbor bank] {len(train_names)} released training PIDs, "
+        f"{len(bank_xyz):,} valid training channels; validation/test leakage=0"
+    )
+
+    return {
+        "bank_xyz": bank_xyz,
+        "bank_feat": bank_feat,
+        "bank_pid": bank_pid,
+        "nn_bank": ChannelNN(bank_xyz),
+        "radius_um": int(radius_um),
+        "m_max": int(m_max),
+    }, stats["e_mean"], stats["e_std"], stats["ctx_mean"], stats["ctx_std"]
 
 
 class RecDS(Dataset):
@@ -1341,8 +1543,8 @@ def _predict_ctx_and_ephys_for_xyz(
         handles["bank_pid"],
         handles["nn_bank"],
         e_feat_dim=F_e,
-        M_max=8,
-        radius_um=500,
+        M_max=int(handles.get("m_max", 8)),
+        radius_um=float(handles.get("radius_um", 500)),
     )
 
     dl = DataLoader(
