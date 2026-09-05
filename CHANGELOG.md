@@ -25,6 +25,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Deprecated
 - `compute_features`, `online_feature_computation`, and `load_data_from_pid` in `ephysatlas.feature_computation` are deprecated in favor of `compute_features_from_pid` / `compute_features_from_file` (and the OOP calculators) and will be removed in a future version.
 
+### Fixed
+- `spike_triggered_population_coupling_windowed`: correct for the 2x redundancy introduced by its overlapping (50%-hop) accumulation windows, previously left uncorrected in the raw `stpc` magnitude
+
 ## [0.6.0]
 
 ### Changed

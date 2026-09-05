@@ -419,8 +419,8 @@ def spike_triggered_population_coupling_windowed(spikes, df_clusters, file_stpc=
     - sums neighbours' raw (non-mean-centred) counts and divides by their *summed firing
       rate* rather than averaging their mean-centred counts by neighbour count;
     - accumulates the correlation over overlapping (50%-hop) windows instead of a single
-      pass over the whole recording, which can smooth over non-stationary firing rates
-      at the cost of double-counting most bins;
+      pass over the whole recording (rescaled by the resulting 2x redundancy), which can
+      smooth over non-stationary firing rates;
     - normalises the result by firing rate (Hz) instead of spike count, and uses
       ``abs(stpc)`` as the centre-of-mass weight instead of the signed curve;
     - restricts neighbours to `lateral_um`/`axial_um` (2-D, probe-local) coordinates and a
@@ -481,6 +481,8 @@ def spike_triggered_population_coupling_windowed(spikes, df_clusters, file_stpc=
                 )
                 cc = scipy.signal.correlate(binned_spikes[ic], popestimate, mode="same")
                 stpc[ic_out] += cc[slice(*icenter)]
+        # hardcoded 50% overlap (`nsw // 2` above) sums each interior bin over 2 windows
+        stpc /= 2
         stpc = scipy.signal.sosfiltfilt(sos, stpc)
         stpc = stpc - np.mean(stpc, axis=1)[:, np.newaxis]
         stpc = stpc / firing_rates[i_good, np.newaxis]
