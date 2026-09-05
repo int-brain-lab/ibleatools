@@ -38,13 +38,15 @@ from ephysatlas.spatial_encoder.utils import (
 
 
 def build_neighbor_handles(train_loader) -> dict:
-    """Extract the train-neighbor bank from the DataLoader collate function."""
+    """Extract the TRAIN-only neighbor bank and its inference settings."""
     collate = train_loader.collate_fn
     return {
         "bank_xyz": collate.bank_xyz,
         "bank_feat": collate.bank_feat,
         "bank_pid": collate.bank_pid,
         "nn_bank": collate.nn,
+        "radius_um": int(getattr(collate, "radius_um", round(collate.r_m * 1e6))),
+        "m_max": int(getattr(collate, "m_max", collate.M)),
     }
 
 
@@ -76,8 +78,8 @@ class RunConfig:
     # create a tag whose name is exactly `vintage`.
     upload_after_training: bool = False
     hf_private_repo: bool = False
-    publish_existing_release: bool = True,
-    replace_existing_hf_tag: bool = False,
+    publish_existing_release: bool = False
+    replace_existing_hf_tag: bool = False
 
     # Evaluation controls.
     evaluate_channel_model: bool = True
@@ -334,9 +336,9 @@ def main(cfg: Optional[RunConfig] = None):
     cfg = cfg or RunConfig(
         vintage="2026_W26",
         train_models=False,
-        publish_existing_release=True,
+        publish_existing_release=False,
         hf_repo_id="AlonSaguy/ephys-atlas-models",
-        replace_existing_hf_tag=True,
+        replace_existing_hf_tag=False,
     )
     torch.manual_seed(cfg.seed)
     np.random.seed(cfg.seed)
