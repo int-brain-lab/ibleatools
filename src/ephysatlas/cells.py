@@ -393,12 +393,13 @@ def spike_triggered_population_coupling_df(
     )
 
 
-def get_neighbours_members_legacy(df_clusters, radius_um):
+def get_neighbours_members_windowed(df_clusters, radius_um):
     """
-    Original (pre-fix) implementation, kept only so results can be compared side by side
-    against :func:`spike_triggered_population_coupling_df` on real data. Do not use for
-    new work -- see :func:`spike_triggered_population_coupling_legacy` for what it gets
-    wrong.
+    Neighbour helper for :func:`spike_triggered_population_coupling_windowed`.
+
+    Same 2-D radius rule as :func:`get_neighbours_members`, but built directly from a
+    `df_clusters`-style DataFrame and using a strict "<" (rather than "<=") radius
+    comparison.
     """
     xy = df_clusters["lateral_um"] + 1j * df_clusters["axial_um"]
     xy, xyt = np.meshgrid(xy, xy)
@@ -408,16 +409,18 @@ def get_neighbours_members_legacy(df_clusters, radius_um):
     return neighbours
 
 
-def spike_triggered_population_coupling_legacy(spikes, df_clusters, file_stpc=None):
+def spike_triggered_population_coupling_windowed(spikes, df_clusters, file_stpc=None):
     """
-    Original (pre-fix) implementation of spike-triggered population coupling, kept only
-    for side-by-side comparison against :func:`spike_triggered_population_coupling_df` on
-    real data. Do not use for new work; relative to the Methods of Bimbard et al. 2025 it:
+    Alternative, windowed estimator of spike-triggered population coupling, kept
+    alongside :func:`spike_triggered_population_coupling_df` as a distinct method rather
+    than a straight reproduction of it. Relative to the Methods of Bimbard et al. 2025,
+    this implementation:
 
     - sums neighbours' raw (non-mean-centred) counts and divides by their *summed firing
       rate* rather than averaging their mean-centred counts by neighbour count;
-    - double-counts most bins via overlapping (50%-hop) correlation windows instead of a
-      single pass over the whole recording;
+    - accumulates the correlation over overlapping (50%-hop) windows instead of a single
+      pass over the whole recording, which can smooth over non-stationary firing rates
+      at the cost of double-counting most bins;
     - normalises the result by firing rate (Hz) instead of spike count, and uses
       ``abs(stpc)`` as the centre-of-mass weight instead of the signed curve;
     - restricts neighbours to `lateral_um`/`axial_um` (2-D, probe-local) coordinates and a
@@ -449,7 +452,7 @@ def spike_triggered_population_coupling_legacy(spikes, df_clusters, file_stpc=No
     sos = scipy.signal.butter(3, 20, "lp", fs=1 / binsize, output="sos")
 
     sb = ((st - tbounds[0]) / binsize).astype(int)
-    neighbours = get_neighbours_members_legacy(df_clusters, radius_um)
+    neighbours = get_neighbours_members_windowed(df_clusters, radius_um)
     nsw = int(wl / binsize)
     icenter = np.searchsorted((np.arange(nsw) - nsw // 2) * binsize, (-lag, lag))
 
