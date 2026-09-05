@@ -46,6 +46,7 @@ _ACG3D_FILES = [
 _LFP_AGGREGATES_FILES = {
     "default": "lf_compressed_all.h5",  # epsilon=150, alpha=28, ~23 GB
     "aggressive": "lf_compressed_aggressive_all.h5",  # epsilon=450, alpha=96, ~12 GB
+    "mild": "lf_compressed_mild_all.h5",  # epsilon=100, alpha=14, ~32 GB
 }
 
 
