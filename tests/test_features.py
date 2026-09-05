@@ -1,5 +1,6 @@
 import torch
 from pathlib import Path
+import tempfile
 import unittest
 
 import numpy as np
@@ -121,20 +122,34 @@ class TestAPFeatures(unittest.TestCase):
 
 class TestWaveformFeatures(unittest.TestCase):
     def setUp(self):
-        self.data_ap = np.load(FIXTURE_PATH / "ap_destriped.npy").astype(np.float32)
+        """Load a short, eight-channel slice for the DARTsort CPU smoke test."""
+        self.data_ap = np.load(FIXTURE_PATH / "ap_destriped.npy").astype(np.float32)[
+            :8, :30_000
+        ]
+        trace_header = neuropixel.trace_header(version=1)
+        self.geometry = {
+            "x": np.asarray(trace_header["x"])[:8],
+            "y": np.asarray(trace_header["y"])[:8],
+        }
 
-    @unittest.skip(
-        "dartsort incompatible with current spikeinterface (_recording_segments API removed)"
-    )
     def test_ap(self):
-        df, waveforms = ephysatlas.features.spikes(
-            self.data_ap[:, 10_000:11_000],
-            fs=30_000,
-            geometry=neuropixel.trace_header(version=1),
-            return_waveforms=True,
-        )
+        """Run the upgraded DARTsort stack on one second of eight-channel data."""
+        with tempfile.TemporaryDirectory(prefix="dartsort_smoke_") as scratch_dir:
+            df, waveforms = ephysatlas.features.spikes(
+                self.data_ap,
+                fs=30_000,
+                geometry=self.geometry,
+                return_waveforms=True,
+                scratch_dir=scratch_dir,
+                chunk_length_samples=5_000,
+                n_jobs=0,
+            )
         self.assertTrue(df.shape[0] == waveforms["df_spikes"]["channel"].nunique())
         self.assertEqual(4, len(waveforms.keys()))
+        self.assertEqual(waveforms["raw"].shape[1], 121)
+        self.assertEqual(waveforms["denoised"].shape[1], 121)
+        # Exact count for this fixture is 81, so to catch any deviations
+        self.assertTrue(60 < df["spike_count"].sum() < 110)
 
 
 class TestTransformDenoiseFeatures(unittest.TestCase):

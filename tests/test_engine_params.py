@@ -14,7 +14,6 @@ data per the testing convention:
    it enter the median groupby or the denoise path.
 """
 
-import importlib.util
 import inspect
 import tempfile
 import unittest
@@ -147,6 +146,11 @@ class TestFeatureParamsDict(unittest.TestCase):
         self.assertIsInstance(fp.csd, CsdParams)
         self.assertIs(fp.csd.scale, False)
         self.assertIs(fp.lf.decay_features, False)
+
+    def test_from_dict_waveforms_njobs(self):
+        fp = FeatureParams.from_dict({"waveforms": {"n_jobs": 1}})
+        self.assertEqual(fp.waveforms.n_jobs, 1)
+        self.assertEqual(WaveformParams().n_jobs, 0)  # default preserved
 
     def test_options_normalizes_dict_feature_params(self):
         opts = FeatureComputationOptions(feature_params={"csd": {"scale": False}})
@@ -292,16 +296,11 @@ class TestAggregationChannelMerge(unittest.TestCase):
         self.assertIn("rms_lf_no_car", denoise_cols)
 
 
-class TestWaveformNjobs(unittest.TestCase):
-    """Configurable dartsort ``n_jobs`` via FeatureParams.waveforms."""
+class TestDartsortAdapter(unittest.TestCase):
+    """Adapting ibleatools to the DARTsort 0.5 subtraction API."""
 
-    def test_from_dict_waveforms_njobs(self):
-        fp = FeatureParams.from_dict({"waveforms": {"n_jobs": 1}})
-        self.assertEqual(fp.waveforms.n_jobs, 1)
-        self.assertEqual(WaveformParams().n_jobs, 0)  # default preserved
-
-    @unittest.skipUnless(importlib.util.find_spec("dartsort"), "dartsort not installed")
     def test_njobs_forwarded_to_dartsort_subtract(self):
+        """Forward worker counts through the current DARTsort computation config."""
         # DartParameters.n_jobs must reach dartsort.subtract (previously the passed
         # params object was silently dropped, so no dartsort param was applied).
         import dartsort
@@ -310,8 +309,8 @@ class TestWaveformNjobs(unittest.TestCase):
 
         captured = {}
 
-        def fake_subtract(*args, **kwargs):
-            captured["n_jobs"] = kwargs.get("n_jobs")
+        def fake_subtract(**kwargs):
+            captured.update(kwargs)
             raise RuntimeError("__stop__")  # short-circuit before real subtraction
 
         data = np.random.RandomState(0).randn(4, 3000).astype("float32")
@@ -319,19 +318,98 @@ class TestWaveformNjobs(unittest.TestCase):
             "x": np.array([0.0, 32.0, 0.0, 32.0]),
             "y": np.array([0.0, 0.0, 20.0, 20.0]),
         }
-        scratch = tempfile.mkdtemp(prefix="dart_njobs_")
-        for n_jobs in (0, 1):
-            captured.clear()
+        with tempfile.TemporaryDirectory(prefix="dart_njobs_") as scratch:
+            for n_jobs in (0, 1):
+                captured.clear()
+                with patch.object(dartsort, "subtract", fake_subtract):
+                    with self.assertRaises(RuntimeError):
+                        features.dart_subtraction_numpy(
+                            data,
+                            30000.0,
+                            geometry,
+                            params=DartParameters(n_jobs=n_jobs),
+                            scratch_dir=scratch,
+                        )
+
+                # n_jobs is the only thing this test owns; the rest of the config
+                # is pinned as literals in features.py, so asserting it here would
+                # only restate those literals.
+                self.assertEqual(captured["computation_cfg"].n_jobs_cpu, n_jobs)
+                self.assertEqual(captured["computation_cfg"].n_jobs_gpu, n_jobs)
+
+    def test_current_dartsort_result_and_waveform_file_are_adapted(self):
+        """Adapt DARTsort 0.5's sorting return without running a real peel."""
+        import dartsort
+        import h5py
+
+        class FakeSorting:
+            """Small stand-in for the DARTsort sorting returned by subtraction."""
+
+            times_samples = np.array([10, 20])
+            channels = np.array([1, 2])
+            denoised_ptp_amplitudes = np.array([4.0, 5.0])
+            point_source_localizations = np.array(
+                [[1.0, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0]]
+            )
+            parent_h5_path = None
+
+        def fake_subtract(*, output_dir, **_kwargs):
+            """Create only the tiny HDF5 datasets consumed by ibleatools."""
+            output_dir.mkdir(parents=True)
+            FakeSorting.parent_h5_path = output_dir / "subtraction.h5"
+            with h5py.File(FakeSorting.parent_h5_path, "w") as h5file:
+                h5file.create_dataset(
+                    "collisioncleaned_waveforms", data=np.ones((2, 3, 4))
+                )
+                h5file.create_dataset("denoised_waveforms", data=np.zeros((2, 3, 4)))
+                h5file.create_dataset("channel_index", data=np.arange(4))
+            return FakeSorting()
+
+        data = np.random.RandomState(0).randn(4, 300).astype("float32")
+        geometry = {
+            "x": np.array([0.0, 32.0, 0.0, 32.0]),
+            "y": np.array([0.0, 0.0, 20.0, 20.0]),
+        }
+        with tempfile.TemporaryDirectory(prefix="dart_result_") as scratch:
             with patch.object(dartsort, "subtract", fake_subtract):
-                with self.assertRaises(RuntimeError):
+                spikes, waveforms = features.dart_subtraction_numpy(
+                    data, 30000.0, geometry, scratch_dir=scratch
+                )
+
+            self.assertEqual(spikes["zloc"].tolist(), [3.0, 7.0])
+            self.assertEqual(waveforms["raw"].shape, (2, 3, 4))
+            self.assertEqual(waveforms["denoised"].shape, (2, 3, 4))
+            self.assertTrue((waveforms["raw"] == 1).all())
+            self.assertTrue((waveforms["denoised"] == 0).all())
+            self.assertEqual(list(Path(scratch).iterdir()), [])
+
+    def test_waveform_config_accepts_calibrated_sampling_frequency(self):
+        """Handle IBL sampling rates just above nominal 30 kHz."""
+        import dartsort
+
+        captured = {}
+
+        def fake_subtract(**kwargs):
+            """Capture the config after construction, then stop the test peel."""
+            captured.update(kwargs)
+            raise RuntimeError("__stop__")
+
+        fs = 30_000.243651529192
+        data = np.random.RandomState(0).randn(4, 300).astype("float32")
+        geometry = {
+            "x": np.array([0.0, 32.0, 0.0, 32.0]),
+            "y": np.array([0.0, 0.0, 20.0, 20.0]),
+        }
+        with tempfile.TemporaryDirectory(prefix="dart_calibrated_fs_") as scratch:
+            with patch.object(dartsort, "subtract", fake_subtract):
+                with self.assertRaisesRegex(RuntimeError, "__stop__"):
                     features.dart_subtraction_numpy(
-                        data,
-                        30000.0,
-                        geometry,
-                        params=DartParameters(n_jobs=n_jobs),
-                        scratch_dir=scratch,
+                        data, fs, geometry, scratch_dir=scratch
                     )
-            self.assertEqual(captured["n_jobs"], n_jobs)
+
+        waveform_cfg = captured["waveform_cfg"]
+        self.assertEqual(waveform_cfg.trough_offset_samples(fs), 42)
+        self.assertEqual(waveform_cfg.spike_length_samples(fs), 121)
 
 
 if __name__ == "__main__":
