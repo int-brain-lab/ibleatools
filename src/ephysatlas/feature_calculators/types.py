@@ -171,9 +171,21 @@ class WaveformParams:
             between calls). ``1`` runs in a single worker subprocess (frees GPU
             memory when it exits, but requires a working multiprocessing
             environment). Defaults to ``0``.
+        detection_threshold (float): Peak detection threshold, in units of channel
+            RMS. Defaults to ``4.0``.
+        spatial_dedup_radius_um (float): Radius in micrometres within which only
+            the largest simultaneous peak is kept. Defaults to ``150.0``.
+        positive_temporal_dedup_radius_samples (int): Samples around a trough in
+            which positive peaks are suppressed. Defaults to ``7``.
+        residnorm_decrease_threshold (float): Minimum residual-norm decrease for a
+            detected spike to be subtracted. Defaults to ``3.162`` (sqrt(10)).
     """
 
     n_jobs: int = 0
+    detection_threshold: float = 4.0
+    spatial_dedup_radius_um: float = 150.0
+    positive_temporal_dedup_radius_samples: int = 7
+    residnorm_decrease_threshold: float = 3.162
 
 
 @dataclass(frozen=True)

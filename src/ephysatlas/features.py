@@ -217,11 +217,23 @@ class DartParameters(pydantic.BaseModel):
         n_jobs (int): DARTsort worker count used to build its
             ``ComputationConfig``. ``0`` runs in the main process; positive values
             select that many workers. Defaults to 0.
+        detection_threshold (float): Peak detection threshold, in units of channel
+            RMS. Defaults to 4.0.
+        spatial_dedup_radius_um (float): Radius in micrometres within which only the
+            largest simultaneous peak is kept. Defaults to 150.0.
+        positive_temporal_dedup_radius_samples (int): Samples around a trough in
+            which positive peaks are suppressed. Defaults to 7.
+        residnorm_decrease_threshold (float): Minimum residual-norm decrease for a
+            detected spike to be subtracted. Defaults to 3.162 (sqrt(10)).
     """
 
     localization_radius: pydantic.PositiveFloat = 150
     chunk_length_samples: pydantic.PositiveInt = 2**15
     trough_offset: pydantic.PositiveInt = 42
+    detection_threshold: pydantic.PositiveFloat = 4.0
+    spatial_dedup_radius_um: pydantic.PositiveFloat = 150.0
+    positive_temporal_dedup_radius_samples: pydantic.PositiveInt = 7
+    residnorm_decrease_threshold: pydantic.PositiveFloat = 3.162
     scratch_dir: Path | str | None = pydantic.Field(
         default=None,
         description="Scratch directory for temporary files. If None, will use system defaults.",
@@ -1253,12 +1265,12 @@ def dart_subtraction_numpy(data, fs, geometry, params=None, scratch_dir=None, **
         # This is behaviour change from older version of dartsort
         # In the older version, there was gradual reduction of threshold.
         # Not it is a fixed threshold
-        detection_threshold=4.0,  # It checks for 4 sigma deviation
+        detection_threshold=params.detection_threshold,  # sigma deviation
         realign_to_denoiser=False,
         relative_peak_radius_um=None,
-        spatial_dedup_radius_um=150.0,
-        positive_temporal_dedup_radius_samples=7,
-        residnorm_decrease_threshold=3.162,
+        spatial_dedup_radius_um=params.spatial_dedup_radius_um,
+        positive_temporal_dedup_radius_samples=params.positive_temporal_dedup_radius_samples,
+        residnorm_decrease_threshold=params.residnorm_decrease_threshold,
         trough_priority=None,
         whiten=False,
     )

@@ -152,6 +152,11 @@ class TestFeatureParamsDict(unittest.TestCase):
         self.assertEqual(fp.waveforms.n_jobs, 1)
         self.assertEqual(WaveformParams().n_jobs, 0)  # default preserved
 
+    def test_from_dict_waveforms_detection_threshold(self):
+        fp = FeatureParams.from_dict({"waveforms": {"detection_threshold": 5.0}})
+        self.assertEqual(fp.waveforms.detection_threshold, 5.0)
+        self.assertEqual(fp.waveforms.n_jobs, 0)  # other fields keep defaults
+
     def test_options_normalizes_dict_feature_params(self):
         opts = FeatureComputationOptions(feature_params={"csd": {"scale": False}})
         self.assertIsInstance(opts.feature_params, FeatureParams)
@@ -298,6 +303,50 @@ class TestAggregationChannelMerge(unittest.TestCase):
 
 class TestDartsortAdapter(unittest.TestCase):
     """Adapting ibleatools to the DARTsort 0.5 subtraction API."""
+
+    def test_subtraction_params_forwarded_to_dartsort_subtract(self):
+        """Expose the subtraction knobs without changing their previous values."""
+        import dartsort
+
+        from ephysatlas.features import DartParameters
+
+        # Defaults must equal the literals these parameters replaced.
+        defaults = DartParameters()
+        self.assertEqual(defaults.detection_threshold, 4.0)
+        self.assertEqual(defaults.spatial_dedup_radius_um, 150.0)
+        self.assertEqual(defaults.positive_temporal_dedup_radius_samples, 7)
+        self.assertAlmostEqual(defaults.residnorm_decrease_threshold, 3.162)
+
+        captured = {}
+
+        def fake_subtract(**kwargs):
+            captured.update(kwargs)
+            raise RuntimeError("__stop__")
+
+        # Non-default values, so a dropped or mis-wired field cannot pass.
+        params = DartParameters(
+            detection_threshold=6.0,
+            spatial_dedup_radius_um=90.0,
+            positive_temporal_dedup_radius_samples=11,
+            residnorm_decrease_threshold=5.5,
+        )
+        data = np.random.RandomState(0).randn(4, 300).astype("float32")
+        geometry = {
+            "x": np.array([0.0, 32.0, 0.0, 32.0]),
+            "y": np.array([0.0, 0.0, 20.0, 20.0]),
+        }
+        with tempfile.TemporaryDirectory(prefix="dart_sub_params_") as scratch:
+            with patch.object(dartsort, "subtract", fake_subtract):
+                with self.assertRaisesRegex(RuntimeError, "__stop__"):
+                    features.dart_subtraction_numpy(
+                        data, 30000.0, geometry, params=params, scratch_dir=scratch
+                    )
+
+        cfg = captured["subtraction_cfg"]
+        self.assertEqual(cfg.detection_threshold, 6.0)
+        self.assertEqual(cfg.spatial_dedup_radius_um, 90.0)
+        self.assertEqual(cfg.positive_temporal_dedup_radius_samples, 11)
+        self.assertAlmostEqual(cfg.residnorm_decrease_threshold, 5.5)
 
     def test_njobs_forwarded_to_dartsort_subtract(self):
         """Forward worker counts through the current DARTsort computation config."""
