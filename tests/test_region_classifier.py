@@ -1,57 +1,8 @@
 import unittest
-import tempfile
-from pathlib import Path
-import shutil
 
 import numpy as np
-import numpy.testing
 
-from xgboost import XGBClassifier
-from sklearn.datasets import load_iris
-from sklearn.model_selection import train_test_split
-
-
-import ephysatlas.model_registry
 import ephysatlas.regionclassifier
-
-
-class TestModelIO(unittest.TestCase):
-    def test_read_after_write(self):
-        data = load_iris()
-        X_train, X_test, y_train, y_test = train_test_split(
-            data["data"], data["target"], test_size=0.2
-        )
-        classifier = XGBClassifier(
-            n_estimators=2, max_depth=2, learning_rate=1, objective="binary:logistic"
-        )
-        classifier.fit(X_train, y_train)
-        # save_model writes weights only; the manifest (the single source of truth load_model reads)
-        # is written separately, as the training script does. Real Cosmos ids so the manifest's
-        # acronym lookup resolves; the classifier itself round-trips regardless of the labels.
-        model_info = {
-            "REGION_MAP": "Cosmos",
-            "VINTAGE": "2024_W50",
-            "CLASSES": [315, 549, 997],
-            "FEATURES": ["f0", "f1", "f2", "f3"],
-        }
-        try:
-            temp_dir = Path(tempfile.mkdtemp())
-            model_path = ephysatlas.regionclassifier.save_model(
-                temp_dir, classifier=classifier, meta=model_info
-            )
-            ephysatlas.model_registry.write_manifest(model_path, model_info)
-            _classifier, _model_info = ephysatlas.regionclassifier.load_model(
-                model_path
-            )
-            # Metadata round-trips through the manifest (meta-shaped view).
-            self.assertEqual(_model_info["REGION_MAP"], "Cosmos")
-            self.assertEqual(_model_info["VINTAGE"], "2024_W50")
-            # And the loaded classifier reproduces the original's predictions.
-            np.testing.assert_equal(
-                classifier.predict(X_test), _classifier.predict(X_test)
-            )
-        finally:
-            shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 class TestViterbi(unittest.TestCase):

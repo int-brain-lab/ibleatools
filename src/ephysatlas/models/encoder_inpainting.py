@@ -472,11 +472,19 @@ class SpatialEncoder:
             predictions, index=df.index, columns=[f"pred_{f}" for f in features]
         )
 
-    def selftest(self, rtol: float = 1e-5) -> bool:
+    def selftest(self, rtol: float = 1e-4, atol: float = 1e-5) -> bool:
         """Reproduce the shipped golden predictions, if the model ships an example.
+
+        The tolerances are deliberately loose. These are float32 transformer outputs, and a model
+        loaded in a different environment than the one that generated the golden example drifts by
+        ~1e-4 relative from BLAS/library-version differences -- a genuine reproduction, not a broken
+        model. ``atol`` guards the near-zero outputs a relative bound alone cannot: a predicted
+        value of order 1e-8 can never satisfy any ``rtol`` against tiny absolute noise. The check
+        still catches real corruption or the wrong model, which drift by orders of magnitude more.
 
         Args:
             rtol (float, optional): Relative tolerance on the comparison.
+            atol (float, optional): Absolute tolerance, for the near-zero outputs.
 
         Returns:
             bool: True when the recomputed predictions match the shipped ones.
@@ -492,7 +500,7 @@ class SpatialEncoder:
         got = self.predict(pd.read_parquet(sample_file))
         expected = pd.read_parquet(expected_file)
         np.testing.assert_allclose(
-            got.to_numpy(), expected.loc[:, got.columns].to_numpy(), rtol=rtol
+            got.to_numpy(), expected.loc[:, got.columns].to_numpy(), rtol=rtol, atol=atol
         )
         logger.info(f"selftest passed on {len(got)} channels")
         return True

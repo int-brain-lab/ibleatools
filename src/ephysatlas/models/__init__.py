@@ -88,22 +88,18 @@ def load_pretrained(
     model_id,
     revision: str = None,
     cache_dir: Path = None,
-    one=None,
-    source: str = "auto",
     repo_id: str = None,
     **kwargs,
 ):
-    """Load a published model, from the Hugging Face Hub, S3, or a local directory.
+    """Load a published model, from the Hugging Face Hub or a local directory.
 
     Args:
-        model_id (str or Path): A Hugging Face repo id (``owner/name``), a bare S3 model
-            folder name, or a path to an already-downloaded model directory.
+        model_id (str or Path): A Hugging Face repo id (``owner/name``), or a path to an
+            already-downloaded model directory.
         revision (str, optional): Hugging Face branch/tag to pin, e.g. ``"2026_W32"``. Omitted,
             it resolves to ``main``, which tracks the *currently recommended* model and moves
             when a new vintage is published.
         cache_dir (Path, optional): Where downloads are placed.
-        one (optional): ONE client instance, needed only for the private S3 route.
-        source (str, optional): ``"auto"``, ``"hf"`` or ``"s3"``.
         repo_id (str, optional): Hugging Face repository, when it cannot be read off
             ``model_id``.
 
@@ -130,9 +126,7 @@ def load_pretrained(
         path_model = model_registry.resolve_model(
             str(model_id),
             revision=revision,
-            source=source,
             cache_dir=cache_dir,
-            one=one,
             repo_id=repo_id,
         )
 

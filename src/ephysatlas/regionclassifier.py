@@ -1,86 +1,33 @@
-import hashlib
 import logging
 from typing import List, Tuple
 from pathlib import Path
-import yaml
 
 import numpy as np
 import pandas as pd
 from xgboost import XGBClassifier
 
-from one.api import ONE
-import iblutil.random
 from ephysatlas import features
 from ephysatlas import model_registry
 
 logger = logging.getLogger(__name__)
 
 
-def save_model(path_model, classifier, meta, subfolder="", identifier=None):
-    """Save model to disk in ubj format with associated meta-data and a hash.
-
-    The model is a set of files in a folder named after the meta-data 'VINTAGE' and 'REGION_MAP' fields,
-    with the hash as suffix e.g. 2023_W41_Cosmos_dfd731f0.
-
-    Weights-only, at every level: the model directory carries no ``meta.yaml``. The publication
-    manifest (``ephysatlas_model.json``), written once by the training script via
-    :func:`ephysatlas.model_registry.write_manifest`, is the single source of truth -- it lists the
-    folds and supplies their ``model_class``, so neither the root nor a fold needs a ``meta.yaml``.
-
-    ``MODEL_CLASS`` is stamped onto the ``meta`` dict here (the training script reads it back before
-    calling ``write_manifest``); the manifest is the only on-disk record.
-
-    Args:
-        path_model (Path): Base path where the model will be saved.
-        classifier: The classifier object to save.
-        meta (dict): Metadata dictionary containing model information. ``MODEL_CLASS`` is stamped
-            onto it in place.
-        subfolder (str, optional): Optional level to add to the model path, for example 'FOLD01' will write to
-            2023_W41_Cosmos_dfd731f0/FOLD01/. Defaults to "".
-        identifier (str, optional): Optional identifier for the model, defaults to a 8 character hexdigest of the meta data.
-
-    Returns:
-        Path: Path where the model was saved.
-    """
-    meta["MODEL_CLASS"] = (
-        f"{classifier.__class__.__module__}.{classifier.__class__.__name__}"
-    )
-    if identifier is None:
-        identifier = iblutil.random.name_from_hash(
-            hashlib.md5(yaml.dump(meta).encode("utf-8"))
-        )
-    path_model = path_model.joinpath(
-        f"{meta['VINTAGE']}_{meta['REGION_MAP']}_{identifier}", subfolder
-    )
-    path_model.mkdir(exist_ok=True, parents=True)
-    classifier.save_model(path_model.joinpath("model.ubj"))
-    return path_model
-
-
 def download_model(
     local_path: Path,
     model_name: str,
-    one: ONE = None,
-    overwrite=False,
     revision: str = None,
-    source: str = "auto",
 ) -> Path:
-    """Download a trained model, from the Hugging Face Hub or from AWS S3.
+    """Download a trained model from the Hugging Face Hub.
 
-    Delegates to :func:`ephysatlas.model_registry.resolve_model`, which tries the public
-    Hugging Face Hub first and falls back to the private S3 bucket. ``one`` is therefore
-    optional: it is only needed for the S3 route.
+    Delegates to :func:`ephysatlas.model_registry.resolve_model`.
 
     Example:
-        >>> download_model(Path('/mnt/s0/ephys-atlas-decoding/models'), '2024_W50_Cosmos_lid-basket-sense', one=one)
+        >>> download_model(Path('/mnt/s0/ephys-atlas-decoding/models'), 'int-brain-lab/ea-decoder-channel-xgboost')
 
     Args:
         local_path (Path): Local directory where the model will be downloaded.
-        model_name (str): Model folder name, or a ``org/repo`` Hugging Face id.
-        one (ONE, optional): ONE client instance, required only for the S3 fallback.
-        overwrite (bool, optional): If True, overwrite existing files. Defaults to False.
-        revision (str, optional): Hugging Face branch/tag to pin. Ignored by S3.
-        source (str, optional): ``"auto"``, ``"hf"`` or ``"s3"``. Defaults to ``"auto"``.
+        model_name (str): A ``org/repo`` Hugging Face id.
+        revision (str, optional): Hugging Face branch/tag to pin.
 
     Returns:
         Path: Path to the downloaded model directory.
@@ -88,10 +35,7 @@ def download_model(
     return model_registry.resolve_model(
         model_name,
         revision=revision,
-        source=source,
         cache_dir=Path(local_path),
-        one=one,
-        overwrite=overwrite,
     )
 
 
@@ -330,24 +274,20 @@ class RegionClassifier:
         model_id: str,
         revision: str = None,
         cache_dir: Path = None,
-        one=None,
-        source: str = "auto",
     ) -> "RegionClassifier":
         """Fetch a model by id and return a ready-to-use classifier.
 
         Args:
-            model_id (str): Hugging Face ``org/repo``, or an S3 model folder name.
+            model_id (str): Hugging Face ``org/repo``.
             revision (str, optional): Hugging Face branch/tag to pin.
             cache_dir (Path, optional): Download location.
-            one (optional): ONE client, needed only for the S3 fallback.
-            source (str, optional): ``"auto"``, ``"hf"`` or ``"s3"``.
 
         Returns:
             RegionClassifier: Classifier backed by the downloaded directory.
         """
         return cls(
             model_registry.resolve_model(
-                model_id, revision=revision, source=source, cache_dir=cache_dir, one=one
+                model_id, revision=revision, cache_dir=cache_dir
             )
         )
 
