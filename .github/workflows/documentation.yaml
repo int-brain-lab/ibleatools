@@ -40,11 +40,11 @@ jobs:
         uses: astral-sh/setup-uv@v3
 
       - name: Set up Python
-        run: uv python install 3.10
+        run: uv python install 3.11
 
       # Lite install + the `docs` dependency group (myst-parser, sphinx-rtd-theme,
       # sphinx-autodoc-typehints; sphinx itself comes transitively). The `full`
-      # extra (dartsort/dredge) is not needed: autodoc only needs to import the
+      # DARTsort extra is not needed: autodoc only needs to import the
       # package, and the spike path is lazily imported.
       - name: Sync docs dependencies
         run: uv sync --group docs

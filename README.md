@@ -13,6 +13,8 @@ For detailed documentation, installation instructions, usage examples, and API r
 
 ## Quick Installation
 
+ibleatools requires Python 3.11 or newer.
+
 ```bash
 git clone https://github.com/int-brain-lab/ibleatools.git
 cd ibleatools
@@ -26,7 +28,7 @@ pip install -e .
 > region-classifier inference, the spatial encoder, and LF/CSD/AP feature computation —
 > but **not** spike/waveform feature computation.
 >
-> For the **full** install (spike/waveform features via `dartsort`/`dredge`, plus the
+> For the **full** install (spike/waveform features via `dartsort`, plus the
 > SDSC pipeline), use the `[full]` extra:
 >
 > ```bash

@@ -214,16 +214,26 @@ class DartParameters(pydantic.BaseModel):
             Defaults to 42.
         scratch_dir (Path or str, optional): Scratch directory for temporary files.
             If None, will use system defaults.
-        n_jobs (int): dartsort worker mode passed to ``dartsort.subtract``. ``0``
-            runs in the main process (CUDA in-process, no multiprocessing; GPU
-            memory not freed between calls); ``1`` runs in a worker subprocess
-            (frees GPU memory on exit but needs a working multiprocessing setup).
-            Defaults to 0.
+        n_jobs (int): DARTsort worker count used to build its
+            ``ComputationConfig``. ``0`` runs in the main process; positive values
+            select that many workers. Defaults to 0.
+        detection_threshold (float): Peak detection threshold, in units of channel
+            RMS. Defaults to 4.0.
+        spatial_dedup_radius_um (float): Radius in micrometres within which only the
+            largest simultaneous peak is kept. Defaults to 150.0.
+        positive_temporal_dedup_radius_samples (int): Samples around a trough in
+            which positive peaks are suppressed. Defaults to 7.
+        residnorm_decrease_threshold (float): Minimum residual-norm decrease for a
+            detected spike to be subtracted. Defaults to 3.162 (sqrt(10)).
     """
 
     localization_radius: pydantic.PositiveFloat = 150
     chunk_length_samples: pydantic.PositiveInt = 2**15
     trough_offset: pydantic.PositiveInt = 42
+    detection_threshold: pydantic.PositiveFloat = 4.0
+    spatial_dedup_radius_um: pydantic.PositiveFloat = 150.0
+    positive_temporal_dedup_radius_samples: pydantic.PositiveInt = 7
+    residnorm_decrease_threshold: pydantic.PositiveFloat = 3.162
     scratch_dir: Path | str | None = pydantic.Field(
         default=None,
         description="Scratch directory for temporary files. If None, will use system defaults.",
@@ -1197,13 +1207,13 @@ def dart_subtraction_numpy(data, fs, geometry, params=None, scratch_dir=None, **
         params = params.model_copy(update={"scratch_dir": scratch_dir})
     # The spike/waveform stack is an optional dependency: pip install ibleatools[full]
     try:
-        import dartsort  # 04a23714d77f28c1bbf3351ed9e21601395d1bca is a working commit
+        import dartsort
         import spikeinterface.core as sc
         import h5py
     except ImportError as e:
         raise ImportError(
-            "Spike/waveform feature computation requires the optional spike-sorting "
-            "stack (dartsort, dredge, spikeinterface, ...). Install it with: "
+            "Spike/waveform feature computation requires the optional spike-detection "
+            "stack (DARTsort and its dependencies). Install it with: "
             "pip install ibleatools[full]"
         ) from e
 
@@ -1213,28 +1223,75 @@ def dart_subtraction_numpy(data, fs, geometry, params=None, scratch_dir=None, **
     rec_np = sc.NumpyRecording(zdata.T, sampling_frequency=fs)
     rec_np.set_dummy_probe_from_locations(dart_xy)
 
-    # I'm making configuration objects here that don't require fitting any
-    # models. For instance, if you have do_tpca_denoise=True, dartsort will try
-    # to load up many waveforms from the recording to fit a PCA, but the recording
-    # is too short for that and it takes time.
+    # Keep DARTsort's default waveform duration while honoring the trough offset
+    # used later by ibleatools' waveform features.
+    default_waveform_cfg = dartsort.WaveformConfig()
+    spike_length_samples = default_waveform_cfg.spike_length_samples(fs)
+    if params.trough_offset >= spike_length_samples:
+        raise ValueError(
+            "trough_offset must be smaller than DARTsort's waveform length "
+            f"({spike_length_samples} samples at {fs} Hz)"
+        )
+    waveform_cfg = dartsort.WaveformConfig.from_samples(
+        params.trough_offset,
+        spike_length_samples - params.trough_offset,
+        # raw calibrated fs errors from_samples' round-trip assert.
+        sampling_frequency=round(fs),
+    )
+
+    # Preserve the old iblsorter branch's bundled single-channel denoiser.
+    # The current DARTsort defaults disable NN feature denoising or select
+    # a train-from-scratch Decollider.
+    legacy_denoiser = {
+        "do_nn_denoise": True,
+        "nn_denoiser_class_name": "SingleChannelWaveformDenoiser",
+        "nn_denoiser_pretrained_path": dartsort.config.default_pretrained_path,
+    }
     denoising_cfg = dartsort.FeaturizationConfig(
         denoise_only=True,
         do_tpca_denoise=False,
+        do_enforce_decrease=True,
+        save_input_voltages=False,
+        extract_radius=params.localization_radius,
         localization_radius=params.localization_radius,
+        tpca_fit_radius=params.localization_radius,
+        tpca_centered=True,
+        tpca_from_templates=False,
+        **legacy_denoiser,
     )
     subtraction_cfg = dartsort.SubtractionConfig(
-        subtraction_denoising_config=denoising_cfg,
-        extract_radius=params.localization_radius,
+        subtraction_denoising_cfg=denoising_cfg,
         chunk_length_samples=params.chunk_length_samples,
+        # This is behaviour change from older version of dartsort
+        # In the older version, there was gradual reduction of threshold.
+        # Not it is a fixed threshold
+        detection_threshold=params.detection_threshold,  # sigma deviation
+        realign_to_denoiser=False,
+        relative_peak_radius_um=None,
+        spatial_dedup_radius_um=params.spatial_dedup_radius_um,
+        positive_temporal_dedup_radius_samples=params.positive_temporal_dedup_radius_samples,
+        residnorm_decrease_threshold=params.residnorm_decrease_threshold,
+        trough_priority=None,
+        whiten=False,
     )
     # this determines what features you get out at the end
     # the nn localizer is another model which needs to be fitted, so turning
     # that off is good
     featurization_cfg = dartsort.FeaturizationConfig(
         nn_localization=False,
+        do_enforce_decrease=True,
+        save_input_voltages=False,
         save_output_waveforms=True,  # save final nn denoised waveforms
         save_input_waveforms=True,  # save collision-cleaned, but not NN-denoised, waveforms
+        extract_radius=params.localization_radius,
         localization_radius=params.localization_radius,
+        tpca_fit_radius=params.localization_radius,
+        tpca_centered=True,
+        tpca_from_templates=False,
+        # A shorter TPCA window changes the output waveform length in DARTsort
+        # 0.5, so use the extraction window for both saved waveform datasets.
+        input_tpca_waveform_cfg=waveform_cfg,
+        **legacy_denoiser,
     )
 
     # we make sure that each runs get a different temp folder
@@ -1245,17 +1302,20 @@ def dart_subtraction_numpy(data, fs, geometry, params=None, scratch_dir=None, **
     # Ensure scratch directory exists
     scratch_dir = _setup_scratch_directory(params.scratch_dir)
 
-    detected_spikes, h5_filename = dartsort.subtract(
-        rec_np,
-        temp_folder := scratch_dir.joinpath(f"dart_{temp_suffix}"),
-        featurization_config=featurization_cfg,
-        subtraction_config=subtraction_cfg,
-        n_jobs=params.n_jobs,
-        # n_jobs=1 initializes CUDA in a separate process (GPU memory freed on exit)
-        # but needs a working multiprocessing env; n_jobs=0 runs in the main process.
-        # Configurable via DartParameters.n_jobs / FeatureParams.waveforms (default 0).
+    # New version of DARTsort outputs a single object.
+    # And has a different keyword arguments for subtract func.
+    temp_folder = scratch_dir.joinpath(f"dart_{temp_suffix}")
+    detected_spikes = dartsort.subtract(
+        output_dir=temp_folder,
+        recording=rec_np,
+        waveform_cfg=waveform_cfg,
+        featurization_cfg=featurization_cfg,
+        subtraction_cfg=subtraction_cfg,
+        computation_cfg=dartsort.ComputationConfig.from_n_jobs(params.n_jobs),
         show_progress=True,
     )
+    if detected_spikes is None or detected_spikes.parent_h5_path is None:
+        raise RuntimeError("DARTsort subtraction did not produce a feature file")
 
     df_spikes = pd.DataFrame(
         {
@@ -1269,12 +1329,13 @@ def dart_subtraction_numpy(data, fs, geometry, params=None, scratch_dir=None, **
         }
     )
 
-    h5file = h5py.File(h5_filename)
-    d_waveforms = {  # n_spikes, nsw, ncw
-        "raw": np.array(h5file["collisioncleaned_waveforms"]),
-        "denoised": np.array(h5file["denoised_waveforms"]),
-        "channel_index": np.array(h5file["channel_index"]),
-    }
+    # Copy arrays before removing DARTsort's temporary output directory.
+    with h5py.File(detected_spikes.parent_h5_path) as h5file:
+        d_waveforms = {  # n_spikes, nsw, ncw
+            "raw": np.array(h5file["collisioncleaned_waveforms"]),
+            "denoised": np.array(h5file["denoised_waveforms"]),
+            "channel_index": np.array(h5file["channel_index"]),
+        }
     shutil.rmtree(temp_folder)
     return df_spikes, d_waveforms
 
