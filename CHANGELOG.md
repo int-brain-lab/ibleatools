@@ -3,7 +3,7 @@
 This file documents the changes to the features for supported feature versions.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [0.7.0] - UNRELEASED
+## [0.7.0] - 2026-09-08
 
 ### Added
 - Object-oriented feature-computation layer in `ephysatlas.feature_calculators`: `BaseFeatureCalculator`, `SpikeGlxLikeFeatureCalculator`, and the concrete `IBLPIDFeatureCalculator` (ONE/SpikeSortingLoader) and `SpikeGLXFileFeatureCalculator` (local AP/LF files). `compute_snippet()` is the shared template that both public entry points now use.
