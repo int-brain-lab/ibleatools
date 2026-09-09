@@ -495,7 +495,10 @@ class SpatialEncoder:
         got = self.predict(pd.read_parquet(sample_file))
         expected = pd.read_parquet(expected_file)
         np.testing.assert_allclose(
-            got.to_numpy(), expected.loc[:, got.columns].to_numpy(), rtol=rtol, atol=atol
+            got.to_numpy(),
+            expected.loc[:, got.columns].to_numpy(),
+            rtol=rtol,
+            atol=atol,
         )
         logger.info(f"selftest passed on {len(got)} channels")
         return True
