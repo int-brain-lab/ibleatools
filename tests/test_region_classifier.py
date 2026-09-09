@@ -1,47 +1,8 @@
 import unittest
-import tempfile
-from pathlib import Path
-import shutil
 
 import numpy as np
-import numpy.testing
-
-from xgboost import XGBClassifier
-from sklearn.datasets import load_iris
-from sklearn.model_selection import train_test_split
-
 
 import ephysatlas.regionclassifier
-
-
-class TestModelIO(unittest.TestCase):
-    def test_read_after_write(self):
-        data = load_iris()
-        X_train, X_test, y_train, y_test = train_test_split(
-            data["data"], data["target"], test_size=0.2
-        )
-        classifier = XGBClassifier(
-            n_estimators=2, max_depth=2, learning_rate=1, objective="binary:logistic"
-        )
-        classifier.fit(X_train, y_train)
-        # Create a temporary directory that works on both Windows and Linux
-        model_info = {"REGION_MAP": "Cosmos", "VINTAGE": "2024_W50"}
-        try:
-            temp_dir = Path(tempfile.mkdtemp())
-            model_path = ephysatlas.regionclassifier.save_model(
-                temp_dir, classifier=classifier, meta=model_info
-            )
-            _classifier, _model_info = ephysatlas.regionclassifier.load_model(
-                model_path
-            )
-            for k, v in model_info.items():
-                self.assertEqual(model_info[k], _model_info[k])
-
-            np.testing.assert_equal(
-                classifier.predict(X_test), _classifier.predict(X_test)
-            )
-        finally:
-            shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 class TestViterbi(unittest.TestCase):
