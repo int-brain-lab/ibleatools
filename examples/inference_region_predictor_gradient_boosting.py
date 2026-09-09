@@ -8,7 +8,7 @@ local_data_path = Path("/Users/gaellechapuis/Documents/Work/EphysAtlas/Decoder_J
 model_path = Path(
     "/Users/gaellechapuis/Documents/Work/EphysAtlas/Decoder_June/model/2024_W50_Cosmos_voter-snap-pudding"
 )
-# Note: the model needs to be manually shared for now, ask OW or PR
+# Note: expects a model directory already downloaded from the Hugging Face Hub
 one = ONE()
 force_feature_compute = False
 

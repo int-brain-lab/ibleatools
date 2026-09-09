@@ -151,7 +151,7 @@ Basic usage:
 
 .. code-block:: python
 
-   from ephysatlas.regionclassifier.region_inference import infer_regions
+   from ephysatlas.regionclassifier import infer_regions
 
    # Perform region inference
    predicted_probas, predicted_region = infer_regions(

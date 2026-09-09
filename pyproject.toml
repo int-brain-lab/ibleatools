@@ -36,6 +36,7 @@ dependencies = [
     "numpy",
     "pandas",
     "scipy",
+    "huggingface_hub>=0.34"
 ]
 
 [project.optional-dependencies]
