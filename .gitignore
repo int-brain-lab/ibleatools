@@ -188,4 +188,7 @@ random_testing_scripts.py
 
 
 #Sphinx doucmentation
-docs/build/
+docs/build/examples/*.pt
+examples/ea_active/
+examples/encoding_models/
+training/

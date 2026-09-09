@@ -1,10 +1,10 @@
 """
 Module designed to work on the anatomy of the brain prior to the encoding/decoding analysis.
 
-The EncodingAtlas is a version of the Allen Atlas relabeled to account for void labels inside of the skull compared to outside.
+The ClassifierAtlas is a version of the Allen Atlas relabeled to account for void labels inside of the skull compared to outside.
 
 Example:
-    >>> ea = EncodingAtlas()
+    >>> ea = ClassifierAtlas()
     >>> from atlasview import atlasview
     >>> av = atlasview.view(atlas=ea)
 """
