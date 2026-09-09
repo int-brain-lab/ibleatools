@@ -6,9 +6,11 @@ checkpoints, the encode/reconstruct/components/assign contract, output shapes an
 without training or the 13 GB cells download.
 
 In its own file with a setUpModule guard: the wrapper pulls in torch, which segfaults on macOS
-arm64 if xgboost is already imported in the same process.
+arm64 if xgboost is already imported in the same process. The guard is macOS arm64-only -- Linux
+CI runs the whole suite in a single `unittest discover` process and does not segfault.
 """
 
+import platform
 import shutil
 import sys
 import tempfile
@@ -20,7 +22,14 @@ import numpy as np
 
 
 def setUpModule():
-    if "xgboost" in sys.modules:
+    # The segfault is specific to macOS arm64; Linux CI runs the whole suite in one
+    # `unittest discover` process -- xgboost is imported by earlier test modules there -- and is
+    # fine, so don't abort it.
+    if (
+        "xgboost" in sys.modules
+        and sys.platform == "darwin"
+        and platform.machine() == "arm64"
+    ):
         raise RuntimeError(
             "xgboost is already imported in this process; loading torch as well segfaults on "
             "macOS arm64. Run this file in its own pytest process."
