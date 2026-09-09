@@ -61,7 +61,9 @@ def write_checksums(path_model: Path) -> Path:
     """Record a sha1 digest of every hashable file, as a published release ships it."""
     path_model = Path(path_model)
     files = []
-    for path in sorted(path_model.rglob("*"), key=lambda p: p.relative_to(path_model).as_posix()):
+    for path in sorted(
+        path_model.rglob("*"), key=lambda p: p.relative_to(path_model).as_posix()
+    ):
         if not path.is_file():
             continue
         relative = path.relative_to(path_model).as_posix()
@@ -180,5 +182,3 @@ def make_model_dir(
     if checksums:
         write_checksums(path_model)
     return path_model
-
-

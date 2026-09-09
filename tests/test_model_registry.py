@@ -67,7 +67,9 @@ class TestResolveModel(unittest.TestCase):
         try:
             path_model = fixtures.make_model_dir(tmp)
             target = path_model.joinpath("model.ubj")
-            target.write_bytes(target.read_bytes() + b"tampered")  # after checksums written
+            target.write_bytes(
+                target.read_bytes() + b"tampered"
+            )  # after checksums written
 
             original = model_registry.HFModelSource.fetch
             model_registry.HFModelSource.fetch = (
@@ -600,7 +602,9 @@ class TestInferRegions(unittest.TestCase):
 
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
-        self.path_model = fixtures.make_model_dir(self.tmp)  # 2 folds, no meta.yaml anywhere
+        self.path_model = fixtures.make_model_dir(
+            self.tmp
+        )  # 2 folds, no meta.yaml anywhere
         rng = np.random.default_rng(3)
         index = pd.MultiIndex.from_product(
             [["pid-a", "pid-b"], range(5)], names=["pid", "channel"]
