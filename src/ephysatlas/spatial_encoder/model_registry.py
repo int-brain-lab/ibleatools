@@ -154,6 +154,7 @@ class EphysAtlasReleaseRegistry:
             context/agea_vol_pca.npy
             context/merfish_vol_pca.npy
             results/channel/test_r2.json
+            results/channel/feature_r2.json
             results/channel/confidence_validation.json
 
     Each <vintage> folder is uploaded to the ROOT of the same Hugging Face model
@@ -369,6 +370,128 @@ class EphysAtlasReleaseRegistry:
         payload = load_json(path)
         return [str(x) for x in payload["features"]]
 
+    def write_channel_r2_results(
+        self,
+        vintage: str,
+        *,
+        features: Iterable[str],
+        r2_values: Any,
+        split: str = "test",
+    ) -> Path:
+        """
+        Save per-feature channel-model R² values as release artifacts.
+
+        Two JSON files are written:
+          - results/channel/test_r2.json
+              Full evaluation summary, including mean R² and per-feature mapping.
+          - results/channel/feature_r2.json
+              Minimal portable mapping intended for downstream consumers such as
+              the Open Ephys C++ localizer.
+
+        The feature ordering is validated against features.json when available.
+        """
+        release = self.ensure_release_layout(vintage)
+
+        feature_names = [str(x) for x in features]
+
+        if (release / "features.json").exists():
+            self.validate_feature_order(vintage, feature_names)
+
+        if torch.is_tensor(r2_values):
+            values = r2_values.detach().cpu().numpy()
+        else:
+            values = np.asarray(r2_values)
+
+        values = np.asarray(values, dtype=np.float64).reshape(-1)
+
+        if len(feature_names) != len(values):
+            raise RegistryError(
+                "Per-feature R² length mismatch: "
+                f"{len(feature_names)} feature names vs {len(values)} values."
+            )
+
+        per_feature = {
+            feature: (None if not np.isfinite(value) else float(value))
+            for feature, value in zip(feature_names, values)
+        }
+
+        full_payload = {
+            "format_version": REGISTRY_FORMAT_VERSION,
+            "split": str(split),
+            "metric": "r_squared",
+            "definition": "1 - sum((y - yhat)^2) / sum((y - mean(y))^2)",
+            "n_features": len(feature_names),
+            "mean_r2": (
+                None
+                if not np.isfinite(values).any()
+                else float(np.nanmean(values))
+            ),
+            "feature_order": feature_names,
+            "per_feature": per_feature,
+        }
+
+        results_dir = release / "results" / "channel"
+        results_dir.mkdir(parents=True, exist_ok=True)
+
+        test_r2_path = results_dir / "test_r2.json"
+        save_json(test_r2_path, full_payload)
+
+        # Deliberately minimal file for copying into C++ or other consumers.
+        feature_r2_payload = {
+            "format_version": REGISTRY_FORMAT_VERSION,
+            "split": str(split),
+            "metric": "r_squared",
+            "per_feature": per_feature,
+        }
+        feature_r2_path = results_dir / "feature_r2.json"
+        save_json(feature_r2_path, feature_r2_payload)
+
+        # Record the artifact in metadata when metadata already exists.
+        metadata_path = release / "metadata.json"
+        if metadata_path.exists():
+            metadata = load_json(metadata_path)
+            metadata.setdefault("components", {})
+            metadata.setdefault("results", {})
+            metadata["results"]["channel_feature_r2"] = {
+                "split": str(split),
+                "summary": "results/channel/test_r2.json",
+                "portable_mapping": "results/channel/feature_r2.json",
+            }
+            save_json(metadata_path, metadata)
+
+        return feature_r2_path
+
+    def load_channel_r2_results(self, vintage: str) -> dict:
+        """Load the full released per-feature R² evaluation summary."""
+        path = self.release_dir(vintage) / "results" / "channel" / "test_r2.json"
+        if not path.exists():
+            raise RegistryError(f"Missing channel R² results: {path}")
+        return load_json(path)
+
+    def load_channel_r2_dict(self, vintage: str) -> dict[str, float | None]:
+        """
+        Return {feature_name: r2} from the release.
+
+        This is the most convenient representation for copying the eight feature
+        weights into the C++ localizer.
+        """
+        portable_path = (
+            self.release_dir(vintage)
+            / "results"
+            / "channel"
+            / "feature_r2.json"
+        )
+
+        if portable_path.exists():
+            payload = load_json(portable_path)
+        else:
+            payload = self.load_channel_r2_results(vintage)
+
+        return {
+            str(name): (None if value is None else float(value))
+            for name, value in payload.get("per_feature", {}).items()
+        }
+
     def validate_feature_order(self, vintage: str, current_features: Iterable[str]) -> None:
         saved = self.load_features(vintage)
         current = [str(x) for x in current_features]
@@ -522,7 +645,9 @@ be tagged exactly `{vintage}`.
 - `preprocessing/channel_stats.npz`: frozen clipping and normalization statistics.
 - `config.json`: model, preprocessing, data, and training configuration.
 - `metadata.json`: code/environment provenance and component availability.
-- `results/`: release evaluation summaries.
+- `results/channel/test_r2.json`: full held-out test R² summary for every channel feature.
+- `results/channel/feature_r2.json`: compact `{feature_name: R²}` mapping for downstream use.
+- `results/`: other release evaluation summaries.
 
 Do not regenerate the split or PCA context when reproducing this release; load the
 artifacts in this snapshot.

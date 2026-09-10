@@ -1,5 +1,6 @@
 import argparse
 import json
+import shutil
 from pathlib import Path
 from typing import Iterable
 
@@ -7,6 +8,11 @@ import numpy as np
 import pandas as pd
 from iblatlas.regions import BrainRegions
 from tqdm.auto import tqdm
+
+from .waveform_features import (
+    FEATURE_NAMES as GENERATED_WAVEFORM_FEATURE_NAMES,
+    extract_generated_waveform_features,
+)
 
 import ephysatlas.data
 
@@ -318,33 +324,199 @@ def _align_good_cluster_array(
         )
     return np.asarray(values_good[rows], dtype=np.float32)
 
-def _build_context(df_good: pd.DataFrame, xyz_m: np.ndarray, cosmos_ids: np.ndarray) -> tuple[np.ndarray, list[str]]:
+def _ensure_frozen_context_atlas(
+    *,
+    out_dir: Path,
+    repo_id: str,
+    vintage: str,
+) -> Path:
+    """Download the exact frozen molecular-context volumes from the release.
+
+    The channel-level model stores the PCA volumes at the root of the tagged
+    release under ``context/``. Reusing those arrays guarantees that the unit
+    model and channel model share the same PCA basis and sign convention.
     """
-    Build a conservative anatomy-only context: standardized xyz + Cosmos one-hot.
+    from huggingface_hub import hf_hub_download
 
-    This intentionally avoids waveform/ACG/ephys feature columns, because those
-    are targets of the unit encoder.
+    context_dir = Path(out_dir) / "context_atlas"
+    context_dir.mkdir(parents=True, exist_ok=True)
+
+    for name in ("agea_vol_pca.npy", "merfish_vol_pca.npy"):
+        dst = context_dir / name
+        if dst.exists():
+            continue
+        src = Path(
+            hf_hub_download(
+                repo_id=repo_id,
+                filename=f"context/{name}",
+                revision=vintage,
+            )
+        )
+        shutil.copy2(src, dst)
+
+    return context_dir
+
+
+def _build_context(
+    xyz_m: np.ndarray,
+    *,
+    context_dir: Path,
+    n_cell_pcs: int,
+    n_gene_pcs: int,
+) -> tuple[np.ndarray, list[str]]:
+    """Sample the original spatial-encoder molecular context at unit xyz.
+
+    Ordering intentionally matches ``concat_context(cell_pc, gene_pc)`` in the
+    channel-level model: first MERFISH subclass PCs, then AGEA gene-expression
+    PCs. ``ContextAtlasManager`` mirrors x to the left hemisphere internally,
+    exactly as in the spatial encoder.
     """
-    br = BrainRegions()
-    ctx_parts = [_standardize(xyz_m)]
-    ctx_names = ["xyz_x_std", "xyz_y_std", "xyz_z_std"]
+    from ephysatlas.spatial_encoder.utils import AtlasPCAConfig, ContextAtlasManager
 
-    valid_cosmos = np.asarray(cosmos_ids) > 0
-    unique_cosmos = np.unique(cosmos_ids[valid_cosmos]).astype(np.int64)
-    cosmos_to_col = {int(rid): i for i, rid in enumerate(unique_cosmos)}
-    onehot = np.zeros((len(df_good), len(unique_cosmos)), dtype=np.float32)
-    for rid, col in cosmos_to_col.items():
-        onehot[cosmos_ids == rid, col] = 1.0
-    ctx_parts.append(onehot)
+    manager = ContextAtlasManager(
+        AtlasPCAConfig(
+            n_cell_pcs=int(n_cell_pcs),
+            n_gene_pcs=int(n_gene_pcs),
+        ),
+        regenerate_context=False,
+        output_dir=Path(context_dir),
+    )
+    pack = manager.sample_context_numpy_m(
+        np.asarray(xyz_m, dtype=np.float32),
+        mode="clip",
+    )
+    cell_pc = np.asarray(pack["cell_pc"], dtype=np.float32)
+    gene_pc = np.asarray(pack["gene_pc"], dtype=np.float32)
 
-    id_to_acronym = {}
-    for rid in unique_cosmos:
-        hit = np.flatnonzero(br.id == int(rid))
-        id_to_acronym[int(rid)] = str(br.acronym[hit[0]]) if len(hit) else f"rid_{int(rid)}"
-    ctx_names.extend([f"cosmos_{id_to_acronym[int(rid)]}" for rid in unique_cosmos])
+    if cell_pc.shape[1] < int(n_cell_pcs):
+        raise ValueError(
+            f"Frozen MERFISH volume has only {cell_pc.shape[1]} PCs; "
+            f"requested {n_cell_pcs}."
+        )
+    if gene_pc.shape[1] < int(n_gene_pcs):
+        raise ValueError(
+            f"Frozen AGEA volume has only {gene_pc.shape[1]} PCs; "
+            f"requested {n_gene_pcs}."
+        )
 
-    ctx = np.concatenate(ctx_parts, axis=1).astype(np.float32)
+    cell_pc = cell_pc[:, : int(n_cell_pcs)]
+    gene_pc = gene_pc[:, : int(n_gene_pcs)]
+    ctx = np.concatenate([cell_pc, gene_pc], axis=1).astype(np.float32)
+    ctx_names = (
+        [f"merfish_pc_{i + 1:02d}" for i in range(int(n_cell_pcs))]
+        + [f"agea_pc_{i + 1:02d}" for i in range(int(n_gene_pcs))]
+    )
     return ctx, ctx_names
+
+
+
+
+WAVEFORM_FEATURE_NAMES = (
+    "depolarisation_slope",
+    "recovery_slope",
+    "recovery_time_secs",
+    "repolarisation_slope",
+    "tip_time_secs",
+    "tip_val",
+    "through_time_secs",
+    "trough_val",
+    "peak_time_secs",
+    "peak_val",
+    "polarity",
+)
+
+
+def _extract_reference_waveform_features(
+    df_units: pd.DataFrame,
+    *,
+    sampling_rate_hz: float = 30_000.0,
+) -> tuple[np.ndarray, list[str], dict]:
+    """Extract the requested waveform features from the IBL cluster table.
+
+    Values already computed by the IBL/eatools preprocessing are preferred.
+    Time fields are converted from *_time_idx to seconds only when the table
+    does not already expose a *_time_secs column.
+
+    `through_time_secs` is kept exactly as requested by the user; it maps to
+    the conventional `trough_time_*` field.
+    """
+    n = len(df_units)
+    out = np.full((n, len(WAVEFORM_FEATURE_NAMES)), np.nan, dtype=np.float32)
+    source = {}
+
+    aliases = {
+        "depolarisation_slope": ("depolarisation_slope",),
+        "recovery_slope": ("recovery_slope",),
+        "recovery_time_secs": ("recovery_time_secs", "recovery_time_s"),
+        "repolarisation_slope": ("repolarisation_slope",),
+        "tip_time_secs": ("tip_time_secs", "tip_time_s"),
+        "tip_val": ("tip_val",),
+        "through_time_secs": (
+            "through_time_secs", "trough_time_secs",
+            "through_time_s", "trough_time_s",
+        ),
+        "trough_val": ("trough_val",),
+        "peak_time_secs": ("peak_time_secs", "peak_time_s"),
+        "peak_val": ("peak_val",),
+        "polarity": ("polarity",),
+    }
+    idx_fallback = {
+        "recovery_time_secs": ("recovery_time_idx",),
+        "tip_time_secs": ("tip_time_idx",),
+        "through_time_secs": ("trough_time_idx", "through_time_idx"),
+        "peak_time_secs": ("peak_time_idx",),
+    }
+
+    for j, name in enumerate(WAVEFORM_FEATURE_NAMES):
+        chosen = next((c for c in aliases[name] if c in df_units.columns), None)
+        if chosen is not None:
+            out[:, j] = pd.to_numeric(df_units[chosen], errors="coerce").to_numpy(np.float32)
+            source[name] = chosen
+            continue
+
+        idx_col = next((c for c in idx_fallback.get(name, ()) if c in df_units.columns), None)
+        if idx_col is not None:
+            out[:, j] = (
+                pd.to_numeric(df_units[idx_col], errors="coerce").to_numpy(np.float32)
+                / float(sampling_rate_hz)
+            )
+            source[name] = f"{idx_col}/{sampling_rate_hz:g}"
+            continue
+
+        # Current IBL tables expose invert_sign_peak even when no explicit
+        # polarity column exists. Convert this boolean indicator to {-1,+1}.
+        if name == "polarity" and "invert_sign_peak" in df_units.columns:
+            inv = pd.to_numeric(df_units["invert_sign_peak"], errors="coerce").to_numpy(np.float32)
+            out[:, j] = np.where(np.isfinite(inv), -inv, np.nan)
+            source[name] = "-invert_sign_peak"
+            continue
+
+        raise KeyError(
+            f"Could not obtain requested waveform feature '{name}'. "
+            f"Available cluster columns include: {list(df_units.columns)[:100]}"
+        )
+
+    # Do not fail here. A tiny number of units in the aggregate tables may have
+    # an undefined precomputed waveform statistic (for example recovery_slope).
+    # The caller fills ONLY those missing cells from the unit's multichannel
+    # waveform and records the fallback count in the manifest.
+    bad_by_feature = {
+        WAVEFORM_FEATURE_NAMES[j]: int((~np.isfinite(out[:, j])).sum())
+        for j in range(out.shape[1])
+        if (~np.isfinite(out[:, j])).any()
+    }
+    if bad_by_feature:
+        print(
+            "[waveform features] source table contains non-finite values; "
+            f"will use waveform-derived fallback only for those cells: {bad_by_feature}"
+        )
+
+    return (
+        out.astype(np.float32),
+        list(WAVEFORM_FEATURE_NAMES),
+        source,
+        bad_by_feature,
+    )
 
 
 def prepare_latest_cells_encoder_data(
@@ -361,7 +533,14 @@ def prepare_latest_cells_encoder_data(
     allow_peak_fallback: bool = False,
     normalize_waveforms_max_abs: bool = True,
     use_acg3d: bool = True,
-    use_stpc: bool = False,
+    use_stpc: bool = True,
+    stpc_window_ms: float = 80.0,
+    context_repo_id: str = "AlonSaguy/ephys-atlas-models",
+    context_vintage: str = "2026_W26",
+    n_cell_pcs: int = 50,
+    n_gene_pcs: int = 50,
+    mirror_x_to_single_hemisphere: bool = True,
+    mirror_x_sign: float = -1.0,
 ) -> dict:
     root_path = Path(root_path).expanduser().resolve()
     out_dir = Path(out_dir).expanduser().resolve()
@@ -514,10 +693,23 @@ def prepare_latest_cells_encoder_data(
         )
         if stpc.ndim != 2 or stpc.shape[1] != 1000:
             raise ValueError(
-                f"Expected stPC [N,1000] per IBL aggregate documentation, got {stpc.shape}"
+                f"Expected stPC [N,1000], got {stpc.shape}"
             )
+
+        # ephysatlas.cells.spike_triggered_population_coupling uses 1 ms bins
+        # from -0.5 s to +0.499 s. Crop by the physical time axis, not by
+        # hard-coded array positions, so the requested +/-80 ms window is explicit.
+        stpc_times_ms_full = np.arange(stpc.shape[1], dtype=np.float32) - 500.0
+        keep_stpc = (stpc_times_ms_full >= -float(stpc_window_ms)) & (stpc_times_ms_full <= float(stpc_window_ms))
+        stpc = stpc[:, keep_stpc].astype(np.float32, copy=False)
+        stpc_times_ms = stpc_times_ms_full[keep_stpc]
+        if len(stpc_times_ms) == 0:
+            raise ValueError(f"stpc_window_ms={stpc_window_ms} produced an empty crop")
         stpc_source = "clusters_good.stpc.npy"
-        print(f"Aligned stPC to selected units: {stpc.shape}")
+        print(
+            f"Aligned and cropped stPC: {stpc.shape} | "
+            f"time=[{stpc_times_ms[0]:.1f}, {stpc_times_ms[-1]:.1f}] ms"
+        )
 
     if use_acg3d:
         acg_source = "clusters.acgs_3d.npy"
@@ -609,6 +801,8 @@ def prepare_latest_cells_encoder_data(
             "Explicit (pid, cluster_id) join to clusters_good.table.pqt"
             if use_stpc else None
         ),
+        "stpc_window_ms": float(stpc_window_ms) if use_stpc else None,
+        "stpc_times_ms_path": str(out_dir / "stpc_times_ms.npy") if use_stpc else None,
             "note": "1D ACG fallback; use_acg3d=False",
         }
 
@@ -633,6 +827,11 @@ def prepare_latest_cells_encoder_data(
     x_col, y_col, z_col, xyz_in_meters = _find_xyz_columns(df_good)
     xyz = df_good[[x_col, y_col, z_col]].to_numpy(dtype=np.float32)
     xyz_m = xyz if xyz_in_meters else xyz / 1e6
+    if mirror_x_to_single_hemisphere:
+        xyz_m = np.asarray(xyz_m, np.float32).copy()
+        sign = 1.0 if float(mirror_x_sign) >= 0 else -1.0
+        xyz_m[:, 0] = sign * np.abs(xyz_m[:, 0])
+        print(f"[mirror-x] prepared xyz folded to canonical hemisphere sign={sign:+.0f}")
     pids = df_good[pid_col].astype(str).to_numpy()
 
     valid = np.isfinite(waveforms).all(axis=(1, 2))
@@ -655,10 +854,16 @@ def prepare_latest_cells_encoder_data(
     cosmos_ids = cosmos_ids[valid]
     atlas_ids = atlas_ids[valid]
 
+    context_dir = _ensure_frozen_context_atlas(
+        out_dir=out_dir,
+        repo_id=context_repo_id,
+        vintage=context_vintage,
+    )
     ctx, ctx_names = _build_context(
-        df_good,
         xyz_m,
-        cosmos_ids,
+        context_dir=context_dir,
+        n_cell_pcs=n_cell_pcs,
+        n_gene_pcs=n_gene_pcs,
     )
 
     unique_cosmos_ids, unit_counts = np.unique(
@@ -692,11 +897,81 @@ def prepare_latest_cells_encoder_data(
     np.save(out_dir / "acgs.npy", acgs.astype(np.float32), allow_pickle=False)
     if use_stpc:
         np.save(out_dir / "stpc.npy", stpc.astype(np.float32), allow_pickle=False)
+        np.save(out_dir / "stpc_times_ms.npy", stpc_times_ms.astype(np.float32), allow_pickle=False)
     np.save(out_dir / "ctx.npy", ctx.astype(np.float32), allow_pickle=False)
     np.save(out_dir / "xyz.npy", xyz_m.astype(np.float32), allow_pickle=False)
     np.save(out_dir / "pids.npy", pids.astype(object), allow_pickle=True)
     np.save(out_dir / "cosmos.npy", cosmos_ids.astype(np.int64), allow_pickle=False)
     np.save(out_dir / "allen.npy", atlas_ids.astype(np.int64), allow_pickle=False)
+
+    (
+        waveform_features,
+        waveform_feature_names,
+        waveform_feature_sources,
+        waveform_feature_missing_source_counts,
+    ) = _extract_reference_waveform_features(
+        df_good,
+        sampling_rate_hz=30_000.0,
+    )
+
+    # ------------------------------------------------------------------
+    # Rare missing-reference fallback.
+    #
+    # Keep every unit in the MODEL dataset.  For baseline evaluation, use the
+    # precomputed IBL/eatools cluster-table value whenever available. Only an
+    # individual non-finite feature cell is replaced from that unit's actual
+    # multichannel waveform. No median/region/context imputation is used.
+    # ------------------------------------------------------------------
+    missing_mask = ~np.isfinite(waveform_features)
+    waveform_feature_fallback_counts = {}
+    if missing_mask.any():
+        fallback, fallback_names = extract_generated_waveform_features(
+            waveforms,
+            sampling_rate_hz=30_000.0,
+        )
+        if tuple(fallback_names) != tuple(waveform_feature_names):
+            raise RuntimeError(
+                "Waveform fallback feature order mismatch: "
+                f"{fallback_names} != {waveform_feature_names}"
+            )
+
+        for j, name in enumerate(waveform_feature_names):
+            use = missing_mask[:, j]
+            n_use = int(use.sum())
+            if n_use:
+                waveform_features[use, j] = fallback[use, j]
+                waveform_feature_fallback_counts[name] = n_use
+
+        if not np.isfinite(waveform_features).all():
+            remaining = {
+                waveform_feature_names[j]:
+                    int((~np.isfinite(waveform_features[:, j])).sum())
+                for j in range(waveform_features.shape[1])
+                if (~np.isfinite(waveform_features[:, j])).any()
+            }
+            raise RuntimeError(
+                "Waveform-derived fallback still left non-finite values: "
+                f"{remaining}"
+            )
+
+        print(
+            "[waveform features] fallback completed. "
+            f"Counts={waveform_feature_fallback_counts}; "
+            f"total replaced cells={int(missing_mask.sum()):,} / "
+            f"{waveform_features.size:,}"
+        )
+    else:
+        waveform_feature_fallback_counts = {}
+
+    np.save(
+        out_dir / "waveform_features.npy",
+        waveform_features.astype(np.float32),
+        allow_pickle=False,
+    )
+    (out_dir / "waveform_feature_names.json").write_text(
+        json.dumps(waveform_feature_names, indent=2),
+        encoding="utf-8",
+    )
 
     manifest = {
         "project": project,
@@ -716,13 +991,34 @@ def prepare_latest_cells_encoder_data(
             "Explicit (pid, cluster_id) join to clusters_good.table.pqt"
             if use_stpc else None
         ),
+        "stpc_window_ms": float(stpc_window_ms) if use_stpc else None,
+        "stpc_times_ms_path": str(out_dir / "stpc_times_ms.npy") if use_stpc else None,
         "ctx_shape": list(ctx.shape),
+        "context_type": "merfish_agea_pca",
+        "context_order": "MERFISH PCs first, then AGEA PCs",
+        "n_cell_pcs": int(n_cell_pcs),
+        "n_gene_pcs": int(n_gene_pcs),
+        "context_repo_id": str(context_repo_id),
+        "context_vintage": str(context_vintage),
+        "context_atlas_dir": str(context_dir),
         "xyz_shape": list(xyz_m.shape),
         "xyz_columns": [x_col, y_col, z_col],
         "xyz_in_meters_detected": bool(xyz_in_meters),
+        "mirror_x_to_single_hemisphere": bool(mirror_x_to_single_hemisphere),
+        "mirror_x_sign": float(mirror_x_sign),
         "pid_column": pid_col,
         "atlas_column": atlas_col,
         "target_channels": int(target_channels),
+        "waveform_feature_names": waveform_feature_names,
+        "waveform_feature_sources": waveform_feature_sources,
+        "waveform_feature_missing_source_counts":
+            waveform_feature_missing_source_counts,
+        "waveform_feature_fallback_counts":
+            waveform_feature_fallback_counts,
+        "waveform_feature_fallback_policy":
+            "use source-table value when finite; replace only individual "
+            "non-finite cells from that unit's multichannel waveform",
+        "waveform_features_path": str(out_dir / "waveform_features.npy"),
         "ctx_names": ctx_names,
         "waveform_source": waveform_source,
         "normalize_waveforms_max_abs": bool(normalize_waveforms_max_abs),
@@ -737,8 +1033,9 @@ def prepare_latest_cells_encoder_data(
         "n_cosmos_regions": int(len(np.unique(cosmos_ids))),
         "note": (
             "waveforms.npy is [N,C,128]. acgs.npy is [N,10,201] when "
-            "use_acg3d=True, otherwise [N,1,128]. stpc.npy is [N,1000] when "
-            "use_stpc=True and is explicitly aligned through clusters_good.table.pqt."
+            "use_acg3d=True, otherwise [N,1,128]. stpc.npy is cropped to the requested "
+            "+/-stpc_window_ms interval (default +/-80 ms) and explicitly aligned through "
+            "clusters_good.table.pqt."
         ),
     }
     with open(out_dir / "latest_cells_encoder_manifest.json", "w", encoding="utf-8") as f:
@@ -762,7 +1059,14 @@ if __name__ == "__main__":
     parser.add_argument("--allow-peak-fallback", action="store_true")
     parser.add_argument("--no-waveform-normalization", action="store_true")
     parser.add_argument("--use-1d-acg", action="store_true", help="Use clusters.acgs_log.npy instead of recomputing 3D ACGs.")
-    parser.add_argument("--use-stpc", action="store_true", help="Load and save clusters_good.stpc.npy as stpc.npy.")
+    parser.add_argument("--no-stpc", action="store_true", help="Disable loading/saving stPC.")
+    parser.add_argument("--stpc-window-ms", type=float, default=80.0, help="Symmetric stPC crop around zero lag.")
+    parser.add_argument("--context-repo-id", type=str, default="AlonSaguy/ephys-atlas-models")
+    parser.add_argument("--context-vintage", type=str, default="2026_W26")
+    parser.add_argument("--n-cell-pcs", type=int, default=50)
+    parser.add_argument("--n-gene-pcs", type=int, default=50)
+    parser.add_argument("--no-mirror-x", action="store_true")
+    parser.add_argument("--mirror-x-sign", type=float, default=-1.0)
     args = parser.parse_args()
 
     prepare_latest_cells_encoder_data(
@@ -777,5 +1081,12 @@ if __name__ == "__main__":
         allow_peak_fallback=args.allow_peak_fallback,
         normalize_waveforms_max_abs=not args.no_waveform_normalization,
         use_acg3d=not args.use_1d_acg,
-        use_stpc=args.use_stpc,
+        use_stpc=not args.no_stpc,
+        stpc_window_ms=args.stpc_window_ms,
+        context_repo_id=args.context_repo_id,
+        context_vintage=args.context_vintage,
+        n_cell_pcs=args.n_cell_pcs,
+        n_gene_pcs=args.n_gene_pcs,
+        mirror_x_to_single_hemisphere=not args.no_mirror_x,
+        mirror_x_sign=args.mirror_x_sign,
     )

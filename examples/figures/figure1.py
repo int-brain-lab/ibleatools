@@ -323,31 +323,29 @@ def prepare_figure1_unit_metadata(
 # -----------------------------------------------------------------------------
 
 PANEL_C_FEATURE_GROUPS = {
-    "LFP features": [
+    "Local field potential features": [
         "rms_lf",
         "psd_alpha",
         "psd_gamma",
     ],
-    "AP features": [
+    "Action potential features": [
         "rms_ap",
         "alpha_mean",
         "alpha_std",
     ],
-    "Spike-detection features": [
-        "repolarisation_slope",
+    "Spike waveform features": [
         "peak_val",
         "peak_time_secs",
     ],
 }
 
 DISPLAY_FEATURE_NAMES = {
-    "rms_lf": "RMS LF",
-    "psd_alpha": "PSD alpha",
-    "psd_gamma": "PSD gamma",
-    "rms_ap": "RMS AP",
-    "alpha_mean": "Alpha mean",
-    "alpha_std": "Alpha std",
-    "repolarisation_slope": "Repolarization slope",
+    "rms_lf": "Root mean square\\nlocal field potential",
+    "psd_alpha": "Alpha-band power\\nspectral density",
+    "psd_gamma": "Gamma-band power\\nspectral density",
+    "rms_ap": "Root mean square\\naction potential",
+    "alpha_mean": "Mean spike\\nmagnitude",
+    "alpha_std": "Spike magnitude\\nSD",
     "peak_val": "Peak value",
     "peak_time_secs": "Peak time",
 }
@@ -557,7 +555,7 @@ def _plot_region_sampling_density(
     max_regions: Optional[int] = None,
 ):
     """
-    Plot sampling density = number of observations / Cosmos-region volume.
+    Plot sampling density = number of observations / brain-region volume.
     """
     if len(counts) == 0:
         ax.text(
@@ -877,7 +875,7 @@ def _plot_probe_feature_panel(
 
     # Put the title clearly above the feature-group labels.
     ax.set_title(
-        f"Z-scored feature profiles along one probe (PID {pid})",
+        "Z-scored feature profiles along one probe",
         fontsize=8,
         y=1.145,
         pad=0,
@@ -1025,14 +1023,14 @@ def _draw_panel_d_lfp_rms(ax):
         signal,
         color="black",
         lw=0.75,
-        label="LFP",
+        label="Local field potential",
     )
     ax.plot(
         time_ms,
         rms_trace,
         color="tab:orange",
         lw=1.15,
-        label="RMS LF (50-ms window)",
+        label="Root mean square (50 ms)",
     )
     ax.axhline(
         0,
@@ -1041,10 +1039,11 @@ def _draw_panel_d_lfp_rms(ax):
     )
 
     ax.set_title(
-        "LFP signal (2.5 kHz)",
+        "Local field potential signal (2.5 kHz)",
         pad=2,
     )
     ax.set_ylabel("Amplitude [a.u.]")
+    ax.set_xlabel("Time [ms]")
     ax.set_xticks([])
 
     # Add vertical headroom so the legend does not occlude the traces.
@@ -1144,13 +1143,13 @@ def _draw_panel_d_lfp_psd(ax):
         psd,
         color="black",
         lw=0.85,
-        label="LFP PSD",
+        label="Power spectral density",
     )
 
     ax.text(
         10,
         np.interp(10, freq, psd) * 1.18,
-        "PSD alpha",
+        "Alpha-band PSD",
         fontsize=6.3,
         ha="center",
         va="bottom",
@@ -1158,7 +1157,7 @@ def _draw_panel_d_lfp_psd(ax):
     ax.text(
         58,
         np.interp(58, freq, psd) * 1.55,
-        "PSD gamma",
+        "Gamma-band PSD",
         fontsize=6.3,
         ha="center",
         va="bottom",
@@ -1228,14 +1227,14 @@ def _draw_panel_d_ap_rms(ax):
         signal,
         color="black",
         lw=0.55,
-        label="AP",
+        label="Action potential",
     )
     ax.plot(
         time_ms,
         rms_trace,
         color="tab:orange",
         lw=1.05,
-        label="RMS AP (1-ms window)",
+        label="Root mean square (1 ms)",
     )
     ax.axhline(
         0,
@@ -1244,10 +1243,11 @@ def _draw_panel_d_ap_rms(ax):
     )
 
     ax.set_title(
-        "AP signal (30 kHz)",
+        "Action potential signal (30 kHz)",
         pad=2,
     )
     ax.set_ylabel("Amplitude [a.u.]")
+    ax.set_xlabel("Time [ms]")
     ax.set_xticks([])
 
     # Add vertical headroom so the legend does not occlude the traces.
@@ -1279,9 +1279,8 @@ def _draw_panel_d_alpha(ax):
     """
     Bottom-middle: alpha_mean / alpha_std.
 
-    alpha is the per-spike localization brightness. The distribution therefore
-    represents one alpha value per detected/localized spike on the channel.
-    alpha_mean and alpha_std summarize this empirical spike-wise distribution.
+    The plotted quantity is the per-spike localization magnitude. The mean and
+    standard deviation summarize this empirical spike-wise distribution.
     """
     rng = np.random.default_rng(19)
 
@@ -1342,7 +1341,7 @@ def _draw_panel_d_alpha(ax):
     ax.text(
         mean,
         ymax * 1.05,
-        "alpha mean",
+        "Mean spike magnitude",
         fontsize=6.2,
         ha="center",
         va="bottom",
@@ -1368,7 +1367,7 @@ def _draw_panel_d_alpha(ax):
     ax.text(
         mean,
         arrow_y * 0.83,
-        "alpha std",
+        "Spike magnitude SD",
         fontsize=6.2,
         ha="center",
         va="top",
@@ -1378,15 +1377,13 @@ def _draw_panel_d_alpha(ax):
         0,
         ymax * 1.20,
     )
-    ax.set_xlabel(
-        r"Spike-localization brightness $\alpha$"
-    )
+    ax.set_xlabel("Spike magnitude")
     ax.set_ylabel("Density")
     ax.spines[["top", "right"]].set_visible(False)
 
 
 def _draw_panel_d_waveform(ax):
-    """Right: waveform features with explicit peak and slope annotations."""
+    """Right: waveform features with explicit peak-value and peak-time annotations."""
     t = np.linspace(-0.75, 1.25, 260)
 
     waveform = (
@@ -1429,29 +1426,6 @@ def _draw_panel_d_waveform(ax):
     trough_t = float(t[trough_idx])
     peak_t = float(t[peak_idx])
     peak_v = float(waveform[peak_idx])
-
-    # Short local line showing where repolarization slope is measured.
-    t1 = trough_t + 0.24 * (peak_t - trough_t)
-    t2 = trough_t + 0.50 * (peak_t - trough_t)
-    v1 = float(np.interp(t1, t, waveform))
-    v2 = float(np.interp(t2, t, waveform))
-
-    ax.plot(
-        [t1, t2],
-        [v1, v2],
-        color="tab:orange",
-        lw=2.0,
-        zorder=4,
-    )
-    ax.text(
-        t2 + 0.08,
-        0.5 * (v1 + v2) - 0.18,
-        "repolarization\nslope",
-        fontsize=7,
-        ha="left",
-        va="center",
-        color="tab:orange",
-    )
 
     ax.scatter(
         [peak_t],
@@ -1532,7 +1506,7 @@ def _plot_feature_computation_cartoon(
       bottom = distribution of spike-localization brightness alpha
 
     Right:
-      average spike waveform with peak time/value and repolarization slope
+      average spike waveform with peak time and peak value
     """
     outer = GridSpecFromSubplotSpec(
         1,
@@ -1612,10 +1586,10 @@ def plot_ephys_atlas_dataset_summary_figure_ibl_style(
 ):
     """
     Figure 1:
-      a. Recording-channel sampling density per Cosmos region.
-      b. Sorted-neuron sampling density per Cosmos region.
-      c. Z-scored channel-by-feature heatmap for one random non-root probe.
-      d. Cartoon explaining representative LFP, AP, and waveform features.
+      a. Recording-channel sampling density by brain region.
+      b. Sorted-neuron sampling density by brain region.
+      c. Cartoon explaining representative signal and waveform features.
+      d. Z-scored channel-by-feature heatmap for one random non-root probe.
 
     Cosmos root (rid=1) is excluded throughout.
     """
@@ -1703,7 +1677,7 @@ def plot_ephys_atlas_dataset_summary_figure_ibl_style(
     gs = GridSpec(
         3,
         2,
-        height_ratios=[0.82, 0.90, 1.55],
+        height_ratios=[0.82, 1.55, 0.90],
         hspace=0.52,
         wspace=0.18,
         figure=fig,
@@ -1721,7 +1695,7 @@ def plot_ephys_atlas_dataset_summary_figure_ibl_style(
         channel_counts,
         region_volumes_mm3=region_volumes_mm3,
         brain_atlas=brain_atlas,
-        title="Channel sampling density per Cosmos brain region",
+        title="Channel sampling density by brain region",
         ylabel=r"Channels / mm$^3$",
         max_regions=max_regions,
     )
@@ -1731,24 +1705,31 @@ def plot_ephys_atlas_dataset_summary_figure_ibl_style(
         unit_counts,
         region_volumes_mm3=region_volumes_mm3,
         brain_atlas=brain_atlas,
-        title="Neuron sampling density per Cosmos brain region",
+        title="Neuron sampling density by brain region",
         ylabel=r"Neurons / mm$^3$",
         max_regions=max_regions,
     )
 
-    panel_c_frame = GridSpecFromSubplotSpec(
+    # Panel c: explain how the representative features are computed.
+    panel_c_axes = _plot_feature_computation_cartoon(
+        fig,
+        gs[1, :],
+    )
+
+    # Panel d: show those features along a representative probe.
+    panel_d_frame = GridSpecFromSubplotSpec(
         3,
         3,
-        subplot_spec=gs[1, :],
+        subplot_spec=gs[2, :],
         width_ratios=[0.10, 0.80, 0.10],
         height_ratios=[0.10, 0.80, 0.10],
         wspace=0.0,
         hspace=0.0,
     )
 
-    panel_c_axes = _plot_probe_feature_panel(
+    panel_d_axes = _plot_probe_feature_panel(
         fig,
-        panel_c_frame[1, 1],
+        panel_d_frame[1, 1],
         pid=random_pid,
         probe_ephys=ephys[random_probe_idx],
         probe_xyz=probe_positions[random_probe_idx],
@@ -1756,11 +1737,6 @@ def plot_ephys_atlas_dataset_summary_figure_ibl_style(
         brain_atlas=brain_atlas,
         mapping=mapping,
         mirror_fn=mirror_fn,
-    )
-
-    panel_d_axes = _plot_feature_computation_cartoon(
-        fig,
-        gs[2, :],
     )
 
     _add_panel_label(ax_ch, "a")

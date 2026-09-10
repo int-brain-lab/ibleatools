@@ -2731,7 +2731,7 @@ def _plot_two_trajectories(
         ax,
         xyz_a,
         color="tab:blue",
-        label="True trajectory",
+        label="Human-inferred trajectory",
         s=7.0,
     )
     _scatter_xyz_on_coronal(
@@ -2905,7 +2905,7 @@ def plot_supp_figure_5(
 
       a. Registered red-channel histology image (grayscale; 2:1 display ratio).
       b. Manually inferred histological trace as xyz scatter on CCF.
-      c. True channel trajectory and planned trajectory as xyz scatters.
+      c. Human-inferred channel trajectory and planned trajectory as xyz scatters.
       d. Ephys-Atlas model-inferred trajectory as xyz scatter.
       e. Recorded vs atlas-predicted electrophysiological signatures along
          the full histological trace for three features from each group.
@@ -3082,7 +3082,7 @@ def plot_supp_figure_5(
     _panel_label(ax_b, "b")
 
     # ------------------------------------------------------------------
-    # c. True vs planned trajectories.
+    # c. Human-inferred vs planned trajectories.
     # ------------------------------------------------------------------
     ax_c = fig.add_subplot(outer[1, 0])
     _plot_two_trajectories(
@@ -3091,7 +3091,7 @@ def plot_supp_figure_5(
         planned_xyz,
         brain_atlas=brain_atlas,
         coord_um=coord_um,
-        title="True and planned trajectories",
+        title="Human-inferred and planned trajectories",
     )
     _panel_label(ax_c, "c")
 
@@ -3247,7 +3247,6 @@ def main():
         ctx_mean,
         ctx_std,
         split_info,
-        preprocessing_stats_out,
     ) = build_channels_plus_emptyvoxels_with_neighbors(
         ctx_manager,
         ephys,
@@ -3258,9 +3257,6 @@ def main():
         batch_size_train=cfg.batch_size_train,
         batch_size_eval=cfg.batch_size_eval,
         seed=cfg.seed,
-        split_manifest=release["split_manifest"],
-        preprocessing_stats=release["preprocessing_stats"],
-        return_preprocessing_stats=True,
     )
 
     base_model, conf_model = construct_released_models(
