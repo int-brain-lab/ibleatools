@@ -1,360 +1,211 @@
 from __future__ import annotations
 
 import json
-import random
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Mapping, Tuple
+from typing import Optional
 
 import numpy as np
-import torch
-from torch.utils.data import Dataset
-
-from ephysatlas.unit_level_encoder.config import Config
+from iblatlas.regions import BrainRegions
+from sklearn.preprocessing import StandardScaler
 
 
 @dataclass
-class PreparedData:
+class UnitData:
     waveforms: np.ndarray
-    acgs: np.ndarray
+    acgs: Optional[np.ndarray]
+    stpc: Optional[np.ndarray]
     context: np.ndarray
     xyz_m: np.ndarray
     pids: np.ndarray
-    probe_index: np.ndarray
-    unique_pids: np.ndarray
-    probe_split: np.ndarray
-    split: np.ndarray
-    voxel_id: np.ndarray
-    voxel_key: np.ndarray
-    context_mean: np.ndarray
-    context_std: np.ndarray
+    cosmos_ids: np.ndarray
+    beryl_ids: np.ndarray
+    allen_ids: np.ndarray
+    waveform_features: np.ndarray
+    waveform_feature_names: list[str]
+    split: np.ndarray  # 0 train, 1 validation, 2 test
 
+
+@dataclass
+class ContextTransform:
+    """Training-only standardization for the 100-D molecular atlas context.
+
+    The input is already a PCA representation: 50 MERFISH PCs followed by
+    50 AGEA PCs. Applying another PCA here would change the representation
+    relative to the channel-level spatial encoder, so we only standardize it.
+    """
+    scaler: StandardScaler
+
+    def transform(self, context: np.ndarray) -> np.ndarray:
+        return self.scaler.transform(context).astype(np.float32)
+
+
+
+def infer_training_hemisphere_sign(xyz_m: np.ndarray, split: np.ndarray | None = None) -> float:
+    """Infer the canonical ML sign from recorded units, robust to a few midline points."""
+    xyz = np.asarray(xyz_m, np.float64)
+    if split is not None:
+        xyz = xyz[np.asarray(split) == 0]
+    x = xyz[:, 0]
+    x = x[np.isfinite(x) & (np.abs(x) > 1e-9)]
+    if len(x) == 0:
+        return 1.0
+    return 1.0 if float(np.median(x)) >= 0.0 else -1.0
+
+
+def mirror_xyz_to_hemisphere(xyz_m: np.ndarray, hemisphere_sign: float) -> np.ndarray:
+    """Fold ML coordinate x onto one hemisphere while preserving AP/DV."""
+    out = np.asarray(xyz_m, np.float32).copy()
+    sign = 1.0 if float(hemisphere_sign) >= 0 else -1.0
+    out[:, 0] = sign * np.abs(out[:, 0])
+    return out
 
 def set_seed(seed: int) -> None:
+    import random
+    import torch
+
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
 
-def normalize_waveforms(waveforms: np.ndarray, eps: float = 1e-8) -> np.ndarray:
-    x = np.asarray(waveforms, dtype=np.float32).copy()
-    scale = np.max(np.abs(x), axis=(-2, -1), keepdims=True)
-    x /= np.maximum(scale, eps)
-    return np.clip(np.nan_to_num(x), -1.0, 1.0).astype(np.float32)
+def _download_split(repo_id: str, vintage: str) -> dict:
+    """Download the authoritative PID split from the release revision."""
+    from huggingface_hub import hf_hub_download
 
-
-def normalize_acgs(acgs: np.ndarray) -> np.ndarray:
-    x = np.nan_to_num(np.asarray(acgs, dtype=np.float32), nan=0.0, posinf=0.0, neginf=0.0)
-    return np.log1p(np.clip(x, 0.0, None)).astype(np.float32)
-
-
-def split_probes_from_manifest(
-    pids: np.ndarray,
-    split_manifest: dict,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """
-    Assign unit-level PIDs using the authoritative channel/spatial split.
-
-    Rules
-    -----
-    1. PIDs present in the spatial split keep their exact assignment.
-    2. PIDs absent from the spatial split are assigned to TRAIN.
-    3. The spatial TEST set is never modified or expanded.
-    4. The spatial VALIDATION set is never expanded.
-
-    Returns
-    -------
-    unit_split : np.ndarray
-        Per-unit split labels:
-            0 = train
-            1 = validation
-            2 = test
-
-    unique_pids : np.ndarray
-        Sorted unique unit-level PIDs.
-
-    probe_split : np.ndarray
-        Per-unique-PID split assignment.
-    """
-
-    pids = np.asarray(pids)
-    unique_pids, probe_index = np.unique(
-        pids,
-        return_inverse=True,
+    path = hf_hub_download(
+        repo_id=repo_id,
+        filename="split.json",
+        revision=vintage,
     )
 
-    train_pids = {
-        str(pid)
-        for pid in split_manifest.get("train_pids", [])
-    }
-    validation_pids = {
-        str(pid)
-        for pid in split_manifest.get("validation_pids", [])
-    }
-    test_pids = {
-        str(pid)
-        for pid in split_manifest.get("test_pids", [])
-    }
-
-    # ------------------------------------------------------------------
-    # Validate the authoritative spatial split itself.
-    # ------------------------------------------------------------------
-    overlap_train_val = train_pids & validation_pids
-    overlap_train_test = train_pids & test_pids
-    overlap_val_test = validation_pids & test_pids
-
-    if (
-        overlap_train_val
-        or overlap_train_test
-        or overlap_val_test
-    ):
-        raise RuntimeError(
-            "The authoritative spatial split is invalid: "
-            "some PIDs occur in more than one split.\n"
-            f"train/validation overlap: "
-            f"{sorted(overlap_train_val)[:10]}\n"
-            f"train/test overlap: "
-            f"{sorted(overlap_train_test)[:10]}\n"
-            f"validation/test overlap: "
-            f"{sorted(overlap_val_test)[:10]}"
-        )
-
-    if len(test_pids) == 0:
-        raise RuntimeError(
-            "Authoritative spatial split contains no test PIDs. "
-            "Refusing to construct the unit-level split because "
-            "the held-out test set must remain fixed."
-        )
-
-    # ------------------------------------------------------------------
-    # Assign every unit-level PID.
-    #
-    # Unknown/new PIDs default to TRAIN only.
-    # ------------------------------------------------------------------
-    probe_split = np.zeros(
-        len(unique_pids),
-        dtype=np.int8,
+    return json.loads(
+        Path(path).read_text(encoding="utf-8")
     )
 
-    extra_train_pids = []
 
-    for i, pid in enumerate(unique_pids):
-        pid_str = str(pid)
-
-        if pid_str in test_pids:
-            probe_split[i] = 2
-
-        elif pid_str in validation_pids:
-            probe_split[i] = 1
-
-        elif pid_str in train_pids:
-            probe_split[i] = 0
-
-        else:
-            # PID exists in unit-level data but not in the spatial split.
-            # It may be used for training, but never validation/test.
-            probe_split[i] = 0
-            extra_train_pids.append(pid_str)
-
-    unit_split = probe_split[probe_index]
-
-    # ------------------------------------------------------------------
-    # Hard safety checks.
-    # ------------------------------------------------------------------
-    unit_pid_to_split = {
-        str(pid): int(split_value)
-        for pid, split_value in zip(
-            unique_pids,
-            probe_split,
-        )
+def _split_pid_sets(manifest: dict) -> tuple[set[str], set[str], set[str]]:
+    """Accept the split.json layouts used by the previous ephys-atlas runs."""
+    aliases = {
+        "train": ("train", "train_pids", "training"),
+        "val": ("val", "validation", "val_pids", "validation_pids"),
+        "test": ("test", "test_pids", "testing"),
     }
 
-    # Every spatial test PID that exists in the unit dataset MUST be test.
-    incorrectly_assigned_test = [
-        pid
-        for pid in test_pids
-        if pid in unit_pid_to_split
-        and unit_pid_to_split[pid] != 2
+    def read_one(keys):
+        for key in keys:
+            if key in manifest:
+                value = manifest[key]
+                if isinstance(value, dict):
+                    for sub in ("pids", "pid", "values"):
+                        if sub in value:
+                            value = value[sub]
+                            break
+                return set(map(str, value))
+        return set()
+
+    train = read_one(aliases["train"])
+    val = read_one(aliases["val"])
+    test = read_one(aliases["test"])
+    if not test:
+        raise ValueError("Could not identify a test PID list in split.json")
+    return train, val, test
+
+
+def build_split(pids: np.ndarray, manifest: dict) -> np.ndarray:
+    """Preserve authoritative validation/test PIDs; unseen unit-only PIDs go to train."""
+    train, val, test = _split_pid_sets(manifest)
+    split = np.zeros(len(pids), dtype=np.int8)
+    pid_str = np.asarray(pids).astype(str)
+    split[np.isin(pid_str, list(val))] = 1
+    split[np.isin(pid_str, list(test))] = 2
+
+    # Critical invariant: never silently move a validation/test PID to train.
+    for pid in np.unique(pid_str[split == 2]):
+        if pid not in test:
+            raise RuntimeError(f"test split corruption for PID {pid}")
+    return split
+
+
+def assert_probe_disjoint(data: UnitData) -> None:
+    sets = [set(data.pids[data.split == s].astype(str)) for s in (0, 1, 2)]
+    if sets[0] & sets[1] or sets[0] & sets[2] or sets[1] & sets[2]:
+        raise RuntimeError("PID leakage detected across train/validation/test splits")
+
+
+def load_prepared_data(data_dir: Path, cfg, split_manifest: dict | None = None) -> UnitData:
+    data_dir = Path(data_dir)
+    required = [
+        "waveforms.npy", "ctx.npy", "xyz.npy", "pids.npy", "cosmos.npy",
+        "allen.npy", "waveform_features.npy", "waveform_feature_names.json",
     ]
-    if incorrectly_assigned_test:
-        raise RuntimeError(
-            "FATAL: a spatial-encoder test PID was assigned to a "
-            "non-test unit split. First offending PIDs: "
-            f"{incorrectly_assigned_test[:10]}"
-        )
+    if cfg.use_acg:
+        required.append("acgs.npy")
+    if cfg.use_stpc:
+        required.append("stpc.npy")
+    missing = [name for name in required if not (data_dir / name).exists()]
+    if missing:
+        raise FileNotFoundError(f"Missing prepared arrays in {data_dir}: {missing}")
 
-    # Unknown PIDs must never enter validation or test.
-    known_pids = train_pids | validation_pids | test_pids
-    wrongly_held_out_unknown = [
-        str(pid)
-        for pid, split_value in zip(
-            unique_pids,
-            probe_split,
-        )
-        if str(pid) not in known_pids
-        and int(split_value) != 0
-    ]
-    if wrongly_held_out_unknown:
-        raise RuntimeError(
-            "FATAL: PIDs absent from the spatial split were assigned "
-            "outside training. First offending PIDs: "
-            f"{wrongly_held_out_unknown[:10]}"
-        )
+    waveforms = np.load(data_dir / "waveforms.npy").astype(np.float32)
+    acgs = np.load(data_dir / "acgs.npy").astype(np.float32) if cfg.use_acg else None
+    stpc = np.load(data_dir / "stpc.npy").astype(np.float32) if cfg.use_stpc else None
+    context = np.load(data_dir / "ctx.npy").astype(np.float32)
+    xyz = np.load(data_dir / "xyz.npy").astype(np.float32)
+    pids = np.load(data_dir / "pids.npy", allow_pickle=True).astype(str)
+    cosmos = np.load(data_dir / "cosmos.npy").astype(np.int64)
+    allen = np.load(data_dir / "allen.npy").astype(np.int64)
+    features = np.load(data_dir / "waveform_features.npy").astype(np.float32)
+    feature_names = json.loads((data_dir / "waveform_feature_names.json").read_text(encoding="utf-8"))
 
-    print(
-        "[unit split] using authoritative spatial PID split "
-        "with unit-only PIDs added to training."
-    )
-    print(
-        "[unit split] "
-        f"train={int(np.sum(probe_split == 0))} PIDs, "
-        f"validation={int(np.sum(probe_split == 1))} PIDs, "
-        f"test={int(np.sum(probe_split == 2))} PIDs"
-    )
+    br = BrainRegions()
+    beryl = br.remap(allen, source_map="Allen", target_map="Beryl").astype(np.int64)
 
-    if extra_train_pids:
+    if split_manifest is None:
+        split_manifest = _download_split(cfg.repo_id, cfg.vintage)
+    split = build_split(pids, split_manifest)
+
+    if bool(getattr(cfg, "mirror_x_to_single_hemisphere", False)):
+        hemisphere_sign = float(getattr(cfg, "mirror_x_sign", infer_training_hemisphere_sign(xyz, split)))
+        xyz = mirror_xyz_to_hemisphere(xyz, hemisphere_sign)
         print(
-            "[unit split] added "
-            f"{len(extra_train_pids)} unit-only PIDs to TRAIN "
-            "(validation/test unchanged)."
-        )
-        print(
-            "[unit split] first added training PIDs:",
-            sorted(extra_train_pids)[:10],
+            f"[mirror-x] folded all unit xyz onto canonical training hemisphere "
+            f"sign={hemisphere_sign:+.0f}; model/evaluation spatial coordinates are unilateral"
         )
 
-    return (
-        unit_split.astype(np.int8),
-        unique_pids,
-        probe_split.astype(np.int8),
-    )
-
-
-def assert_strict_probe_split(
-    pids: np.ndarray,
-    split: np.ndarray,
-    *,
-    output_path: Path | None = None,
-) -> Dict[str, object]:
-    split_names = ("train", "validation", "test")
-    pids = np.asarray(pids).astype(str)
-    pid_sets = [set(pids[split == i].tolist()) for i in range(3)]
-    overlaps = {
-        "train_validation": sorted(pid_sets[0] & pid_sets[1]),
-        "train_test": sorted(pid_sets[0] & pid_sets[2]),
-        "validation_test": sorted(pid_sets[1] & pid_sets[2]),
-    }
-    if any(overlaps.values()):
-        raise RuntimeError(f"FATAL split leakage: {overlaps}")
-
-    audit: Dict[str, object] = {
-        "strict_group_variable": "pid",
-        "no_pid_overlap": True,
-        "overlaps": overlaps,
-        "splits": {
-            split_names[i]: {
-                "n_units": int((split == i).sum()),
-                "n_probes": int(len(pid_sets[i])),
-                "pids": sorted(pid_sets[i]),
-            }
-            for i in range(3)
-        },
-    }
-    if output_path is not None:
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(json.dumps(audit, indent=2), encoding="utf-8")
-    return audit
-
-
-def make_voxel_ids(xyz_m: np.ndarray, voxel_size_um: float) -> Tuple[np.ndarray, np.ndarray]:
-    keys = np.floor(np.asarray(xyz_m, dtype=np.float64) * 1e6 / voxel_size_um).astype(np.int64)
-    unique, inv = np.unique(keys, axis=0, return_inverse=True)
-    return inv.astype(np.int64), unique
-
-
-def prepare_data(
-    waveforms,
-    acgs,
-    context,
-    xyz,
-    pids,
-    cfg: Config,
-    *,
-    split_manifest: Mapping[str, object],
-) -> PreparedData:
-    n = len(waveforms)
-    if not (len(acgs) == len(context) == len(xyz) == len(pids) == n):
-        raise ValueError("All arrays must have the same first dimension")
-    if tuple(waveforms.shape[1:]) != tuple(cfg.waveform_shape):
-        raise ValueError(f"Expected waveform shape {cfg.waveform_shape}, got {waveforms.shape[1:]}")
-    if tuple(acgs.shape[1:]) != tuple(cfg.acg_shape):
-        raise ValueError(f"Expected ACG shape {cfg.acg_shape}, got {acgs.shape[1:]}")
-
-    xyz_m = np.asarray(xyz, dtype=np.float32).copy()
-    if not cfg.xyz_in_meters:
-        xyz_m = xyz_m / 1e6
-    if cfg.mirror_x_to_left_hemisphere:
-        xyz_m[:, 0] = -np.abs(xyz_m[:, 0])
-
-    pids = np.asarray(pids).astype(str)
-    split, unique_pids, probe_split = split_probes_from_manifest(
-        pids,
-        split_manifest,
-    )
-    _, probe_index = np.unique(pids, return_inverse=True)
-    assert_strict_probe_split(pids, split)
-    voxel_id, voxel_key = make_voxel_ids(xyz_m, cfg.voxel_size_um)
-
-    context = np.asarray(context, dtype=np.float32).copy()
-    if cfg.mirror_x_to_left_hemisphere:
-        if context.shape[1] < 3:
-            raise ValueError("Expected context to begin with x, y, z coordinates")
-        context[:, 0] = xyz_m[:, 0]
-
-    train = split == 0
-    mean = context[train].mean(0, keepdims=True)
-    std = context[train].std(0, keepdims=True)
-    unique_counts = np.array([len(np.unique(context[train, j])) for j in range(context.shape[1])])
-    continuous = unique_counts > 4
-    mean[:, ~continuous] = 0.0
-    std[:, ~continuous] = 1.0
-    std = np.maximum(std, 1e-6)
-    context = (context - mean) / std
-
-    return PreparedData(
-        waveforms=normalize_waveforms(waveforms),
-        acgs=normalize_acgs(acgs),
-        context=context.astype(np.float32),
-        xyz_m=xyz_m,
+    data = UnitData(
+        waveforms=waveforms,
+        acgs=acgs,
+        stpc=stpc,
+        context=context,
+        xyz_m=xyz,
         pids=pids,
-        probe_index=probe_index.astype(np.int64),
-        unique_pids=unique_pids,
-        probe_split=probe_split,
+        cosmos_ids=cosmos,
+        beryl_ids=beryl,
+        allen_ids=allen,
+        waveform_features=features,
+        waveform_feature_names=feature_names,
         split=split,
-        voxel_id=voxel_id,
-        voxel_key=voxel_key,
-        context_mean=mean.astype(np.float32),
-        context_std=std.astype(np.float32),
     )
+    assert_probe_disjoint(data)
+    return data
 
 
-class UnitDataset(Dataset):
-    def __init__(self, data: PreparedData, indices: np.ndarray):
-        self.data = data
-        self.indices = np.asarray(indices, dtype=np.int64)
-
-    def __len__(self):
-        return len(self.indices)
-
-    def __getitem__(self, item: int):
-        i = int(self.indices[item])
-        return {
-            "index": torch.tensor(i, dtype=torch.long),
-            "waveform": torch.from_numpy(self.data.waveforms[i]),
-            "acg": torch.from_numpy(self.data.acgs[i]),
-        }
+def fit_context_transform(data: UnitData, cfg) -> ContextTransform:
+    """Fit only a StandardScaler on TRAIN molecular-context vectors."""
+    expected = int(cfg.n_cell_pcs) + int(cfg.n_gene_pcs)
+    if data.context.shape[1] != expected:
+        raise ValueError(
+            f"Expected {expected}-D molecular context "
+            f"({cfg.n_cell_pcs} MERFISH + {cfg.n_gene_pcs} AGEA PCs), "
+            f"got shape={data.context.shape}. Re-run data preparation."
+        )
+    train = data.split == 0
+    scaler = StandardScaler().fit(data.context[train])
+    return ContextTransform(scaler=scaler)
 
 
-def split_indices(data: PreparedData):
-    return tuple(np.flatnonzero(data.split == i) for i in range(3))
+def split_indices(data: UnitData) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    return tuple(np.flatnonzero(data.split == s) for s in (0, 1, 2))

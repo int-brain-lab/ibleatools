@@ -1,170 +1,264 @@
 from __future__ import annotations
 
+import copy
 import json
-import math
-import time
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any
 
+import joblib
 import numpy as np
 import torch
-from sklearn.metrics import r2_score
-from torch.utils.data import DataLoader
+import torch.nn.functional as F
+from sklearn.preprocessing import StandardScaler
+from torch.utils.data import DataLoader, Dataset
 from tqdm.auto import tqdm
 
-from ephysatlas.unit_level_encoder.config import Config
-from ephysatlas.unit_level_encoder.data import PreparedData, UnitDataset, assert_strict_probe_split, split_indices
-from ephysatlas.unit_level_encoder.gmm_models import fit_point_transformer_gmm, move
-from ephysatlas.unit_level_encoder.model import (
-    MultimodalAutoencoder,
-    acg_reconstruction_loss,
-    augment_acg,
-    augment_waveform,
-    latent_scale_loss,
-    vicreg_loss,
-    waveform_morphology_loss,
-    waveform_reconstruction_loss,
-)
+from .data import split_indices
+from .model import UnitAutoencoder, covariance_penalty, variance_penalty
 
 
-def _release_config(cfg: Config) -> dict:
-    payload = asdict(cfg)
-    payload.pop("output_dir", None)
-    payload["device"] = str(cfg.device)
-    return payload
+class FeatureTargetTransform:
+    """TRAIN-only feature transform used by the feature-fidelity AE.
+
+    The first 10 waveform features are standardized. Polarity is encoded as a
+    categorical variable using the exact unique TRAIN values.
+    """
+
+    def __init__(self, scaler: StandardScaler, polarity_values: np.ndarray):
+        self.scaler = scaler
+        self.polarity_values = np.asarray(polarity_values, np.float32)
+
+    def continuous(self, features):
+        return self.scaler.transform(np.asarray(features)[:, :-1]).astype(np.float32)
+
+    def polarity_indices(self, polarity):
+        x = np.asarray(polarity, np.float32).reshape(-1)
+        dist = np.abs(x[:, None] - self.polarity_values[None, :])
+        return np.argmin(dist, axis=1).astype(np.int64)
 
 
-def _to_device(batch, device):
-    return {k: (v.to(device) if torch.is_tensor(v) else v) for k, v in batch.items()}
+class UnitDataset(Dataset):
+    def __init__(self, data, indices, feature_transform: FeatureTargetTransform | None = None):
+        self.data = data
+        self.indices = np.asarray(indices, dtype=np.int64)
+        self.feature_transform = feature_transform
+
+        self._feature_cont = None
+        self._feature_pol = None
+        if feature_transform is not None:
+            feat = data.waveform_features[self.indices]
+            self._feature_cont = feature_transform.continuous(feat)
+            self._feature_pol = feature_transform.polarity_indices(feat[:, -1])
+
+    def __len__(self):
+        return len(self.indices)
+
+    def __getitem__(self, i):
+        idx = int(self.indices[i])
+        item = {
+            "index": idx,
+            "waveform": torch.from_numpy(self.data.waveforms[idx]),
+        }
+        if self.data.acgs is not None:
+            item["acg"] = torch.from_numpy(self.data.acgs[idx])
+        if self.data.stpc is not None:
+            item["stpc"] = torch.from_numpy(self.data.stpc[idx])
+        if self.feature_transform is not None:
+            item["feature_continuous"] = torch.from_numpy(self._feature_cont[i])
+            item["feature_polarity"] = torch.tensor(self._feature_pol[i], dtype=torch.long)
+        return item
 
 
-def run_ae_epoch(model, loader, optimizer, scaler, cfg, train=True):
-    model.train(train); sums = {}; n = 0
+def fit_feature_target_transform(data) -> FeatureTargetTransform:
+    train = data.split == 0
+    train_features = np.asarray(data.waveform_features[train], np.float64)
+    scaler = StandardScaler().fit(train_features[:, :-1])
+    polarity_values = np.unique(train_features[:, -1].astype(np.float32))
+    if len(polarity_values) < 2:
+        raise RuntimeError(f"Polarity has only one TRAIN category: {polarity_values.tolist()}")
+    return FeatureTargetTransform(scaler, polarity_values)
+
+
+def _batch_loss(model, batch, cfg):
+    waveform = batch["waveform"].to(cfg.device)
+    acg = batch.get("acg")
+    stpc = batch.get("stpc")
+    if acg is not None:
+        acg = acg.to(cfg.device)
+    if stpc is not None:
+        stpc = stpc.to(cfg.device)
+
+    lat = model.encode(waveform, acg, stpc)
+    rec = model.decode(lat)
+    losses = {"waveform_reconstruction": F.mse_loss(rec["waveform"], waveform)}
+    total = losses["waveform_reconstruction"]
+
+    if cfg.use_acg:
+        losses["acg_reconstruction"] = F.mse_loss(rec["acg"], acg)
+        total = total + losses["acg_reconstruction"]
+    if cfg.use_stpc:
+        losses["stpc_reconstruction"] = F.mse_loss(rec["stpc"], stpc)
+        total = total + losses["stpc_reconstruction"]
+
+    var = torch.stack([variance_penalty(z, cfg.latent_std_target) for z in lat.values()]).mean()
+    cov = torch.stack([covariance_penalty(z) for z in lat.values()]).mean()
+    total = total + cfg.lambda_latent_variance * var + cfg.lambda_latent_covariance * cov
+    losses["latent_variance_penalty"] = var
+    losses["latent_covariance_penalty"] = cov
+
+    if bool(getattr(cfg, "feature_fidelity", False)):
+        target_cont = batch["feature_continuous"].to(cfg.device)
+        target_pol = batch["feature_polarity"].to(cfg.device)
+        pred_cont, pred_pol = model.predict_waveform_features(lat["waveform"])
+        cont_loss = F.smooth_l1_loss(pred_cont, target_cont)
+        pol_loss = F.cross_entropy(pred_pol, target_pol)
+        losses["feature_continuous"] = cont_loss
+        losses["feature_polarity"] = pol_loss
+        total = total + float(cfg.lambda_feature_continuous) * cont_loss
+        total = total + float(cfg.lambda_feature_polarity) * pol_loss
+
+    losses["total"] = total
+    return losses
+
+
+def _run_epoch(model, loader, cfg, optimizer=None):
+    train = optimizer is not None
+    model.train(train)
+    sums = {}
+    n = 0
     for batch in tqdm(loader, desc="AE train" if train else "AE val", leave=False):
-        batch = _to_device(batch, cfg.device)
-        waveform, acg = batch["waveform"], batch["acg"]
         if train:
             optimizer.zero_grad(set_to_none=True)
-        with torch.set_grad_enabled(train), torch.autocast(
-            device_type="cuda", dtype=torch.float16,
-            enabled=cfg.amp and str(cfg.device).startswith("cuda"),
-        ):
-            clean = model.encode(waveform, acg)
-            rec = model.reconstruct(clean)
-            wave_view = model.encode(augment_waveform(waveform, cfg), acg)
-            acg_view = model.encode(waveform, augment_acg(acg, cfg))
-            vic = vicreg_loss(wave_view["p_wave"], acg_view["p_acg"], cfg)
-            wave_loss = waveform_reconstruction_loss(rec["waveform_reconstruction"], waveform)
-            morph = waveform_morphology_loss(rec["waveform_reconstruction"], waveform, cfg)
-            acg_loss = acg_reconstruction_loss(rec["acg_reconstruction"], acg, cfg)
-            raw_scale = latent_scale_loss(clean["z_wave_shared"], clean["z_acg_shared"], cfg)
-            loss = (
-                cfg.lambda_waveform_reconstruction * wave_loss
-                + cfg.lambda_waveform_morphology * morph
-                + cfg.lambda_acg_reconstruction * acg_loss
-                + cfg.lambda_vicreg_invariance * vic["invariance"]
-                + cfg.lambda_vicreg_variance * vic["variance"]
-                + cfg.lambda_vicreg_covariance * vic["covariance"]
-                + cfg.lambda_raw_latent_scale * raw_scale
-            )
+        with torch.set_grad_enabled(train):
+            losses = _batch_loss(model, batch, cfg)
         if train:
-            scaler.scale(loss).backward(); scaler.unscale_(optimizer)
+            losses["total"].backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
-            scaler.step(optimizer); scaler.update()
-        bs = len(waveform); n += bs
-        values = {
-            "total": loss, "wave_recon": wave_loss, "wave_morphology": morph,
-            "acg_recon": acg_loss, "raw_latent_scale": raw_scale,
-            "vic_invariance": vic["invariance"], "vic_variance": vic["variance"],
-            "vic_covariance": vic["covariance"],
-            "wave_shared_std": clean["z_wave_shared"].std(0, unbiased=False).mean(),
-            "acg_shared_std": clean["z_acg_shared"].std(0, unbiased=False).mean(),
-        }
-        for key, value in values.items():
+            optimizer.step()
+        bs = len(batch["waveform"])
+        n += bs
+        for key, value in losses.items():
             sums[key] = sums.get(key, 0.0) + float(value.detach().cpu()) * bs
     return {key: value / max(n, 1) for key, value in sums.items()}
 
 
-def train_autoencoder(data: PreparedData, cfg: Config):
-    out = Path(cfg.output_dir); out.mkdir(parents=True, exist_ok=True)
-    assert_strict_probe_split(data.pids, data.split)
-    train_indices, validation_indices, _ = split_indices(data)
-    train_loader = DataLoader(UnitDataset(data, train_indices), batch_size=cfg.ae_batch_size, shuffle=True,
-                              num_workers=cfg.num_workers, generator=torch.Generator().manual_seed(cfg.seed))
-    validation_loader = DataLoader(UnitDataset(data, validation_indices), batch_size=cfg.validation_batch_size,
-                                   shuffle=False, num_workers=cfg.num_workers)
-    model = MultimodalAutoencoder(cfg).to(cfg.device)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.ae_learning_rate, weight_decay=cfg.ae_weight_decay)
-    scaler = torch.amp.GradScaler("cuda", enabled=cfg.amp and str(cfg.device).startswith("cuda"))
-    history = {}; best = math.inf; state = None; bad = 0
+def checkpoint_name(cfg) -> str:
+    mods = "wave" + ("_acg" if cfg.use_acg else "") + ("_stpc" if cfg.use_stpc else "")
+    suffix = "_feature_fidelity" if bool(getattr(cfg, "feature_fidelity", False)) else ""
+    return f"ae_{mods}_d{cfg.modality_latent_dim}{suffix}.pt"
+
+
+def train_autoencoder(data, cfg, checkpoint_dir: Path, initialize_from: Path | None = None):
+    checkpoint_dir = Path(checkpoint_dir)
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    train_ids, val_ids, _ = split_indices(data)
+
+    feature_transform = fit_feature_target_transform(data) if cfg.feature_fidelity else None
+    train_loader = DataLoader(
+        UnitDataset(data, train_ids, feature_transform),
+        batch_size=cfg.ae_batch_size,
+        shuffle=True,
+        num_workers=cfg.num_workers,
+    )
+    val_loader = DataLoader(
+        UnitDataset(data, val_ids, feature_transform),
+        batch_size=cfg.eval_batch_size,
+        shuffle=False,
+        num_workers=cfg.num_workers,
+    )
+
+    n_classes = len(feature_transform.polarity_values) if feature_transform is not None else 2
+    model = UnitAutoencoder(cfg, n_continuous_features=10, n_polarity_classes=n_classes).to(cfg.device)
+
+    if initialize_from is not None and Path(initialize_from).exists():
+        source = torch.load(initialize_from, map_location=cfg.device, weights_only=False)
+        source_state = source["model_state_dict"]
+        compatible = {k: v for k, v in source_state.items() if k in model.state_dict() and model.state_dict()[k].shape == v.shape}
+        missing, unexpected = model.load_state_dict(compatible, strict=False)
+        print(f"[AE] initialized compatible weights from {initialize_from}; new parameters={len(missing)}")
+
+    opt = torch.optim.AdamW(model.parameters(), lr=cfg.ae_learning_rate, weight_decay=cfg.ae_weight_decay)
+    best = np.inf
+    best_state = None
+    history = []
+    bad = 0
+
     for epoch in range(1, cfg.ae_epochs + 1):
-        start = time.perf_counter()
-        tr = run_ae_epoch(model, train_loader, optimizer, scaler, cfg, True)
-        va = run_ae_epoch(model, validation_loader, optimizer, scaler, cfg, False)
-        monitor = va["wave_recon"] + cfg.lambda_acg_reconstruction * va["acg_recon"] + 0.1 * cfg.lambda_waveform_morphology * va["wave_morphology"]
-        for prefix, metrics in (("train", tr), ("val", va)):
-            for key, value in metrics.items():
-                history.setdefault(f"{prefix}_{key}", []).append(value)
-        history.setdefault("epoch_seconds", []).append(time.perf_counter() - start)
-        if monitor < best - cfg.min_delta:
-            best = monitor; bad = 0
-            state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
-            torch.save({"model_state_dict": state, "config": _release_config(cfg), "history": history, "epoch": epoch}, out / cfg.ae_checkpoint_name)
+        tr = _run_epoch(model, train_loader, cfg, opt)
+        va = _run_epoch(model, val_loader, cfg, None)
+        history.append({"epoch": epoch, "train": tr, "validation": va})
+        print(f"[AE] epoch={epoch:03d} train={tr['total']:.6f} val={va['total']:.6f}")
+        if va["total"] < best - cfg.ae_min_delta:
+            best = va["total"]
+            best_state = copy.deepcopy(model.state_dict())
+            bad = 0
         else:
             bad += 1
-        print(f"AE epoch {epoch:03d}: train={tr['total']:.4f} val wave={va['wave_recon']:.4f} acg={va['acg_recon']:.4f}")
-        if bad >= cfg.patience:
+        if bad >= cfg.ae_patience:
             break
-    if state is None:
-        raise RuntimeError("Autoencoder produced no checkpoint")
-    model.load_state_dict(state)
-    return model, {"history": history, "best_monitor": float(best)}
+
+    if best_state is None:
+        raise RuntimeError("AE did not produce a valid checkpoint")
+    model.load_state_dict(best_state)
+    payload = {
+        "model_state_dict": best_state,
+        "config": {**asdict(cfg), "device": str(cfg.device)},
+        "history": history,
+        "best_validation_loss": float(best),
+        "active_modalities": list(cfg.active_modalities()),
+        "feature_fidelity": bool(cfg.feature_fidelity),
+        "polarity_values": feature_transform.polarity_values.tolist() if feature_transform else None,
+    }
+    path = checkpoint_dir / checkpoint_name(cfg)
+    torch.save(payload, path)
+    if feature_transform is not None:
+        joblib.dump(feature_transform, checkpoint_dir / f"{path.stem}_feature_transform.joblib")
+    (checkpoint_dir / f"{path.stem}_history.json").write_text(json.dumps(history, indent=2), encoding="utf-8")
+    return model, payload, path
+
+
+def load_autoencoder_file(path: Path | str, cfg):
+    """Load an autoencoder from an explicit release checkpoint path."""
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(f"Missing AE checkpoint: {path}")
+    payload = torch.load(path, map_location=cfg.device, weights_only=False)
+    polarity_values = payload.get("polarity_values")
+    n_classes = len(polarity_values) if polarity_values is not None else 2
+    model = UnitAutoencoder(cfg, n_continuous_features=10, n_polarity_classes=n_classes).to(cfg.device)
+    model.load_state_dict(payload["model_state_dict"], strict=True)
+    model.eval()
+    return model, payload, path
+
+
+def load_autoencoder(cfg, checkpoint_dir: Path):
+    path = Path(checkpoint_dir) / checkpoint_name(cfg)
+    if not path.exists():
+        raise FileNotFoundError(f"Missing AE checkpoint: {path}")
+    payload = torch.load(path, map_location=cfg.device, weights_only=False)
+    polarity_values = payload.get("polarity_values")
+    n_classes = len(polarity_values) if polarity_values is not None else 2
+    model = UnitAutoencoder(cfg, n_continuous_features=10, n_polarity_classes=n_classes).to(cfg.device)
+    model.load_state_dict(payload["model_state_dict"], strict=True)
+    model.eval()
+    return model, payload, path
 
 
 @torch.no_grad()
 def encode_all(model, data, cfg):
-    loader = DataLoader(UnitDataset(data, np.arange(len(data.waveforms))), batch_size=cfg.validation_batch_size,
-                        shuffle=False, num_workers=cfg.num_workers)
-    model.eval(); unit_shared = []
-    for batch in tqdm(loader, desc="encode units", leave=False):
-        batch = _to_device(batch, cfg.device)
-        unit_shared.append(model.encode(batch["waveform"], batch["acg"])["z_unit_shared"].cpu().numpy())
-    return np.concatenate(unit_shared).astype(np.float32)
-
-
-@torch.no_grad()
-def collect_mean_predictions(model, loader, cfg):
-    observed, predicted = [], []
+    ids = np.arange(len(data.waveforms))
+    loader = DataLoader(UnitDataset(data, ids), batch_size=cfg.eval_batch_size, shuffle=False, num_workers=cfg.num_workers)
+    chunks = {name: [] for name in cfg.active_modalities()}
     model.eval()
-    for raw in loader:
-        batch = move(raw, cfg.device)
-        target, mask = batch["target_z"], batch["target_mask"]
-        observed.append(torch.stack([target[i][mask[i]].mean(0) for i in range(len(target))]).cpu().numpy())
-        predicted.append(model.posterior_mean(batch).cpu().numpy())
-    return np.concatenate(observed), np.concatenate(predicted)
-
-
-def fit_and_evaluate(model_ae, data: PreparedData, cfg: Config, training_outputs=None):
-    """Minimal scientific evaluation; publication figures live in figure scripts."""
-    out = Path(cfg.output_dir); out.mkdir(parents=True, exist_ok=True)
-    split_audit = assert_strict_probe_split(data.pids, data.split)
-    shared = encode_all(model_ae, data, cfg)
-    model_gmm, scaler, datasets, loaders, gmm_info = fit_point_transformer_gmm(shared, data, cfg, out / "pt_gmm")
-    observed, predicted = collect_mean_predictions(model_gmm, loaders[2], cfg)
-    summary = {
-        "split_audit": split_audit,
-        "autoencoder": training_outputs or {},
-        "pt_gmm": gmm_info,
-        "test_posterior_mean_r2_variance_weighted": float(r2_score(observed, predicted, multioutput="variance_weighted")),
-        "config": _release_config(cfg),
-    }
-    (out / cfg.summary_name).write_text(json.dumps(summary, indent=2, default=_json_default), encoding="utf-8")
-    return model_gmm, scaler, summary
-
-
-def _json_default(value: Any):
-    if isinstance(value, np.ndarray): return value.tolist()
-    if isinstance(value, np.generic): return value.item()
-    if isinstance(value, Path): return str(value)
-    raise TypeError(type(value).__name__)
+    for batch in tqdm(loader, desc="encode units", leave=False):
+        waveform = batch["waveform"].to(cfg.device)
+        acg = batch.get("acg")
+        stpc = batch.get("stpc")
+        acg = acg.to(cfg.device) if acg is not None else None
+        stpc = stpc.to(cfg.device) if stpc is not None else None
+        lat = model.encode(waveform, acg, stpc)
+        for name, value in lat.items():
+            chunks[name].append(value.cpu().numpy())
+    result = {name: np.concatenate(parts).astype(np.float32) for name, parts in chunks.items()}
+    result["joint"] = np.concatenate([result[name] for name in cfg.active_modalities()], axis=1).astype(np.float32)
+    return result

@@ -1,328 +1,311 @@
 from __future__ import annotations
 
 import copy
-from dataclasses import asdict
+import json
 from pathlib import Path
-from typing import Dict, List, Tuple
 
 import joblib
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from scipy.special import logsumexp
 from sklearn.mixture import GaussianMixture
 from sklearn.preprocessing import StandardScaler
-from torch.utils.data import DataLoader, Dataset
-from tqdm.auto import tqdm
-
-from ephysatlas.unit_level_encoder.config import Config
-from ephysatlas.unit_level_encoder.data import PreparedData, assert_strict_probe_split
-
-LOG2PI = float(np.log(2 * np.pi))
+from torch.utils.data import DataLoader, TensorDataset
 
 
-def _release_config(cfg: Config) -> dict:
-    payload = asdict(cfg)
-    payload.pop("output_dir", None)
-    payload["device"] = str(cfg.device)
-    return payload
+LOG2PI = float(np.log(2.0 * np.pi))
 
 
-def diag_log_prob(z, means, log_var):
-    return -0.5 * (
-        LOG2PI + log_var[None]
-        + (z[:, None] - means[None]).square() * torch.exp(-log_var[None])
-    ).sum(-1)
+def component_log_prob(gmm, z: np.ndarray) -> np.ndarray:
+    """Return log p(z | k) for a sklearn diagonal/full-covariance GMM."""
+    z = np.asarray(z, np.float64)
+    means = np.asarray(gmm.means_, np.float64)
+    if gmm.covariance_type == "diag":
+        var = np.asarray(gmm.covariances_, np.float64)
+        return -0.5 * (
+            LOG2PI
+            + np.log(var)[None, :, :]
+            + (z[:, None, :] - means[None, :, :]) ** 2 / var[None, :, :]
+        ).sum(axis=2)
+    if gmm.covariance_type == "full":
+        n, d = z.shape
+        out = np.empty((n, len(means)), np.float64)
+        for k in range(len(means)):
+            cov = np.asarray(gmm.covariances_[k], np.float64)
+            sign, logdet = np.linalg.slogdet(cov)
+            if sign <= 0:
+                raise RuntimeError(f"Non-positive-definite covariance for component {k}")
+            delta = z - means[k]
+            sol = np.linalg.solve(cov, delta.T).T
+            out[:, k] = -0.5 * (d * LOG2PI + logdet + np.sum(delta * sol, axis=1))
+        return out
+    raise ValueError(f"Unsupported covariance_type={gmm.covariance_type!r}")
 
 
-class VoxelNeighborhoodDataset(Dataset):
-    """One example per (probe, atlas voxel), with target voxel excluded from inputs."""
-
-    def __init__(self, data: PreparedData, shared_z: np.ndarray, split_value: int, cfg: Config):
-        self.examples = []
-        self.cfg = cfg
-        self.z = shared_z.astype(np.float32)
-        self.data_xyz = data.xyz_m
-        ids = np.flatnonzero(data.split == split_value)
-
-        by_probe_voxel: Dict[Tuple[int, int], List[int]] = {}
-        for i in ids:
-            by_probe_voxel.setdefault((int(data.probe_index[i]), int(data.voxel_id[i])), []).append(int(i))
-
-        probe_to_indices = {
-            int(probe): ids[data.probe_index[ids] == probe]
-            for probe in np.unique(data.probe_index[ids])
-        }
-        size_m = cfg.voxel_size_um * 1e-6
-
-        for (probe, voxel), target_list in by_probe_voxel.items():
-            if len(target_list) < cfg.min_target_units_per_voxel:
-                continue
-            target = np.asarray(target_list, dtype=np.int64)
-            center = (data.voxel_key[voxel].astype(np.float64) + 0.5) * size_m
-            candidates = probe_to_indices[probe]
-            candidates = candidates[data.voxel_id[candidates] != voxel]
-            if np.intersect1d(candidates, target).size:
-                raise RuntimeError("FATAL target leakage")
-
-            if len(candidates):
-                distance_um = np.linalg.norm(data.xyz_m[candidates] - center[None], axis=1) * 1e6
-                keep = distance_um <= cfg.max_neighbor_distance_um
-                candidates = candidates[keep]
-                distance_um = distance_um[keep]
-                order = np.argsort(distance_um, kind="stable")[: cfg.max_neighbor_units]
-                neighbors = candidates[order]
-            else:
-                neighbors = np.empty(0, dtype=np.int64)
-
-            context = data.context[target].mean(0).astype(np.float32)
-            self.examples.append((probe, voxel, target, neighbors, center.astype(np.float32), context))
-
-    def __len__(self):
-        return len(self.examples)
-
-    def __getitem__(self, item):
-        probe, voxel, target, neighbors, center, context = self.examples[item]
-        rel = (self.data_xyz[neighbors] - center[None]) * 1e6 / self.cfg.max_neighbor_distance_um
-        return {
-            "probe_index": probe,
-            "voxel_id": voxel,
-            "target_indices": target,
-            "neighbor_indices": neighbors,
-            "neighbor_z": self.z[neighbors],
-            "relative_position": rel.astype(np.float32),
-            "target_z": self.z[target],
-            "context": context,
-            "neighbor_count": len(neighbors),
-        }
+def responsibilities(gmm: GaussianMixture, z: np.ndarray) -> np.ndarray:
+    return gmm.predict_proba(np.asarray(z, np.float64)).astype(np.float32)
 
 
-def collate_voxels(batch):
-    max_n = max(1, max(len(x["neighbor_z"]) for x in batch))
-    max_t = max(len(x["target_z"]) for x in batch)
-    d = batch[0]["neighbor_z"].shape[1]
-    c = batch[0]["context"].shape[0]
-    nz = torch.zeros(len(batch), max_n, d)
-    pos = torch.zeros(len(batch), max_n, 3)
-    nmask = torch.ones(len(batch), max_n, dtype=torch.bool)
-    ni = torch.full((len(batch), max_n), -1, dtype=torch.long)
-    tz = torch.zeros(len(batch), max_t, d)
-    tmask = torch.zeros(len(batch), max_t, dtype=torch.bool)
-    ti = torch.full((len(batch), max_t), -1, dtype=torch.long)
-    ctx = torch.zeros(len(batch), c)
-    count = torch.zeros(len(batch), dtype=torch.long)
-    voxel = torch.zeros(len(batch), dtype=torch.long)
-    probe = torch.zeros(len(batch), dtype=torch.long)
-    for b, x in enumerate(batch):
-        n, t = len(x["neighbor_z"]), len(x["target_z"])
-        nz[b, :n] = torch.from_numpy(x["neighbor_z"])
-        pos[b, :n] = torch.from_numpy(x["relative_position"])
-        nmask[b, :n] = False
-        ni[b, :n] = torch.from_numpy(x["neighbor_indices"])
-        tz[b, :t] = torch.from_numpy(x["target_z"])
-        tmask[b, :t] = True
-        ti[b, :t] = torch.from_numpy(x["target_indices"])
-        ctx[b] = torch.from_numpy(x["context"])
-        count[b] = n
-        voxel[b] = x["voxel_id"]
-        probe[b] = x["probe_index"]
-    return {
-        "neighbor_z": nz,
-        "relative_position": pos,
-        "neighbor_padding_mask": nmask,
-        "neighbor_indices": ni,
-        "target_z": tz,
-        "target_mask": tmask,
-        "target_indices": ti,
-        "context": ctx,
-        "neighbor_count": count,
-        "voxel_id": voxel,
-        "probe_index": probe,
-    }
+def fit_latent_scaler(z_joint: np.ndarray, train_mask: np.ndarray, path: Path | None = None):
+    scaler = StandardScaler().fit(np.asarray(z_joint)[train_mask])
+    if path is not None:
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        joblib.dump(scaler, path)
+    return scaler
 
 
-class PointTransformerGMM(nn.Module):
-    def __init__(self, latent_dim: int, context_dim: int, n_components: int, cfg: Config):
-        super().__init__()
-        h = cfg.pt_hidden_dim
-        if h % cfg.pt_heads != 0:
-            raise ValueError("pt_hidden_dim must be divisible by pt_heads")
-        self.means = nn.Parameter(torch.zeros(n_components, latent_dim))
-        self.raw_sigma = nn.Parameter(torch.zeros(n_components, latent_dim))
-        self.sigma_min = cfg.sigma_min
-        self.register_buffer("prior_logits", torch.zeros(n_components))
-        self.unit_embed = nn.Sequential(nn.Linear(latent_dim + 3, h), nn.GELU(), nn.Linear(h, h))
-        self.query_embed = nn.Sequential(nn.Linear(context_dim, h), nn.GELU(), nn.Linear(h, h))
-        layer = nn.TransformerEncoderLayer(
-            h, cfg.pt_heads, 4 * h, cfg.pt_dropout,
-            batch_first=True, norm_first=True, activation="gelu",
-        )
-        self.encoder = nn.TransformerEncoder(layer, cfg.pt_layers)
-        self.gate = nn.Sequential(nn.LayerNorm(h), nn.Linear(h, h), nn.GELU(), nn.Linear(h, n_components))
-
-    @property
-    def log_var(self):
-        return 2 * torch.log(self.sigma_min + F.softplus(self.raw_sigma))
-
-    def logits(self, nz, pos, context, pad):
-        tokens = self.unit_embed(torch.cat([nz, pos], -1))
-        q = self.query_embed(context)[:, None]
-        x = torch.cat([q, tokens], 1)
-        mask = torch.cat([torch.zeros(len(pad), 1, dtype=torch.bool, device=pad.device), pad], 1)
-        return self.gate(self.encoder(x, src_key_padding_mask=mask)[:, 0])
-
-    def batch_log_prob(self, batch):
-        logits = self.logits(batch["neighbor_z"], batch["relative_position"], batch["context"], batch["neighbor_padding_mask"])
-        b, t, d = batch["target_z"].shape
-        flat = batch["target_z"].reshape(-1, d)
-        comp = diag_log_prob(flat, self.means, self.log_var).reshape(b, t, -1)
-        lp = torch.logsumexp(F.log_softmax(logits, -1)[:, None] + comp, -1)
-        return lp[batch["target_mask"]], logits
-
-    def posterior_mean(self, batch):
-        logits = self.logits(batch["neighbor_z"], batch["relative_position"], batch["context"], batch["neighbor_padding_mask"])
-        return F.softmax(logits, -1) @ self.means
-
-
-def apply_neighbor_dropout(batch, cfg: Config):
-    pad = batch["neighbor_padding_mask"].clone()
-    valid = ~pad
-    if cfg.neighbor_token_dropout_probability > 0:
-        pad |= (torch.rand(valid.shape, device=valid.device) < cfg.neighbor_token_dropout_probability) & valid
-    if cfg.full_neighbor_dropout_probability > 0:
-        pad[torch.rand(len(pad), device=pad.device) < cfg.full_neighbor_dropout_probability] = True
-    dropped = dict(batch)
-    dropped["neighbor_padding_mask"] = pad
-    dropped["neighbor_z"] = batch["neighbor_z"].masked_fill(pad[..., None], 0.0)
-    dropped["relative_position"] = batch["relative_position"].masked_fill(pad[..., None], 0.0)
-    dropped["effective_neighbor_count"] = (~pad).sum(1)
-    return dropped
-
-
-def make_neighborhood_datasets(data, z, cfg):
-    return tuple(VoxelNeighborhoodDataset(data, z, s, cfg) for s in (0, 1, 2))
-
-
-def make_loaders(datasets, cfg):
-    return tuple(
-        DataLoader(
-            ds,
-            batch_size=cfg.pt_batch_size,
-            shuffle=(i == 0),
-            collate_fn=collate_voxels,
-            num_workers=0,
-            generator=torch.Generator().manual_seed(cfg.seed + i),
-        )
-        for i, ds in enumerate(datasets)
-    )
-
-
-def move(batch, device):
-    return {k: (v.to(device) if torch.is_tensor(v) else v) for k, v in batch.items()}
-
-
-def evaluate_nll(model, loader, cfg):
-    model.eval(); total = 0.0; n = 0
-    with torch.no_grad():
-        for b in loader:
-            lp, _ = model.batch_log_prob(move(b, cfg.device))
-            total += float(lp.sum().cpu()); n += len(lp)
-    return -total / max(n, 1)
-
-
-def fit_point_transformer_gmm(shared_z, data, cfg: Config, out: Path):
-    out.mkdir(parents=True, exist_ok=True)
-    assert_strict_probe_split(data.pids, data.split)
-    train_idx = np.flatnonzero(data.split == 0)
-
-    scaler = StandardScaler().fit(shared_z[train_idx])
-    z = scaler.transform(shared_z).astype(np.float32)
-    joblib.dump(scaler, out / "shared_latent_scaler.joblib")
-
-    datasets = make_neighborhood_datasets(data, z, cfg)
-    if min(map(len, datasets)) == 0:
-        raise RuntimeError("No valid neighborhood voxels")
-    loaders = make_loaders(datasets, cfg)
+def fit_global_gmm(z_joint, train_mask, cfg, out_dir: Path, *, scaler=None):
+    """Fit global GMM. A supplied scaler guarantees identical coordinates across experiments."""
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    if scaler is None:
+        scaler = StandardScaler().fit(z_joint[train_mask])
+    z = scaler.transform(z_joint).astype(np.float32)
 
     gmm = GaussianMixture(
-        cfg.gmm_components,
-        covariance_type="diag",
-        reg_covar=cfg.gmm_reg_covar,
-        max_iter=cfg.gmm_sklearn_max_iter,
-        n_init=cfg.gmm_sklearn_n_init,
-        random_state=cfg.seed,
-    ).fit(z[train_idx])
-    joblib.dump(gmm, out / "unconditional_gmm_train_only.joblib")
+        n_components=int(cfg.gmm_components),
+        covariance_type=str(cfg.gmm_covariance_type),
+        reg_covar=float(cfg.gmm_reg_covar),
+        n_init=int(cfg.gmm_n_init),
+        max_iter=int(cfg.gmm_max_iter),
+        random_state=int(cfg.seed),
+        init_params="kmeans",
+    ).fit(z[train_mask].astype(np.float64))
+    if not gmm.converged_:
+        raise RuntimeError("Global GMM did not converge")
 
-    model = PointTransformerGMM(z.shape[1], data.context.shape[1], cfg.gmm_components, cfg).to(cfg.device)
-    with torch.no_grad():
-        model.means.copy_(torch.tensor(gmm.means_, dtype=torch.float32, device=cfg.device))
-        sigma = np.sqrt(gmm.covariances_)
-        raw = np.log(np.expm1(np.maximum(sigma - cfg.sigma_min, 1e-5)))
-        model.raw_sigma.copy_(torch.tensor(raw, dtype=torch.float32, device=cfg.device))
-        prior_logits = torch.log(torch.tensor(gmm.weights_, dtype=torch.float32, device=cfg.device).clamp_min(1e-8))
-        model.prior_logits.copy_(prior_logits)
-        model.gate[-1].bias.copy_(prior_logits)
+    train_resp = responsibilities(gmm, z[train_mask])
+    mass = train_resp.mean(axis=0)
+    rare = np.flatnonzero(mass < float(cfg.gmm_min_component_fraction))
+    joblib.dump(scaler, out_dir / "latent_scaler.joblib")
+    joblib.dump(gmm, out_dir / "global_gmm.joblib")
+    info = {
+        "n_components": int(gmm.n_components),
+        "covariance_type": str(gmm.covariance_type),
+        "converged": bool(gmm.converged_),
+        "n_iter": int(gmm.n_iter_),
+        "component_mass_train": mass.tolist(),
+        "min_component_mass": float(mass.min()),
+        "max_component_mass": float(mass.max()),
+        "rare_component_indices": rare.tolist(),
+        "rare_component_threshold": float(cfg.gmm_min_component_fraction),
+    }
+    (out_dir / "global_gmm_summary.json").write_text(json.dumps(info, indent=2), encoding="utf-8")
+    return gmm, scaler, z, train_resp, info
 
-    opt = torch.optim.AdamW(model.parameters(), lr=cfg.pt_learning_rate, weight_decay=cfg.pt_weight_decay)
-    best = np.inf; state = None; bad = 0
-    history = {"train_nll": [], "val_nll": [], "mean_effective_train_neighbors": []}
-    for epoch in range(1, cfg.pt_epochs + 1):
-        model.train(); total = 0.0; n = 0; effective_counts = []
-        for b in tqdm(loaders[0], desc=f"PT-GMM {epoch:03d}", leave=False):
-            b = move(b, cfg.device); b_train = apply_neighbor_dropout(b, cfg)
-            effective_counts.append(float(b_train["effective_neighbor_count"].float().mean().cpu()))
+
+class WeightModel:
+    def weights(self, indices: np.ndarray) -> np.ndarray:
+        raise NotImplementedError
+
+
+class GlobalWeightModel(WeightModel):
+    def __init__(self, global_weights, n_units: int):
+        self.global_weights = np.asarray(global_weights, np.float32)
+        self.global_weights /= self.global_weights.sum()
+        self.n_units = int(n_units)
+
+    def weights(self, indices):
+        return np.repeat(self.global_weights[None, :], len(indices), axis=0)
+
+    def weights_for_context(self, context_raw):
+        return np.repeat(self.global_weights[None, :], len(context_raw), axis=0)
+
+
+class ContextWeightNet(nn.Module):
+    def __init__(self, input_dim, hidden, layers, dropout, n_components):
+        super().__init__()
+        seq = []
+        d = input_dim
+        for _ in range(max(1, int(layers) - 1)):
+            seq.extend([nn.Linear(d, hidden), nn.LayerNorm(hidden), nn.GELU(), nn.Dropout(dropout)])
+            d = hidden
+        seq.append(nn.Linear(d, n_components))
+        self.net = nn.Sequential(*seq)
+
+    def forward(self, x):
+        return self.net(x)
+
+
+class ContextWeightModel(WeightModel):
+    def __init__(self, net, context_pc, device, transform=None):
+        self.net = net
+        self.context_pc = np.asarray(context_pc, np.float32)
+        self.device = device
+        self.transform = transform
+
+    @torch.no_grad()
+    def _weights_from_pc(self, context_pc):
+        x = torch.from_numpy(np.asarray(context_pc, np.float32)).to(self.device)
+        return torch.softmax(self.net(x), dim=1).cpu().numpy().astype(np.float32)
+
+    def weights(self, indices):
+        return self._weights_from_pc(self.context_pc[np.asarray(indices, int)])
+
+    def weights_for_context(self, context_raw):
+        if self.transform is None:
+            raise RuntimeError("Context transform unavailable for arbitrary-voxel prediction")
+        return self._weights_from_pc(self.transform.transform(np.asarray(context_raw, np.float32)))
+
+
+def fit_context_weight_model(context_pc, train_mask, val_mask, resp_train, resp_val, component_mass, cfg, out_dir):
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    x_train = torch.from_numpy(np.asarray(context_pc[train_mask], np.float32))
+    y_train = torch.from_numpy(np.asarray(resp_train, np.float32))
+    x_val = torch.from_numpy(np.asarray(context_pc[val_mask], np.float32))
+    y_val = torch.from_numpy(np.asarray(resp_val, np.float32))
+
+    mass = np.maximum(np.asarray(component_mass, np.float32), 1e-6)
+    class_weight = mass ** (-float(cfg.rare_component_power))
+    class_weight /= np.average(class_weight, weights=mass)
+    class_weight = np.minimum(class_weight, float(cfg.rare_component_weight_cap)).astype(np.float32)
+    cw = torch.from_numpy(class_weight).to(cfg.device)
+
+    net = ContextWeightNet(x_train.shape[1], cfg.context_hidden_dim, cfg.context_layers,
+                           cfg.context_dropout, y_train.shape[1]).to(cfg.device)
+    opt = torch.optim.AdamW(net.parameters(), lr=cfg.context_weight_lr, weight_decay=cfg.context_weight_decay)
+    loader = DataLoader(TensorDataset(x_train, y_train), batch_size=cfg.context_weight_batch_size, shuffle=True)
+
+    def soft_ce(logits, target):
+        logp = F.log_softmax(logits, dim=1)
+        wt = target * cw[None, :]
+        wt = wt / wt.sum(dim=1, keepdim=True).clamp_min(1e-8)
+        return -(wt * logp).sum(dim=1).mean()
+
+    best = np.inf
+    best_state = None
+    bad = 0
+    history = []
+    for epoch in range(1, cfg.context_weight_epochs + 1):
+        net.train()
+        total = 0.0
+        n = 0
+        for xb, yb in loader:
+            xb, yb = xb.to(cfg.device), yb.to(cfg.device)
             opt.zero_grad(set_to_none=True)
-            lp, _ = model.batch_log_prob(b_train)
-            loss = -lp.mean()
-            if not torch.isfinite(loss):
-                raise FloatingPointError("Non-finite PT-GMM loss")
-            loss.backward(); torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip); opt.step()
-            total += float(loss.detach().cpu()) * len(lp); n += len(lp)
-        val = evaluate_nll(model, loaders[1], cfg)
-        tr = total / max(n, 1)
-        history["train_nll"].append(tr); history["val_nll"].append(val)
-        history["mean_effective_train_neighbors"].append(float(np.mean(effective_counts)))
-        print(f"PT-GMM epoch {epoch:03d}: train NLL={tr:.4f} val NLL={val:.4f}")
-        if val < best - cfg.pt_min_delta:
-            best = val; state = copy.deepcopy(model.state_dict()); bad = 0
+            loss = soft_ce(net(xb), yb)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(net.parameters(), cfg.grad_clip)
+            opt.step()
+            total += float(loss.detach().cpu()) * len(xb)
+            n += len(xb)
+        net.eval()
+        with torch.no_grad():
+            val_loss = float(soft_ce(net(x_val.to(cfg.device)), y_val.to(cfg.device)).cpu())
+        row = {"epoch": epoch, "train_balanced_ce": total / max(n, 1), "val_balanced_ce": val_loss}
+        history.append(row)
+        if val_loss < best - 1e-5:
+            best = val_loss
+            best_state = copy.deepcopy(net.state_dict())
+            bad = 0
         else:
             bad += 1
-        if bad >= cfg.pt_patience:
+        if bad >= cfg.context_weight_patience:
             break
-
-    if state is None:
-        raise RuntimeError("PT-GMM produced no checkpoint")
-    model.load_state_dict(state)
-    torch.save(
-        {
-            "model_state_dict": state,
-            "config": _release_config(cfg),
-            "history": history,
-            "latent_dim": int(z.shape[1]),
-            "context_dim": int(data.context.shape[1]),
-            "n_components": int(cfg.gmm_components),
-        },
-        out / cfg.pt_checkpoint_name,
-    )
-    return model, scaler, datasets, loaders, {
+    if best_state is None:
+        raise RuntimeError("Context weight model produced no checkpoint")
+    net.load_state_dict(best_state)
+    torch.save({"model_state_dict": best_state, "class_weight": class_weight, "history": history},
+               out_dir / "context_weight_model.pt")
+    return ContextWeightModel(net, context_pc, cfg.device), {
+        "best_val_balanced_ce": float(best),
+        "rare_component_class_weights": class_weight.tolist(),
         "history": history,
-        "best_val_nll": float(best),
-        "test_nll": float(evaluate_nll(model, loaders[2], cfg)),
-        "n_train_examples": len(datasets[0]),
-        "n_validation_examples": len(datasets[1]),
-        "n_test_examples": len(datasets[2]),
     }
 
 
-def load_point_transformer_gmm(checkpoint_path: Path, data: PreparedData, standardized_shared: np.ndarray, cfg: Config):
-    payload = torch.load(checkpoint_path, map_location=cfg.device, weights_only=False)
-    latent_dim = int(payload.get("latent_dim", standardized_shared.shape[1]))
-    context_dim = int(payload.get("context_dim", data.context.shape[1]))
-    n_components = int(payload.get("n_components", cfg.gmm_components))
-    model = PointTransformerGMM(latent_dim, context_dim, n_components, cfg).to(cfg.device)
-    model.load_state_dict(payload["model_state_dict"], strict=True)
-    model.eval()
-    datasets = make_neighborhood_datasets(data, standardized_shared, cfg)
-    loaders = make_loaders(datasets, cfg)
-    return model, datasets, loaders, payload
+
+def conditional_log_prob(z_scaled, indices, gmm, weight_model):
+    """Held-out log p(z | conditioning) for fixed global GMM geometry."""
+    indices = np.asarray(indices, int)
+    w = weight_model.weights(indices)
+    comp = component_log_prob(gmm, z_scaled[indices])
+    return logsumexp(comp + np.log(np.maximum(w, 1e-12)), axis=1)
+
+
+def sample_conditional(indices, n_per_index, gmm, weight_model, rng):
+    """Sample standardized latents for observed unit indices."""
+    indices = np.asarray(indices, int)
+    w = weight_model.weights(indices)
+    outputs = []
+    for row in range(len(indices)):
+        prob = w[row] / np.maximum(w[row].sum(), 1e-12)
+        comp = rng.choice(gmm.n_components, size=int(n_per_index), p=prob)
+        means = gmm.means_[comp]
+        if gmm.covariance_type == "diag":
+            draw = means + rng.normal(size=means.shape) * np.sqrt(gmm.covariances_[comp])
+        elif gmm.covariance_type == "full":
+            draw = np.vstack([
+                rng.multivariate_normal(means[j], gmm.covariances_[k])
+                for j, k in enumerate(comp)
+            ])
+        else:
+            raise ValueError(gmm.covariance_type)
+        outputs.append(draw.astype(np.float32))
+    return outputs
+
+
+def sample_conditional_for_context(context_raw, n_per_context, gmm, weight_model, rng):
+    """Sample standardized latents at arbitrary atlas contexts."""
+    context_raw = np.asarray(context_raw, np.float32)
+    w = weight_model.weights_for_context(context_raw)
+    outputs = []
+    for row in range(len(context_raw)):
+        prob = w[row] / np.maximum(w[row].sum(), 1e-12)
+        comp = rng.choice(gmm.n_components, size=int(n_per_context), p=prob)
+        means = gmm.means_[comp]
+        if gmm.covariance_type == "diag":
+            draw = means + rng.normal(size=means.shape) * np.sqrt(gmm.covariances_[comp])
+        elif gmm.covariance_type == "full":
+            draw = np.vstack([
+                rng.multivariate_normal(means[j], gmm.covariances_[k])
+                for j, k in enumerate(comp)
+            ])
+        else:
+            raise ValueError(gmm.covariance_type)
+        outputs.append(draw.astype(np.float32))
+    return outputs
+
+
+def posterior_mean(gmm, weight_model, indices):
+    w = weight_model.weights(np.asarray(indices, int))
+    return (w @ gmm.means_).astype(np.float32)
+
+
+def posterior_mean_for_context(gmm, weight_model, context_raw):
+    w = weight_model.weights_for_context(context_raw)
+    return (w @ gmm.means_).astype(np.float32)
+
+
+def save_context_weight_bundle(model, transform, out_dir, cfg):
+    out_dir = Path(out_dir)
+    joblib.dump(transform, out_dir / "context_transform.joblib")
+    torch.save({
+        "model_state_dict": model.net.state_dict(),
+        "input_dim": int(model.context_pc.shape[1]),
+        "hidden": int(cfg.context_hidden_dim),
+        "layers": int(cfg.context_layers),
+        "dropout": float(cfg.context_dropout),
+        "n_components": int(model.net.net[-1].out_features),
+    }, out_dir / "context_weight_model_bundle.pt")
+
+
+def load_context_weight_bundle(context_raw, out_dir, cfg):
+    out_dir = Path(out_dir)
+    transform = joblib.load(out_dir / "context_transform.joblib")
+    context_pc = transform.transform(context_raw)
+    payload = torch.load(
+        out_dir / "context_weight_model_bundle.pt",
+        map_location=cfg.device,
+        weights_only=False,
+    )
+    net = ContextWeightNet(
+        payload["input_dim"], payload["hidden"], payload["layers"],
+        payload["dropout"], payload["n_components"],
+    ).to(cfg.device)
+    net.load_state_dict(payload["model_state_dict"])
+    net.eval()
+    return ContextWeightModel(net, context_pc, cfg.device, transform=transform), transform
