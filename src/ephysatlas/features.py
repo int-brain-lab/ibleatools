@@ -1250,7 +1250,7 @@ def dart_subtraction_numpy(data, fs, geometry, params=None, scratch_dir=None, **
     denoising_cfg = dartsort.FeaturizationConfig(
         denoise_only=True,
         do_tpca_denoise=False,
-        do_enforce_decrease=True,
+        do_enforce_decrease="yes",
         save_input_voltages=False,
         extract_radius=params.localization_radius,
         localization_radius=params.localization_radius,
@@ -1279,7 +1279,7 @@ def dart_subtraction_numpy(data, fs, geometry, params=None, scratch_dir=None, **
     # that off is good
     featurization_cfg = dartsort.FeaturizationConfig(
         nn_localization=False,
-        do_enforce_decrease=True,
+        do_enforce_decrease="yes",
         save_input_voltages=False,
         save_output_waveforms=True,  # save final nn denoised waveforms
         save_input_waveforms=True,  # save collision-cleaned, but not NN-denoised, waveforms
