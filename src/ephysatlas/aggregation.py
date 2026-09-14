@@ -7,7 +7,7 @@ from joblib import Parallel, delayed
 from ephysatlas.utils import get_aggregated_snippets_df
 from ephysatlas.data import outlier_treatment, replace_nan
 from ephysatlas.features import ChannelDataFrameSchema, ModelRawFeatures
-from ephysatlas.features import denoise_dataframe
+from ephysatlas.features import denoise_dataframe, DEFAULT_FAC
 import numpy as np
 
 # Set up logger
@@ -435,6 +435,7 @@ def denoise_raw_features_data(
     output_dir: Path | None = None,
     n_jobs: int = -1,
     verbose: int = 1,
+    fac: float | dict = DEFAULT_FAC,
 ):
     """Apply denoising to aggregated raw electrophysiological features for each probe ID (PID).
 
@@ -450,6 +451,10 @@ def denoise_raw_features_data(
             The directory is created if it does not exist. Default is None (no file is written).
         n_jobs (int, optional): Number of parallel jobs to run. -1 means using all processors. Default is -1.
         verbose (int, optional): Verbosity level for joblib.Parallel. 0 means no messages, 1 means progress messages, >1 means more detailed messages. Default is 1.
+        fac (float or dict, optional): TV denoising factor forwarded to `denoise_dataframe`. Either a
+            single scalar applied to every feature group, or a dict mapping a subset of
+            {'raw_ap', 'raw_lf', 'raw_lf_csd', 'waveforms'} to their own factor. Default is
+            `DEFAULT_FAC` (raw_ap=raw_lf=raw_lf_csd=0.1, waveforms=5).
 
     Returns:
         pandas.DataFrame: A DataFrame with the same structure as the input but with denoised feature values.
@@ -464,7 +469,6 @@ def denoise_raw_features_data(
     Note:
         - The function processes each PID separately in parallel to apply PID-specific denoising.
         - Denoising requires channel labels, which must be present in the 'channel_labels' column.
-        - The denoising factor (fac) is set to 1, which can be adjusted in the denoise_dataframe function.
         - If `output_dir` is provided, the result is saved as 'raw_ephys_features_denoised.pqt'.
     """
     # Store the original column names to preserve structure
@@ -475,7 +479,7 @@ def denoise_raw_features_data(
         pid, df_pid = pid_df_tuple
         logger.info(f"Denoising for PID: {pid}")
         df_denoised = denoise_dataframe(
-            df_pid, fac=1, channel_labels=df_pid["channel_labels"].to_numpy()
+            df_pid, fac=fac, channel_labels=df_pid["channel_labels"].to_numpy()
         )
         # Keep only the original columns to maintain structure
         return df_denoised.loc[:, original_columns]
