@@ -3,8 +3,9 @@ name: Build and Test
 on:
   push:
     branches: [ main, develop ]
+  # No branches filter: run on PRs against any base, including stacked PRs
+  # whose base isn't main/develop.
   pull_request:
-    branches: [ main, develop ]
 
 
 jobs:
