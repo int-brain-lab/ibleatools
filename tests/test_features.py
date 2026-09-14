@@ -179,7 +179,7 @@ class TestTransformDenoiseFeatures(unittest.TestCase):
         pid = self.df_features.index.get_level_values(0).unique()[0]
         df_pid = self.df_features.loc[pid, :]
         dfcopy = df_pid.copy()
-        df_denoised = ephysatlas.features.denoise_dataframe(df_pid)
+        df_denoised = ephysatlas.features.denoise_dataframe(df_pid, fac=1)
         expected = np.array(
             [
                 5.20833333e-03,

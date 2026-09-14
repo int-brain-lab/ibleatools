@@ -7,7 +7,7 @@ from joblib import Parallel, delayed
 from ephysatlas.utils import get_aggregated_snippets_df
 from ephysatlas.data import outlier_treatment, replace_nan
 from ephysatlas.features import ChannelDataFrameSchema, ModelRawFeatures
-from ephysatlas.features import denoise_dataframe
+from ephysatlas.features import denoise_dataframe, DEFAULT_FAC
 import numpy as np
 
 # Set up logger
@@ -435,7 +435,7 @@ def denoise_raw_features_data(
     output_dir: Path | None = None,
     n_jobs: int = -1,
     verbose: int = 1,
-    fac: float | dict = 1,
+    fac: float | dict = DEFAULT_FAC,
 ):
     """Apply denoising to aggregated raw electrophysiological features for each probe ID (PID).
 
@@ -453,7 +453,8 @@ def denoise_raw_features_data(
         verbose (int, optional): Verbosity level for joblib.Parallel. 0 means no messages, 1 means progress messages, >1 means more detailed messages. Default is 1.
         fac (float or dict, optional): TV denoising factor forwarded to `denoise_dataframe`. Either a
             single scalar applied to every feature group, or a dict mapping a subset of
-            {'raw_ap', 'raw_lf', 'raw_lf_csd', 'waveforms'} to their own factor. Default is 1.
+            {'raw_ap', 'raw_lf', 'raw_lf_csd', 'waveforms'} to their own factor. Default is
+            `DEFAULT_FAC` (raw_ap=raw_lf=raw_lf_csd=0.1, waveforms=5).
 
     Returns:
         pandas.DataFrame: A DataFrame with the same structure as the input but with denoised feature values.

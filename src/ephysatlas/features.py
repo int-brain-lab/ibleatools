@@ -806,6 +806,17 @@ def feature_group_of_column_map() -> dict:
     }
 
 
+# Default per-group TV-denoise fac, selected by bracketing fac per group
+# against Cosmos_id classification accuracy (5-fold CV): see
+# https://oliche.github.io/oliche-quarto/analyses/2026-09-tv-denoise-fac-bracket/
+DEFAULT_FAC = {
+    "raw_ap": 0.1,
+    "raw_lf": 0.1,
+    "raw_lf_csd": 0.1,
+    "waveforms": 5,
+}
+
+
 def voltage_features_set(features_list=FEATURES_LIST):
     """Get list of feature column names by provenance.
 
@@ -1816,12 +1827,12 @@ class EphysTransformer(_EphysTransformerInterface):
 
 
 class EphysDenoiser(_EphysTransformerInterface):
-    def __init__(self, fac=1, channel_labels=None):
+    def __init__(self, fac=DEFAULT_FAC, channel_labels=None):
         """TV-denoise electrophysiological features, with one weight factor per feature group.
 
         Parameters
         ----------
-        fac : float or dict, default=1
+        fac : float or dict, default=DEFAULT_FAC
             Factor for the TV denoising in median deviation units. Either a single
             scalar applied to every feature group, or a dict mapping a subset of
             {'raw_ap', 'raw_lf', 'raw_lf_csd', 'waveforms'} to their own factor.
@@ -1879,7 +1890,7 @@ class EphysDenoiser(_EphysTransformerInterface):
         return
 
 
-def denoise_dataframe(df_pid, fac=1, channel_labels=None):
+def denoise_dataframe(df_pid, fac=DEFAULT_FAC, channel_labels=None):
     """
     Applies total variation filter denoising to the features of a single probe insertion dataframe.
 
@@ -1893,7 +1904,7 @@ def denoise_dataframe(df_pid, fac=1, channel_labels=None):
     df_pid : pandas.DataFrame
         DataFrame containing probe insertion data with features to denoise.
         Must contain 'lateral_um', 'axial_um', and 'labels' columns.
-    fac : float or dict, default=1
+    fac : float or dict, default=DEFAULT_FAC
         Factor for the TV denoising in median deviation units. Higher values
         result in stronger denoising. Either a single scalar applied to every
         feature group, or a dict mapping a subset of
