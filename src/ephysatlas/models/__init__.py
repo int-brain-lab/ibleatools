@@ -46,6 +46,13 @@ def _unit_encoder(path_model: Path, index: dict, **kwargs):
     return UnitEncoder(path_model, index=index, device=kwargs.get("device"))
 
 
+def _probe_transformer(path_model: Path, index: dict, **kwargs):
+    """Build the ProbeTransformer channel-region ensemble wrapper. torch lives in that module."""
+    from ephysatlas.models.probe_transformer import ProbeTransformerClassifier
+
+    return ProbeTransformerClassifier(path_model, index=index)
+
+
 # One canonical model_class per family -> its wrapper builder. Dispatch is 1:1: every published
 # model carries exactly one of these in its manifest. The encoders record the bare class name
 # (what their trainers write); the region classifier records the fully-qualified XGBoost class.
@@ -54,6 +61,8 @@ MODEL_WRAPPERS = {
     "NeighborInpaintingModel": _spatial_encoder,
     # The unit encoder dispatches on its entry checkpoint's class; UnitEncoder loads the rest.
     "MultimodalAutoencoder": _unit_encoder,
+    # The channel-region transformer ensemble (one seed per artifacts.seeds entry).
+    "ProbeTransformer": _probe_transformer,
 }
 
 
