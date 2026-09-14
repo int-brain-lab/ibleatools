@@ -785,6 +785,27 @@ class ModelProbeDetails(pa.DataFrameModel):
     bwm: bool = pa.Field(description="Part of Brain-Wide Map freeze")
 
 
+def feature_group_of_column_map() -> dict:
+    """Map each denoisable feature column name to its provenance group.
+
+    Returns
+    -------
+    dict
+        Maps feature column name to one of 'raw_ap', 'raw_lf', 'raw_lf_csd', 'waveforms'.
+    """
+    schema_by_group = {
+        "raw_ap": ModelApFeatures,
+        "raw_lf": ModelLfFeatures,
+        "raw_lf_csd": ModelCsdFeatures,
+        "waveforms": ModelSpikeFeatures,
+    }
+    return {
+        column_name: group
+        for group, model in schema_by_group.items()
+        for column_name in model.to_schema().columns.keys()
+    }
+
+
 def voltage_features_set(features_list=FEATURES_LIST):
     """Get list of feature column names by provenance.
 
@@ -1796,6 +1817,18 @@ class EphysTransformer(_EphysTransformerInterface):
 
 class EphysDenoiser(_EphysTransformerInterface):
     def __init__(self, fac=1, channel_labels=None):
+        """TV-denoise electrophysiological features, with one weight factor per feature group.
+
+        Parameters
+        ----------
+        fac : float or dict, default=1
+            Factor for the TV denoising in median deviation units. Either a single
+            scalar applied to every feature group, or a dict mapping a subset of
+            {'raw_ap', 'raw_lf', 'raw_lf_csd', 'waveforms'} to their own factor.
+            Groups not specified in the dict default to 1.
+        channel_labels : np.ndarray, optional
+            Channel quality annotation array with shape (nc,).
+        """
         super().__init__()
         self.fac = fac
         self.channel_labels = channel_labels
@@ -1808,10 +1841,16 @@ class EphysDenoiser(_EphysTransformerInterface):
                 self.channel_labels = np.zeros(X.shape[0], dtype=int)
         return self.channel_labels
 
+    def _get_fac(self, feature_name: str, feature_group_of_column: dict) -> float:
+        if not isinstance(self.fac, dict):
+            return self.fac
+        return self.fac.get(feature_group_of_column.get(feature_name), 1)
+
     def transform(self, X: pd.DataFrame, y=None):
         self.validate_X(X)
         channel_labels = self._get_channel_labels(X)
         ns = X.shape[0]
+        feature_group_of_column = feature_group_of_column_map()
         for feature_name in self._get_feature_names(X):
             if (
                 feature_name == "channel_labels"
@@ -1819,11 +1858,12 @@ class EphysDenoiser(_EphysTransformerInterface):
                 continue
             fval = np.copy(X[feature_name].to_numpy()).astype(float)
             fval[channel_labels != 0] = np.nan
-            logger.info(f"Calculation for feature_name = {feature_name}")
+            fac = self._get_fac(feature_name, feature_group_of_column)
+            logger.info(f"Calculation for feature_name = {feature_name}, fac = {fac}")
             denoised_values = denoise_shank(
                 feature=fval,
                 xy=X[["lateral_um", "axial_um"]].values,
-                fac=self.fac,
+                fac=fac,
             )  # .astype(X[feature_name].dtype)
             # Check that the denoised values have the expected length
             if len(denoised_values) != ns:
@@ -1853,9 +1893,12 @@ def denoise_dataframe(df_pid, fac=1, channel_labels=None):
     df_pid : pandas.DataFrame
         DataFrame containing probe insertion data with features to denoise.
         Must contain 'lateral_um', 'axial_um', and 'labels' columns.
-    fac : float, default=1
+    fac : float or dict, default=1
         Factor for the TV denoising in median deviation units. Higher values
-        result in stronger denoising.
+        result in stronger denoising. Either a single scalar applied to every
+        feature group, or a dict mapping a subset of
+        {'raw_ap', 'raw_lf', 'raw_lf_csd', 'waveforms'} to their own factor
+        (see `feature_group_of_column_map`). Groups absent from the dict default to 1.
 
     Returns
     -------
