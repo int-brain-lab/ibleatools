@@ -2,8 +2,18 @@
 
 Downloads a published spatial encoder and evaluates its per-feature R2 on the held-out test set.
 Training lives outside this repo -- this file only demonstrates loading and evaluating.
+
+.. warning::
+   This example predates the public inference API introduced in 0.8.0 and does NOT run as
+   written: it still calls ``regionclassifier.download_model(..., one=one)``, whose ``one``
+   argument was removed when model downloads moved from AWS/ONE to the Hugging Face Hub, and
+   it still requires an ONE account plus raw feature tables. The supported way to run this
+   model family is ``load_pretrained(<model_id>).predict(df)`` on a frame carrying channel
+   positions; see ``examples/inference_region_classifier_public.py`` for the equivalent
+   credential-free pattern. This file needs adapting to that API.
 """
 
+import logging
 from pathlib import Path
 
 import numpy as np
@@ -27,6 +37,9 @@ from ephysatlas.spatial_encoder.model import (
     predict_probe_confidence_classes,
     ProbeSequenceConfidenceTransformer,
 )
+
+_logger = logging.getLogger(__name__)
+
 
 @torch.no_grad()
 def run_base_inference(model, data_loader, device: torch.device, output_dir: Path):
@@ -98,6 +111,15 @@ class RunConfig:
 
 
 def main():
+    # This example has not been migrated to the public inference API (0.8.0) and will fail
+    # at the download_model() call below. Warn up front so the traceback is not a surprise.
+    _logger.warning(
+        "This example predates the public inference API and is expected to fail: it calls "
+        "download_model(..., one=one), whose 'one' argument was removed in 0.8.0. The "
+        "supported entry point is load_pretrained(<model_id>).predict(df) on a frame with "
+        "channel positions. This file needs adapting to that API."
+    )
+
     cfg = RunConfig()
     torch.manual_seed(cfg.seed)
     np.random.seed(cfg.seed)
@@ -111,6 +133,11 @@ def main():
     one = ONE()
 
     from ephysatlas.regionclassifier import download_model
+
+    # BROKEN as of 0.8.0: download_model is now (local_path, model_name, revision=None) and
+    # fetches from the Hugging Face Hub, so `one=` raises TypeError and `model_name` must be
+    # a Hub repo id ('owner/name'), not an "encoding_models/<vintage>" path. Replace this
+    # whole block with load_pretrained(<model_id>) when adapting the example.
     model_path = download_model(cfg.model_base_dir, f"encoding_models/{cfg.vintage}", one=one)
 
     # ------------------------- data/context -------------------------
