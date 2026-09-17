@@ -653,30 +653,29 @@ class ModelSpikeFeatures(BaseChannelFeatures):
 class ModelSpikeShapeFeatures(BaseChannelFeatures):
     """Schema for the sparse, neuroscientist-facing spike-shape feature set.
 
-    Output of `remap_waveform_shape_features`, which remaps
-    `ModelSpikeFeatures`'s 14 raw columns onto these 9. See that function's
-    docstring for the per-column justification (each dropped column is either
-    an exact constant, a near-exact algebraic function of columns kept here,
-    or a lossless reparametrisation into a more interpretable pair).
+    Output of `remap_waveform_shape_features`. Amplitudes stay in z-score
+    units, unchanged from `ModelSpikeFeatures` (RMS-normalised before spike
+    detection in `dart_subtraction_numpy`; never rescaled back to volts).
+    Note this schema's 'peak' is the negative deflection and 'trough' the
+    positive rebound after it, opposite common neurophysiology usage, so
+    `spike_width_secs` is the classic trough-to-peak width despite the name
+    order.
 
     Attributes:
-        spike_width_secs (Series[float]): Trough-to-peak spike duration.
-        predepolarisation_width_secs (Series[float]): Tip-to-peak duration.
-        spike_amplitude (Series[float]): Trough-to-peak amplitude.
-        peak_to_trough_ratio_log (Series[float]): Log amplitude ratio (shape, scale-free).
-        tip_val (Series[float]): Waveform tip amplitude, unchanged from ModelSpikeFeatures.
-        alpha_mean (Series[float]): Mean alpha parameter for spike localization.
-        alpha_std (Series[float]): Standard deviation of alpha parameter.
-        polarity (Series[float]): Spike polarity (positive/negative).
-        spike_count (Series[float]): Number of spikes (log2 transformed).
+        spike_width_secs (Series[float]): Trough-to-peak spike duration (s).
+        predepolarisation_width_secs (Series[float]): Tip-to-peak duration (s).
+        spike_amplitude (Series[float]): Trough-to-peak amplitude (z-score).
+        peak_to_trough_ratio_log (Series[float]): Log amplitude ratio (dimensionless).
+        tip_val (Series[float]): Waveform tip amplitude (z-score), unchanged from ModelSpikeFeatures.
+        alpha_mean (Series[float]): Mean alpha parameter for spike localization (N/A).
+        alpha_std (Series[float]): Standard deviation of alpha parameter (N/A).
+        polarity (Series[float]): Spike polarity (dimensionless).
+        spike_count (Series[float]): Number of spikes, log2 transformed (log2 count).
     """
 
     spike_width_secs: float = pa.Field(
         coerce=True,
-        description="Trough-to-peak spike duration: trough_time_secs minus peak_time_secs. "
-        "The standard narrow/broad-spiking discriminator (note this schema's 'peak' is the "
-        "negative deflection and 'trough' the positive rebound after it, opposite to common "
-        "neurophysiology usage, so this is the classic trough-to-peak width despite the name order).",
+        description="Trough-to-peak spike duration: trough_time_secs minus peak_time_secs.",
         metadata={"raw_unit": "s"},
     )
     predepolarisation_width_secs: float = pa.Field(
@@ -727,22 +726,19 @@ class ModelSpikeShapeFeatures(BaseChannelFeatures):
 
 
 def _remap_waveform_shape_arrays(get):
-    """Shared core of the waveform-shape remapping, agnostic to the container.
+    """Core of the waveform-shape remapping, agnostic to the container.
 
     Parameters
     ----------
     get : callable
         ``get(name)`` returns the raw `ModelSpikeFeatures` column/slice for
-        `name` (a `pandas.Series` for `remap_waveform_shape_features`, or a
-        `(nx, ny, nz)` array for `remap_waveform_shape_features_volume`). Only
-        elementwise arithmetic and `numpy` ufuncs are used below, so any
-        array-like that supports `+`, `-`, `/`, `np.log` and `np.abs` works.
+        `name` (a `pandas.Series` or an `(nx, ny, nz)` array both work: only
+        elementwise `+`, `-`, `/`, `np.log`, `np.abs` are used below).
 
     Returns
     -------
     dict
-        Maps each `ModelSpikeShapeFeatures` column name to its array, in
-        schema-declaration order.
+        Maps each `ModelSpikeShapeFeatures` column name to its array.
     """
     return {
         "spike_width_secs": get("trough_time_secs") - get("peak_time_secs"),
@@ -758,14 +754,20 @@ def _remap_waveform_shape_arrays(get):
 
 
 def remap_waveform_shape_features(df: pd.DataFrame) -> pd.DataFrame:
-    """Remap `ModelSpikeFeatures`'s 14 raw waveform columns onto a sparser, less redundant set.
+    """Remap `ModelSpikeFeatures`'s 14 raw waveform columns onto the sparser `ModelSpikeShapeFeatures` set.
 
-    The 14 raw columns carry a lot of duplicated information: a PCA on their
-    z-scored values (production vintage 2026_W37, n=402,532 channels, project
-    ``ea_active``) needs only ~6-7 components for 95% of the variance. This
-    function replaces them with the 9 columns of `ModelSpikeShapeFeatures`,
-    chosen to be individually interpretable to a neuroscientist and to avoid
-    keeping two columns that say close to the same thing twice.
+    The 14 raw columns are redundant: PCA needs only ~7-8 components for 95%
+    of their variance (scree plot and per-column correlation evidence at
+    https://oliche.github.io/oliche-quarto/analyses/2026-09-17-waveform-shape-pca/).
+    Dropped: ``recovery_time_secs`` (exact constant offset of
+    ``trough_time_secs``), ``recovery_slope``/``depolarisation_slope``/
+    ``repolarisation_slope`` (near-exact functions of the amplitude/duration
+    pairs kept here), and ``peak_val``/``trough_val``/``peak_time_secs``/
+    ``trough_time_secs``/``tip_time_secs`` (reparametrised into
+    ``spike_amplitude``/``peak_to_trough_ratio_log``/``spike_width_secs``/
+    ``predepolarisation_width_secs`` without losing relative information).
+    ``tip_val`` is kept unchanged (r=0.79 with ``spike_amplitude``, not
+    redundant enough to drop).
 
     Parameters
     ----------
@@ -777,35 +779,6 @@ def remap_waveform_shape_features(df: pd.DataFrame) -> pd.DataFrame:
     -------
     pandas.DataFrame
         Columns of `ModelSpikeShapeFeatures`, same index as `df`.
-
-    Notes
-    -----
-    Columns dropped, and the evidence for each (same reference vintage as above):
-
-    - ``recovery_time_secs``: identically ``trough_time_secs + 5 / 30_000`` seconds,
-      the fixed sample offset used to place the recovery point (std of the
-      difference across channels: 6e-10 s, i.e. floating-point noise) - zero
-      information beyond ``trough_time_secs``.
-    - ``recovery_slope``: folding the fixed recovery offset back in
-      (``trough_val + recovery_slope * 5 / 30_000``) correlates r=0.98 with
-      ``spike_amplitude`` - no unique information left once amplitude is kept.
-    - ``depolarisation_slope``, ``repolarisation_slope``: near-exact algebraic
-      functions of the (value, time) pairs kept here
-      (``(peak_val - tip_val) / predepolarisation_width_secs`` and
-      ``(trough_val - peak_val) / spike_width_secs`` respectively reproduce
-      them at r=0.96-0.99).
-    - ``peak_time_secs``, ``trough_time_secs``, ``tip_time_secs``: 3 absolute
-      time points reduce to 2 independent durations (``spike_width_secs``,
-      ``predepolarisation_width_secs``) without losing any *relative* timing
-      information; only the common spike-sorter alignment offset (a detection
-      artifact, not a waveform property) is discarded.
-    - ``peak_val``, ``trough_val``: losslessly reparametrised (given the fixed
-      peak-negative/trough-positive sign convention) into an amplitude
-      (``spike_amplitude``) and a scale-free shape ratio
-      (``peak_to_trough_ratio_log``); the raw pair was anti-correlated r=-0.97.
-
-    ``tip_val`` is kept unchanged: it correlates only r=0.79 with
-    ``spike_amplitude`` in the same vintage, not high enough to call it redundant.
     """
     out = pd.DataFrame(_remap_waveform_shape_arrays(df.__getitem__), index=df.index)
     ModelSpikeShapeFeatures.validate(out)
@@ -813,12 +786,12 @@ def remap_waveform_shape_features(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def remap_waveform_shape_features_volume(ephys_atlas_vol, feature_names):
-    """Apply the waveform-shape remapping to a brainwide encoding volume.
+    """Same transform as `remap_waveform_shape_features`, for a `download_encoding_volume` array.
 
-    Same transform as `remap_waveform_shape_features`, for the `(nx, ny, nz,
-    n_features)` volumes returned by `download_encoding_volume` instead of a
-    channel dataframe. Values there are stored unnormalised, so no
-    de-z-scoring is needed first.
+    Values there are unnormalised already, so no de-z-scoring is needed.
+    Does not derive `mean_per_feature`/`std_per_feature` for the new
+    columns -- those come from the original per-channel dataset, not the
+    volume itself.
 
     Parameters
     ----------
@@ -840,13 +813,6 @@ def remap_waveform_shape_features_volume(ephys_atlas_vol, feature_names):
     ------
     KeyError
         If a required raw feature name is absent from `feature_names`.
-
-    Notes
-    -----
-    This only remaps the volume's values; it does not attempt to derive
-    `mean_per_feature`/`std_per_feature` for the new columns, since those are
-    computed upstream from the original per-channel dataset, not from the
-    volume itself.
     """
     index_of = {name: i for i, name in enumerate(np.asarray(feature_names))}
 

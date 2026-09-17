@@ -166,17 +166,13 @@ class TestRemapWaveformShapeFeatures(unittest.TestCase):
         )
         np.testing.assert_array_equal(df_shape.index, self.df_features.index)
         # dropped columns must not leak through
-        for col in [
-            "recovery_time_secs",
-            "recovery_slope",
-            "depolarisation_slope",
-            "repolarisation_slope",
-            "peak_time_secs",
-            "trough_time_secs",
-            "tip_time_secs",
-            "peak_val",
-            "trough_val",
-        ]:
+        raw_cols = set(
+            ephysatlas.features.ModelSpikeFeatures.to_schema().columns.keys()
+        )
+        shape_cols = set(
+            ephysatlas.features.ModelSpikeShapeFeatures.to_schema().columns.keys()
+        )
+        for col in raw_cols - shape_cols:
             self.assertNotIn(col, df_shape.columns)
 
     def test_derived_values(self):
