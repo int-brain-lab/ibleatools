@@ -848,7 +848,7 @@ def read_cells_features(path_project):
 
     See Also
     --------
-    docs/source/how-to/load-cells-features.rst : full file reference, shapes and dtypes.
+    docs/how-to/load-cells-features.qmd : full file reference, shapes and dtypes.
     """
     path = Path(path_project) / "cells_aggregates"
     result = {

@@ -1,0 +1,176 @@
+---
+title: "S3 data layout"
+---
+
+All IBL electrophysiology atlas data lives in a single **private** AWS S3 bucket:
+
+```text
+s3://ibl-brain-wide-map-private/aggregates/atlas/
+```
+
+Authentication goes through [`one.api.ONE`](https://int-brain-lab.github.io/ONE/) with Alyx credentials — pass a logged-in `ONE`
+instance as the `one` argument to every download function.
+
+::: {.callout-note}
+This bucket is not needed to use ibleatools. Feature computation works on your own files,
+and the published models are on the **public** Hugging Face Hub. Only the pre-computed IBL
+aggregates described here require an account.
+:::
+
+## Folder layout
+
+```text
+aggregates/atlas/
+│
+├── features/{project}/{label}/agg_full/     ← channel-level ephys features
+│   ├── raw_ephys_features_denoised.pqt      denoised channel features  (~175 MB)
+│   ├── raw_ephys_features.pqt               raw channel features       (~165 MB)
+│   ├── channels.pqt                         channel metadata (coordinates, probe info)  (~10 MB)
+│   ├── df_all_cols_merged.pqt               denoised + channels + region ids, pre-merged (~185 MB)
+│   └── snippets_df.pqt                      per-snippet provenance manifest
+│
+├── features/{project}/{label}_extended/     ← large optional data (cross-correlograms …)
+│
+├── encoding_volumes/{project}/{label}/      ← 4-D CCF volume, one file per resolution
+│   ├── brainwide_ephys_atlas_25um.npz       (456 × 528 × 320 × N_features), ~500 MB
+│   ├── brainwide_ephys_atlas_50um.npz       (228 × 264 × 160 × N_features), 140–240 MB
+│   └── brainwide_ephys_edges_50um.npz       ephys edges (228 × 264 × 160 × 1), ~6 MB, 2026_W39 onwards
+│
+├── models/{model_name}/                     ← trained region classifier
+│   ├── model.ubj
+│   └── meta.yaml
+│
+└── projects/{project}/                      ← per-project cell/LFP aggregates
+    ├── df_probe_details.pqt                 one row per probe insertion
+    ├── cells_aggregates/
+    │   ├── clusters.table.pqt               all cells (n_cells × ~59)
+    │   ├── clusters_good.table.pqt          QC-passing cells (n_good × ~61)
+    │   ├── clusters.acgs_log.npy            log-binned ACGs, normalised  (n_cells × 128) float16
+    │   ├── acgs_log.times.npy               ACG bin centres, seconds     (128,) float64
+    │   ├── clusters.waveforms_peak.npy      peak-channel waveform        (n_cells × 128) float16
+    │   ├── clusters.acgs_3d.npy             3-D ACG (~3.5 GB)            (n_cells × 10 × 201) float16
+    │   ├── acgs_3d.times.npy                3-D ACG log-time centres, ms (201,) float64
+    │   ├── clusters_good.stpc.npy           population coupling                  (n_good × 1000) float16
+    │   ├── clusters_good.stlfp.npy          spike-triggered LFP                  (n_good × 250)  float16
+    │   ├── waveforms.voltage.npy            neighbourhood traces (~8 GB)         (n_traces × 128) float16
+    │   └── waveforms.table.pqt              pid/cluster_id/abs_channel index     (n_traces × 3)
+    └── lfp_aggregates/                      ← merged LFP archives, one group per pid (lfpack ≥ 1.0)
+        ├── lf_compressed_v04_a14_small_all.h5     small   (ε=100, α=14)   ~11 GB
+        ├── lf_compressed_v04_a07_default_all.h5   default (ε=100, α=7)    ~21.5 GB
+        └── lf_compressed_v04_a2p5_fine_all.h5     fine    (ε=100, α=2.5)  ~46 GB
+```
+
+### The `agg_full/` contents changed over time
+
+Verified by listing the bucket. Code that hardcodes a filename should account for this:
+
+| vintages | files in `agg_full/` |
+|---|---|
+| `2024_W50` and earlier | `channels.pqt`, `channels_labels.pqt`, `probes.pqt`, `raw_ephys_features.pqt`, `raw_ephys_features_denoised.pqt` |
+| `2025_W28` | `channels.pqt`, `raw_ephys_features.pqt`, `raw_ephys_features_denoised.pqt` |
+| `2025_W39` onward | `channels.pqt`, `raw_ephys_features.pqt`, `raw_ephys_features_denoised.pqt`, `df_all_cols_merged.pqt`, `snippets_df.pqt` |
+
+The file names stayed the same from `2026_W39` on, but their contents changed. Those
+tables are computed with `ephysatlas` 0.9.0 (recorded in `snippets_df.pqt`):
+
+- the denoised table carries the spike-shape columns instead of the six raw waveform
+  columns, while the raw table keeps the raw ones;
+- waveform amplitudes are in volts;
+- `spike_count` is a rate.
+
+From `2026_W42` the first-difference CSD columns are named `*_bpr` (`*_csd_diff1` before)
+and computed with the ibl-neuropixel 1.14 Cadzow denoising.
+
+See the [feature list](feature-list.qmd).
+
+`channels_labels.pqt` is **legacy**. From `2025_W39` on, channel quality labels are a
+`labels` column inside `channels.pqt` instead.
+[`read_features_from_disk`](../api/data.read_features_from_disk.qmd) handles both: it uses
+the inline column when present and falls back to the separate file otherwise.
+
+`df_all_cols_merged.pqt` is a convenience table equal to
+`raw_ephys_features_denoised.pqt` + `channels.pqt` + the four region-annotation columns
+(`Allen_id`, `Cosmos_id`, `Beryl_id`, `outside`) — i.e. exactly the output of
+`read_features_from_disk`. Reading it directly skips that call, and with it the
+`ClassifierAtlas` template download.
+
+`snippets_df.pqt` is the per-snippet provenance manifest — ibleatools version, git commit,
+feature-calculator class, `t_start` and durations for every snippet that went into the
+aggregate. It is the same shape `produce_output_dataframes` consumes.
+
+## Projects
+
+`{project}` selects the dataset:
+
+| project | description |
+|---|---|
+| `ea_active` | The default. Updated weekly with the latest features |
+| `ibl_neuropixel_brainwide_01` | The frozen brainwide-map dataset |
+
+```python
+import ephysatlas.data
+
+projects = ephysatlas.data.list_available_projects(one=one)
+```
+
+## Versioning
+
+### Vintage labels
+
+Channel features and encoding volumes are versioned with a **weekly label** of the form
+`YYYY_Www` — `2025_W28` is week 28 of 2025. This is a *vintage*: a coherent release of
+feature definitions plus the data computed under them.
+
+```python
+labels = ephysatlas.data.list_available_labels(one=one, project="ea_active")
+latest = ephysatlas.data.get_latest_label(one=one, project="ea_active")
+```
+
+Pin an explicit label in anything you intend to reproduce. `get_latest_label` resolves to
+whatever is newest *now*.
+
+### Resolution
+
+Encoding volumes are versioned additionally by voxel resolution (`res_um`, e.g. 25 or 50).
+Omit `res_um` and `download_encoding_volume` auto-resolves to the finest resolution
+available on S3 for that label.
+
+Which `(label, res_um)` pairs exist changes as new volumes are published — list them
+rather than assuming.
+
+## Download functions
+
+| function | S3 path |
+|---|---|
+| [`download_tables`](../api/data.download_tables.qmd) | `features/{project}/{label}/agg_full/` |
+| [`download_encoding_volume`](../api/data.download_encoding_volume.qmd) | `encoding_volumes/{project}/{label}/` |
+| [`download_edges_volume`](../api/data.download_edges_volume.qmd) | `encoding_volumes/{project}/{label}/` (`brainwide_ephys_edges_*`) |
+| [`download_probe_details`](../api/data.download_probe_details.qmd) | `projects/{project}/df_probe_details.pqt` |
+| [`download_cells_features`](../api/data.download_cells_features.qmd) | `projects/{project}/cells_aggregates/` |
+| [`download_project_data`](../api/data.download_project_data.qmd) | probe details + cell aggregates (convenience wrapper) |
+| [`download_lfp_features`](../api/data.download_lfp_features.qmd) | `projects/{project}/lfp_aggregates/` |
+
+## Read functions
+
+| function | reads |
+|---|---|
+| [`read_features_from_disk`](../api/data.read_features_from_disk.qmd) | The channel feature tables, merged and region-annotated |
+| [`read_cells_features`](../api/data.read_cells_features.qmd) | The cell tables and their row-aligned arrays |
+| [`read_probe_details`](../api/data.read_probe_details.qmd) | `df_probe_details.pqt` |
+| [`read_lfp_features`](../api/data.read_lfp_features.qmd) | One recording from an lfpack archive, as an `LFPackReader` |
+
+## Note on `models/`
+
+The `models/` prefix holds region-classifier directories in the legacy S3 layout, reached
+via `ephysatlas.regionclassifier.download_model`. **New work should not use it.** Published
+models are distributed through the public Hugging Face Hub and loaded with
+[`load_pretrained`](../how-to/download-models.qmd), which verifies checksums and manifests
+on load.
+
+## See also
+
+- [Load channel features](../how-to/load-channel-features.qmd)
+- [Load cells features](../how-to/load-cells-features.qmd)
+- [Load compressed LFP](../how-to/load-lfp-features.qmd)
+- [Load encoding volumes](../how-to/load-encoding-volume.qmd)
+- [Core concepts](../explanation/concepts.qmd) — what a vintage means in practice

@@ -7,9 +7,34 @@ This repository contains tools for computing electrophysiology features and perf
 
 ## Documentation
 
-For detailed documentation, installation instructions, usage examples, and API reference, please visit our comprehensive documentation:
-
 **[📚 View Full Documentation](https://int-brain-lab.github.io/ibleatools)**
+
+| Start here | |
+|---|---|
+| [Tutorial](https://int-brain-lab.github.io/ibleatools/tutorials/first-predictions.html) | Install, download a published model, predict brain regions |
+| [Compute features on your own data](https://int-brain-lab.github.io/ibleatools/how-to/compute-features-spikeglx.html) | SpikeGLX, NWB/DANDI or SpikeInterface-Zarr recordings |
+| [Run a published model](https://int-brain-lab.github.io/ibleatools/how-to/download-models.html) | Region decoder and spatial encoder, from the Hugging Face Hub |
+| [Plot features along the probe](https://int-brain-lab.github.io/ibleatools/visualise/features-along-probe.html) | Visualise how features vary with depth |
+| [API reference](https://int-brain-lab.github.io/ibleatools/api/) | Generated from the docstrings |
+
+The site is a [Quarto](https://quarto.org/) website built from `docs/`; see
+[`docs/README.txt`](docs/README.txt) to build it locally.
+
+## Published models
+
+Both are public Hugging Face repositories — no account or token needed — and load through
+the single [`load_pretrained`](https://int-brain-lab.github.io/ibleatools/api/load_pretrained.html) entry point:
+
+- [`int-brain-lab/ea-decoder-channel-xgboost`](https://huggingface.co/int-brain-lab/ea-decoder-channel-xgboost) — brain region per channel, from features
+- [`int-brain-lab/ea-encoder-channel`](https://huggingface.co/int-brain-lab/ea-encoder-channel) — features per channel, from position
+
+```python
+from ephysatlas import load_pretrained
+
+model = load_pretrained("int-brain-lab/ea-decoder-channel-xgboost", revision="2026_W42")
+model.selftest()
+out = model.predict(df_features)
+```
 
 ## Quick Installation
 

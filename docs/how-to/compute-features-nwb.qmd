@@ -1,0 +1,205 @@
+---
+title: "How to compute features from NWB recordings"
+---
+
+This guide computes features from a recording stored as
+[NWB](https://www.nwb.org/) — read locally, streamed from an S3/HTTPS URL, or streamed
+from a [DANDI](https://dandiarchive.org/) asset. Nothing is downloaded whole; remote
+files are read in chunks over HTTP.
+
+Once the calculator is built, features are computed as for
+[SpikeGLX files](compute-features-spikeglx.qmd#compute-features), with
+`compute_denoised_features`. Only the calculator changes.
+
+## Prerequisites
+
+The NWB stack is optional and ships in the `[full]` extra:
+
+```bash
+pip install -e ".[full]"
+```
+
+That brings in SpikeInterface, `pynwb`, `hdmf-zarr`, `remfile` and `dandi`. They are
+imported lazily, so a lite install can still *import* this module — it just cannot open a
+recording.
+
+## Building the calculator
+
+An NWB recording can be stored in two formats, HDF5 (`.nwb`) or Zarr (`.nwb.zarr`), and
+read from three places: a local file, a direct S3/HTTPS URL, or a DANDI asset. One object,
+`NwbSource`, describes where one band is and how to read it, and `NwbFeatureCalculator`
+takes **one source per band**:
+
+```python
+from ephysatlas.feature_calculators import NwbFeatureCalculator, NwbSource
+
+calc = NwbFeatureCalculator(
+    ap_source=NwbSource.local("/data/session.nwb", electrical_series="acquisition/ElectricalSeriesAP"),
+    lf_source=NwbSource.local("/data/session.nwb", electrical_series="acquisition/ElectricalSeriesLF"),
+    name="session_probe00",
+)
+```
+
+You rarely need to build the sources yourself. Three constructors do it for you, one per
+place the file can be:
+
+- `NwbFeatureCalculator.from_local` — [local files](#local-files)
+- `NwbFeatureCalculator.from_url` — [streaming from a URL](#streaming-from-a-url)
+- `NwbFeatureCalculator.from_dandi` — [streaming from DANDI](#streaming-from-dandi)
+
+## Selecting the electrical series
+
+Inside an NWB file, each stream of voltage data is stored as an `ElectricalSeries`. A
+Neuropixels recording usually has two in the same file, one for the AP band and one for
+the LF band, so tell the calculator which series is which band. Pass the series' path in
+the file, `acquisition/` followed by its name, as `ap_electrical_series` and
+`lf_electrical_series` (or as `electrical_series` of each `NwbSource`). If the file holds
+a single series, leave the selector out.
+
+To find the series names in a file, list them with pynwb:
+
+```python
+from pynwb import NWBHDF5IO
+
+with NWBHDF5IO("/data/session.nwb", mode="r", load_namespaces=True) as io:
+    print(list(io.read().acquisition))
+# ['ElectricalSeriesProbe00AP', 'ElectricalSeriesProbe00LF']
+```
+
+## Local files
+
+```python
+from ephysatlas.feature_calculators import NwbFeatureCalculator
+
+calc = NwbFeatureCalculator.from_local(
+    ap_path="/data/session.nwb",
+    lf_path="/data/session.nwb",
+    ap_electrical_series="acquisition/ElectricalSeriesProbe00AP",
+    lf_electrical_series="acquisition/ElectricalSeriesProbe00LF",
+    name="session_probe00",
+)
+
+df = calc.compute_denoised_features(n_snippets=5, duration_ap=5.0, duration_lf=5.0)
+print(df.index.names)   # ['pid', 'channel']
+```
+
+`backend="auto"` (the default) picks HDF5 or Zarr from the file extension. Override with
+`backend="hdf5"` or `backend="zarr"` when the extension is not informative.
+
+To compute a single snippet, choose the windows yourself, keep the snippet files, or work
+with a recording shorter than about 10 minutes, see
+[tune the computation](tune-feature-computation.qmd).
+
+## Streaming from a URL
+
+```python
+calc = NwbFeatureCalculator.from_url(
+    lf_url="https://example.org/path/session.nwb",
+    lf_electrical_series="acquisition/ElectricalSeriesLF",
+    name="remote_probe00",
+)
+```
+
+`stream_mode` defaults to `"remfile"`, which is the right choice for remote HDF5. For a
+remote Zarr store pass `stream_mode="zarr"` (or leave it to `NwbSource.remote`, which
+auto-selects per backend).
+
+## Streaming from DANDI
+
+`from_dandi` resolves a dandiset id and an asset path to the file's streamable S3 URL. The
+example is the IBL Brain-Wide Map on DANDI, whose session files hold the raw AP and LF
+bands as two `ElectricalSeries` of the same file, so the same file is passed for both
+bands, with a different selector for each:
+
+```python
+from ephysatlas.feature_calculators import FeatureComputationOptions, NwbFeatureCalculator
+
+DANDISET, VERSION = "000409", "0.260309.1324"
+DANDI_PATH = (
+    "sub-CSHL049/"
+    "sub-CSHL049_ses-c99d53e6-c317-4c53-99ba-070b26673ac4_desc-raw_ecephys.nwb"
+)
+
+calc = NwbFeatureCalculator.from_dandi(
+    DANDISET,
+    ap_filepath=DANDI_PATH,
+    lf_filepath=DANDI_PATH,
+    version=VERSION,
+    ap_electrical_series="acquisition/ElectricalSeriesProbe00AP",
+    lf_electrical_series="acquisition/ElectricalSeriesProbe00LF",
+    name="CSHL049_probe00",
+)
+
+df = calc.compute_denoised_features(
+    n_snippets=5, duration_ap=1.0, duration_lf=5.0,
+    options=FeatureComputationOptions(features_to_compute=["lf", "csd", "ap"]),
+)
+```
+
+`version` defaults to `"draft"`. **Pin a published version** (as above) for a reproducible
+result — `draft` moves.
+
+::: {.callout-warning}
+## The AP band is slow to stream, and often missing
+
+The AP band is large, and the `waveforms` features run spike detection over it. Streaming
+it is much slower than the LF band: start with `duration_ap=1.0` and only scale up once
+the call works.
+
+Many DANDI datasets hold no raw AP voltage at all, only the LF band or spike-sorted units.
+For those, give the LF file alone and set `duration_ap=0.0`:
+
+```python
+calc = NwbFeatureCalculator.from_dandi(
+    DANDISET,
+    lf_filepath=DANDI_PATH,
+    version=VERSION,
+    lf_electrical_series="acquisition/ElectricalSeriesProbe00LF",
+    name="CSHL049_probe00",
+)
+df = calc.compute_denoised_features(n_snippets=5, duration_ap=0.0, duration_lf=5.0)
+```
+
+Only the `lf` and `csd` families are computed then. The published region models need all
+four families, so they cannot run on the result.
+:::
+
+## NWB-with-Zarr-backend is not SpikeInterface Zarr
+
+These are different formats and need different calculators:
+
+| Your data | Use |
+|---|---|
+| `.nwb` (HDF5) | `NwbFeatureCalculator` |
+| `.nwb.zarr` — NWB written with a Zarr backend | `NwbFeatureCalculator`, `backend="zarr"` |
+| A SpikeInterface `ZarrRecordingExtractor` store (`traces_seg0`, …) | [`SpikeInterfaceZarrFeatureCalculator`](compute-features-zarr.qmd) |
+
+Both are Zarr on disk, but the internal layout differs. The wrong calculator fails with a
+reader error that does not say this.
+
+## Troubleshooting
+
+**`ValueError: At least one of ap_source or lf_source must be provided`** — every
+`from_*` constructor returned two `None` sources, meaning you passed neither path/url.
+
+**An `ImportError` naming spikeinterface, pynwb, hdmf-zarr, remfile or dandi** — install
+the `[full]` extra. The error message says exactly this.
+
+**The wrong band's features come out, or channel counts look wrong** — the
+`electrical_series` selector is probably picking the other series. Print the acquisition
+keys as shown above and check.
+
+**`NotImplementedError: ... recording spans 4 shanks/groups ...`** — the series covers
+more than one shank, and feature computation is single-shank. Give each calculator one
+shank's channels; see
+[one shank per calculator](../explanation/feature-pipeline.qmd#one-shank-per-calculator).
+
+## Next steps
+
+- [Tune the computation](tune-feature-computation.qmd) — single snippets, snippet windows
+  and parameters shared by every source
+- [Aggregate and denoise](aggregate-and-denoise.qmd) — what `compute_denoised_features`
+  does after computing the snippets
+- [Predict brain regions](predict-regions.qmd)
+- [`NwbSource` API](../api/feature_calculators.NwbSource.qmd) and
+  [`NwbFeatureCalculator` API](../api/feature_calculators.NwbFeatureCalculator.qmd)

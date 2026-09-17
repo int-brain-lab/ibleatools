@@ -1,0 +1,346 @@
+---
+title: "Feature list"
+---
+
+Every feature column produced by
+[feature computation](../how-to/compute-features-spikeglx.qmd), grouped by the family that
+emits it. The columns and units below are those declared by the pandera schemas in
+`ephysatlas.features`, which are what the code validates against.
+
+Columns marked **\*** are optional or nullable: they are absent from older vintages, or
+only produced when a specific option is enabled. Everything else is always present when
+its family is computed.
+
+## Families
+
+| family | band | schema | needs |
+|---|---|---|---|
+| `lf` | LF | `ModelLfFeatures` | lite install |
+| `csd` | LF | `ModelCsdFeatures` | lite install |
+| `ap` | AP | `ModelApFeatures` | lite install |
+| `waveforms` | AP | `ModelSpikeFeatures` | `[full]` extra ([DARTsort](https://github.com/cwindolf/dartsort)) |
+
+`ModelRawFeatures` is the union of all four plus `ModelChannelLayout` (56 columns), and is
+the schema a complete raw feature table validates against. `ModelDenoisedFeatures` (54
+columns) is the same with the spike block swapped for the
+[spike-shape columns](#spike-shape-columns); a
+denoised table written since `ephysatlas` 0.9.0 validates against it (tables before
+`2026_W42` once their `*_csd_diff1` columns are renamed, as `read_features_from_disk`
+does).
+
+![The features at a glance: a schematic of each, its distribution over the IBL dataset, and what it is thought to reflect. The names follow an earlier vintage (`peak-val`, `trough-val`, ... are the landmark columns that the denoised table now remaps).](../figures/raw_to_features.png){.lightbox}
+
+## Frequency bands
+
+Every `psd_*` column integrates power over one of these bands, defined in
+`ephysatlas.features.BANDS`:
+
+| band | range (Hz) |
+|---|---|
+| `delta` | 0 – 4 |
+| `theta` | 4 – 10 |
+| `alpha` | 8 – 12 |
+| `beta` | 15 – 30 |
+| `gamma` | 30 – 90 |
+| `lfp` | 0 – 90 |
+
+`alpha` overlaps both `theta` and `beta`, and `lfp` spans the whole range — the bands are
+not a partition, so the `psd_*` columns are not independent and do not sum to `psd_lfp`.
+
+## Raw versus denoised units
+
+Three features are **transformed by denoising** and returned in the transformed unit:
+
+| column | raw unit | denoised unit | transform |
+|---|---|---|---|
+| `rms_lf` | V | dB rel. V | `20 · log10(x)` |
+| `rms_ap` | V | dB rel. V | `20 · log10(x)` |
+| `spike_count` | count/s | log2 (count/s) | `log2(x)`, with `0 → NaN` |
+
+So `raw_ephys_features.pqt` has `rms_lf` around 1e-5 while
+`raw_ephys_features_denoised.pqt` has it around −90. The unit column in the tables below
+gives the **denoised** unit where a transform exists. A model trained on denoised features
+expects the denoised unit — see [aggregate and denoise](../how-to/aggregate-and-denoise.qmd).
+
+### `lf` — `ModelLfFeatures` (19 columns)
+
+| column | unit | description |
+|---|---|---|
+| `rms_lf` | dB rel. V | Root mean square of the LFP signal |
+| `psd_lfp` | dB rel. V²/Hz | Power in the band 0 – 90 Hz |
+| `psd_delta` | dB rel. V²/Hz | Power in the band 0 – 4 Hz |
+| `psd_theta` | dB rel. V²/Hz | Power in the band 4 – 10 Hz |
+| `psd_alpha` | dB rel. V²/Hz | Power in the band 8 – 12 Hz |
+| `psd_beta` | dB rel. V²/Hz | Power in the band 15 – 30 Hz |
+| `psd_gamma` | dB rel. V²/Hz | Power in the band 30 – 90 Hz |
+| `psd_residual_lfp` * | dB rel. V²/Hz | Power in 0 – 90 Hz after removing the linear fit of the PSD decay in log-log space |
+| `psd_residual_delta` * | dB rel. V²/Hz | Power in 0 – 4 Hz after removing the PSD-decay fit |
+| `psd_residual_theta` * | dB rel. V²/Hz | Power in 4 – 10 Hz after removing the PSD-decay fit |
+| `psd_residual_alpha` * | dB rel. V²/Hz | Power in 8 – 12 Hz after removing the PSD-decay fit |
+| `psd_residual_beta` * | dB rel. V²/Hz | Power in 15 – 30 Hz after removing the PSD-decay fit |
+| `psd_residual_gamma` * | dB rel. V²/Hz | Power in 30 – 90 Hz after removing the PSD-decay fit |
+| `aperiodic_offset` * | dB rel. V²/Hz | Y-intercept of the PSD-decay fit in log-log space |
+| `aperiodic_exponent` * | dB rel. V²/Hz | Slope of the PSD-decay fit in log-log space |
+| `decay_fit_error` * | dB rel. V²/Hz | RMS error of the PSD-decay fit |
+| `decay_fit_r_squared` * | dimensionless | R² of the PSD-decay fit |
+| `decay_n_peaks` * | count | Number of peaks detected in the residual after removing the PSD-decay fit |
+| `rms_lf_no_car` * | dB rel. V | LFP RMS destriped **without** common-average referencing. Opt in via `LfParams(compute_rms_no_car=True)` |
+
+The `psd_residual_*`, `aperiodic_*` and `decay_*` columns are the **spectral
+parameterisation** features, computed with [specparam](https://specparam-tools.github.io/)
+and introduced in vintage `2025_W39`. They are controlled by
+`LfParams(decay_features=True)`, on by default. Vintages before `2025_W39` lack them
+entirely — which matters, because every published region decoder requires them.
+
+### `csd` — `ModelCsdFeatures` (14 columns)
+
+The same measures computed on spatial differences of the LFP rather than the raw LFP:
+the `*_csd` columns on the second difference (the current-source density proper) and
+the `*_bpr` columns on the first difference between consecutive contacts of a column
+(bipolar referencing). Both are Cadzow-denoised first and scaled by the tissue
+conductivity and the intercontact distance, so their units are A/m³ and A/m². With
+`CsdParams(scale=False)` they are raw differences in V and these units do not apply.
+
+| column | unit | description |
+|---|---|---|
+| `rms_lf_csd` | dB rel. A/m³ | Root mean square of the CSD signal |
+| `psd_delta_csd` | dB rel. (A/m³)²/Hz | CSD power in 0 – 4 Hz |
+| `psd_theta_csd` | dB rel. (A/m³)²/Hz | CSD power in 4 – 10 Hz |
+| `psd_alpha_csd` | dB rel. (A/m³)²/Hz | CSD power in 8 – 12 Hz |
+| `psd_beta_csd` | dB rel. (A/m³)²/Hz | CSD power in 15 – 30 Hz |
+| `psd_gamma_csd` | dB rel. (A/m³)²/Hz | CSD power in 30 – 90 Hz |
+| `psd_lfp_csd` | dB rel. (A/m³)²/Hz | CSD power in 0 – 90 Hz |
+| `rms_lf_bpr` * | dB rel. A/m² | Root mean square of the bipolar-referenced (BPR) signal |
+| `psd_delta_bpr` * | dB rel. (A/m²)²/Hz | BPR power in 0 – 4 Hz |
+| `psd_theta_bpr` * | dB rel. (A/m²)²/Hz | BPR power in 4 – 10 Hz |
+| `psd_alpha_bpr` * | dB rel. (A/m²)²/Hz | BPR power in 8 – 12 Hz |
+| `psd_beta_bpr` * | dB rel. (A/m²)²/Hz | BPR power in 15 – 30 Hz |
+| `psd_gamma_bpr` * | dB rel. (A/m²)²/Hz | BPR power in 30 – 90 Hz |
+| `psd_lfp_bpr` * | dB rel. (A/m²)²/Hz | BPR power in 0 – 90 Hz |
+
+The `*_bpr` columns were called `*_csd_diff1` before vintage `2026_W42`.
+`ephysatlas.data.read_features_from_disk` renames them when it reads an older table
+(`data.LEGACY_FEATURE_RENAMES`).
+
+### `ap` — `ModelApFeatures` (3 columns)
+
+| column | unit | description |
+|---|---|---|
+| `rms_ap` | dB rel. V | Root mean square of the AP signal |
+| `cor_ratio` | dimensionless | Median zero-lag cross-correlation with neighbouring channels, over the zero-lag autocorrelation |
+| `channel_labels` | code | Channel quality label — see below |
+
+`channel_labels` is a small integer code, not a measurement:
+
+| value | meaning |
+|---|---|
+| `0` | Good channel |
+| `1` | Dead — low coherence or amplitude |
+| `2` | Noisy |
+| `3` | Outside the brain |
+
+Anything greater than `0` is a bad channel. `read_features_from_disk` derives a boolean
+`outside` column from `channel_labels == 3`, and the region decoder consumes both.
+
+### `waveforms` — `ModelSpikeFeatures` (18 columns)
+
+Requires the `[full]` extra. Twelve columns are shared with the
+[spike-shape schema](#spike-shape-columns) (they live on
+`ModelSpikeSharedFeatures`):
+
+| column | unit | description |
+|---|---|---|
+| `spike_count` | log2 (count/s) | Mean spike rate across snippets (nulls counted as 0), log2-transformed |
+| `alpha_mean` | native | Mean spike "brightness", from the spike-localisation step |
+| `alpha_std` | native | Standard deviation of the spike brightness |
+| `polarity` | dimensionless | Sum of per-spike polarities divided by the number of spikes |
+| `tip_val` | V | Waveform tip amplitude |
+| `depolarisation_slope` | V/s | Slope of the line crossing the tip and peak points |
+| `repolarisation_slope` | V/s | Slope of the line crossing the peak and trough points |
+| `recovery_slope` | V/s | Slope of the line crossing the trough and recovery points |
+| `spatial_spread_um` * | µm | Amplitude-weighted mean distance of the multi-channel waveform's neighbour channels from the peak channel |
+| `spatial_spread_um_std` * | µm | Its standard deviation across the channel's spikes |
+| `slowness_s_per_m` * | s/m | Signed slowness (inverse apparent velocity) of the waveform along the probe axis |
+| `slowness_s_per_m_std` * | s/m | Its standard deviation across the channel's spikes |
+
+and six are the raw waveform landmarks, relative to the extracted waveform window:
+
+![(a) The waveform landmarks — tip, peak, trough, recovery and the half-peak width — and the depolarisation, repolarisation and recovery slopes between them. (b) The same landmarks (stars) found on four recorded waveforms (blue); the black line is the half-peak level.](../figures/waveform_points.png){.lightbox}
+
+| column | unit | description |
+|---|---|---|
+| `peak_time_secs` | s | Time to the waveform peak |
+| `peak_val` | V | Peak amplitude |
+| `trough_time_secs` | s | Time to the waveform trough |
+| `trough_val` | V | Trough amplitude |
+| `tip_time_secs` | s | Time to the waveform tip |
+| `recovery_time_secs` | s | Recovery time |
+
+The four spread and slowness columns are nullable: NaN wherever too few neighbour channels
+have a usable value, and the `_std` columns are NaN on a channel with fewer than two
+qualifying spikes (sample standard deviation). `alpha_mean` / `alpha_std` stay in
+DARTsort's native localisation units.
+
+::: {.callout-note}
+The six landmark columns carry no `description` in the pandera schema itself, and the
+four timing ones no unit — the descriptions above come from the `ModelSpikeFeatures`
+class docstring. Read `ephysatlas.features.spikes` if you need the exact definition.
+:::
+
+Waveform geometry is 121 samples with the trough at sample 42. Two boundaries make
+waveform features incomparable across them:
+
+- **0.7.0, the DARTsort 0.5 migration:** detections rose about 9.5 % and amplitudes came
+  out about 10 % smaller.
+- **0.9.0:** amplitudes are in **volts**. Before, they were in DARTsort's per-channel RMS
+  units (amplitudes and slopes alike), and `spike_count` was a per-snippet count rather
+  than a rate. Tables from `2026_W39` on use the new units.
+
+### Spike-shape columns — `ModelSpikeShapeFeatures` (16 columns) {#spike-shape-columns}
+
+The **denoised** tables replace the six landmark columns with four interpretable ones,
+computed from them (`aggregation.apply_waveform_remap`); the twelve shared columns pass
+through:
+
+| column | unit | description |
+|---|---|---|
+| `spike_width_secs` | s | Trough-to-peak duration: `trough_time_secs − peak_time_secs` |
+| `predepolarisation_width_secs` | s | Tip-to-peak duration: `peak_time_secs − tip_time_secs` |
+| `spike_amplitude` | V | Overall amplitude: `trough_val − peak_val` |
+| `peak_to_trough_ratio_log` | dimensionless | `log(|peak_val / trough_val|)`: shape asymmetry, independent of amplitude |
+
+The raw tables (`raw_ephys_features.pqt`) keep the landmark columns.
+`remap_waveform_shape_features` applies the same transform to a table you hold, and
+`remap_waveform_shape_features_volume` to an
+[encoding volume](../how-to/load-encoding-volume.qmd).
+
+### Channel metadata — `ModelChannelLayout`
+
+Always present, from the recording geometry rather than a feature family.
+
+| column | unit | description |
+|---|---|---|
+| `axial_um` | µm | Distance along the probe length (depth) |
+| `lateral_um` | µm | Distance across the probe width |
+
+The full `channels.pqt` table, as published in `ea_active/2026_W42`
+(402,816 channels across 1,049 probes):
+
+| column | unit | description |
+|---|---|---|
+| `pid` | — | Probe insertion id (index level 0) |
+| `channel` | index | Channel index (index level 1) |
+| `x`, `y`, `z` | **m** | Resolved histology coordinates from Bregma — **metres**, see below |
+| `x_target`, `y_target`, `z_target` | **m** | Target coordinates from the best Alyx trajectory — **metres**, see below |
+| `axial_um` | µm | Distance along the probe length (depth). Observed 20 – 3840 |
+| `lateral_um` | µm | Distance across the probe width. Observed 11 – 59 |
+| `acronym` | — | Brain region acronym, Allen mapping |
+| `atlas_id` | — | Allen structure id |
+| `labels` | code | Channel quality label. ~34 % null in `2026_W42` |
+| `rawInd` | index | Original channel index from the source. Descriptive only |
+| `shank` | index | Shank number |
+| `probe_model` | — | Probe part number from SpikeGLX (`imDatPrb_pn`), e.g. `PRB_1_4_0480_1` |
+| `referencing_scheme` | — | `external`, `tip`, `ground` or `on_shank`, from SpikeGLX `imroTbl` |
+
+In `2026_W39` and `2026_W42` every column except `labels` is fully populated. Older vintages are
+sparser: in `2026_W37`, `labels` was ~99 % null, `rawInd` / `shank` / `probe_model` /
+`referencing_scheme` ~94 % (populated only where SpikeGLX metadata was available at
+aggregation time), and the `*_target` columns ~50 %.
+
+`distance_to_tip_um` is declared `Optional` in `ChannelDataFrameSchema` but is not present
+in any current `ea_active` vintage.
+
+::: {.callout-warning}
+## Two different length units in one table
+
+**Coordinates are in metres. Probe geometry is in micrometres.**
+
+| columns | unit |
+|---|---|
+| `x`, `y`, `z`, `x_target`, `y_target`, `z_target` | **metres** (from Bregma, IBL convention) |
+| `axial_um`, `lateral_um`, `distance_to_tip_um` | **micrometres** |
+
+Practical consequence: the plotting functions want the **µm** pair
+(`lateral_um`, `axial_um`), while the
+[spatial encoder](../how-to/predict-features-from-position.qmd) wants the **metre**
+triple. Passing µm to the encoder places every channel outside the brain and returns
+meaningless predictions with no error.
+
+Verified against `ea_active/2026_W37`: reprojecting `x`/`y`/`z` through
+`AllenAtlas.get_labels` — a metres API — reproduces the table's own `acronym` column for
+**100%** of a 4,000-channel random sample; reading the same values as micrometres
+reproduces 2.7%. The observed range, ±0.008, is a mouse brain in metres.
+
+`ChannelDataFrameSchema`, `ModelHistologyResolved` and `ModelHistologyPlanned` declared
+`raw_unit: "um"` for all six coordinate columns before 0.9.0. That was wrong and is
+corrected. All six also name the coordinate space in their `description`. Planned and
+resolved coordinates share a frame and differ only by insertion error.
+:::
+
+The `*_target` columns come from `feature_computation.add_target_coordinates`. It queries
+Alyx trajectories up to provenance 50 and takes the best one the insertion has, in the
+order of `feature_computation.PROVENANCE_PREFERENCE`:
+
+1. `Micro-manipulator` (provenance 30)
+2. else `Planned` (10)
+3. else `Histology track` (50)
+
+A micro-manipulator or planned trajectory is converted from the needles (in-vivo) atlas
+into Allen space, with the 5° pitch correction. A histology track is already in Allen
+space and is used as is. An insertion with none of the three raises `ValueError`.
+
+## Programmatic access
+
+Do not hardcode a feature list — derive it:
+
+```python
+import ephysatlas.features
+
+# All feature columns, by provenance
+print(ephysatlas.features.voltage_features_set())
+
+# The frequency bands
+print(ephysatlas.features.BANDS)
+
+# Column names, dtypes, descriptions and units straight from the schema
+schema = ephysatlas.features.ModelRawFeatures.to_schema()
+for name, col in schema.columns.items():
+    print(name, col.dtype, col.description, (col.metadata or {}).get("raw_unit"))
+```
+
+And when a model is involved, the model's own manifest is authoritative:
+
+```python
+from ephysatlas import load_pretrained
+
+model = load_pretrained(
+    "int-brain-lab/ea-decoder-channel-xgboost", revision="2026_W42"
+)
+print(model.inputs["features"])   # exactly what this model needs, in order
+```
+
+## Which vintage changed what
+
+Feature definitions change between vintages. `FEATURES_CHANGELOG.md` in the repository
+root is the authoritative record; the headline changes:
+
+| vintage | change |
+|---|---|
+| `2025_W28` | `rms_ap` / `rms_lf` denoised in dB and `spike_count` in log2, returned transformed. Channel `*_target` coordinates gained a 5° pitch correction |
+| `2025_W39` | Added the spectral-parameterisation features (`aperiodic_*`, `decay_*`, `psd_residual_*`) |
+| `2025_W43` | Bad-alpha filtering added to the aggregation pipeline |
+| `2026_W39` | Computed with `ephysatlas` 0.9.0 (feature version `2026.09.20`): waveform amplitudes in volts, `spike_count` a rate, the denoised table remapped to the spike-shape columns, and the multi-channel `spatial_spread_um` / `slowness_s_per_m` features with their `_std` (listed in `FEATURES_CHANGELOG.md` under a provisional `2025_W51` heading) |
+| `2026_W42` | The first-difference CSD columns renamed `*_csd_diff1` → `*_bpr`, and the CSD and BPR computed with the ibl-neuropixel 1.14 Cadzow denoising (Gavish-Donoho shrinkage, full grid for NP1), which changes their values |
+
+See [core concepts](../explanation/concepts.qmd) for why a model and its features must
+come from the same vintage.
+
+## See also
+
+- [The feature pipeline](../explanation/feature-pipeline.qmd) — how these are computed
+- [Tune feature computation](../how-to/tune-feature-computation.qmd) — the options that
+  change them
+- [`ModelRawFeatures` API](../api/features.ModelRawFeatures.qmd),
+  [`ModelDenoisedFeatures` API](../api/features.ModelDenoisedFeatures.qmd) and
+  [`ModelSpikeShapeFeatures` API](../api/features.ModelSpikeShapeFeatures.qmd)
+- [`voltage_features_set` API](../api/features.voltage_features_set.qmd)

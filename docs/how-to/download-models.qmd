@@ -1,0 +1,209 @@
+---
+title: "How to download a published model"
+---
+
+Published IBL Ephys Atlas models live on the Hugging Face Hub in **public** repositories.
+This guide covers getting one, pinning a version, and verifying it works before you rely
+on it.
+
+## The available models
+
+| Hugging Face repo | Family | Direction | Vintage |
+|---|---|---|---|
+| [`int-brain-lab/ea-decoder-channel-xgboost`](https://huggingface.co/int-brain-lab/ea-decoder-channel-xgboost) | Region decoder | features → brain region, per channel | `2026_W42` |
+| [`int-brain-lab/ea-decoder-channel-transformer`](https://huggingface.co/int-brain-lab/ea-decoder-channel-transformer) | Whole-probe region decoder | a probe's features → brain region per channel | `2026_W42` |
+| [`int-brain-lab/ea-encoder-channel`](https://huggingface.co/int-brain-lab/ea-encoder-channel) | Spatial encoder | position → channel features | `2026_W42` |
+| [`int-brain-lab/ea-encoder-unit`](https://huggingface.co/int-brain-lab/ea-encoder-unit) | Unit encoder | position → unit phenotype; units → putative cell types | `2026_W42` |
+
+All four load through the same call. See [model families](../explanation/model-families.qmd)
+for how they differ conceptually.
+
+## One entry point
+
+`load_pretrained` serves every family:
+
+```python
+from ephysatlas import load_pretrained
+
+model = load_pretrained(
+    "int-brain-lab/ea-decoder-channel-xgboost", revision="2026_W42"
+)
+```
+
+It resolves the id to a local directory, reads the publication manifest
+(`ephysatlas_model.json`), and dispatches to the right wrapper class based on the
+manifest's `model_class`. You do not choose the class — the model declares what it is.
+
+As a result, a model card only has to name `load_pretrained`, and adding a new family
+does not change any calling code.
+
+## Pin a revision for reproducibility
+
+```python
+# Pinned: always loads the 2026_W42 release
+model = load_pretrained(
+    "int-brain-lab/ea-decoder-channel-xgboost", revision="2026_W42"
+)
+
+# Not pinned: loads 'main', which changes when a new vintage is published
+model = load_pretrained("int-brain-lab/ea-decoder-channel-xgboost")
+```
+
+Without `revision=`, `load_pretrained` loads the `main` branch, which points to the
+currently recommended model. When a new vintage is published, `main` moves to it, and the
+same code then loads a different model and can return different predictions. Pin the
+revision in any analysis you want to reproduce. `load_pretrained` logs a warning when no
+revision is given:
+
+```text
+WARNING  no revision pinned for int-brain-lab/ea-decoder-channel-xgboost: using 'main',
+         which tracks the currently recommended model and will change when a new vintage
+         is published. Pass revision='<vintage>' for a reproducible result.
+```
+
+Revision tags are **vintages** — `YYYY_Www` week labels matching the release the model
+belongs to. A decoder and its features must come from the same vintage; see
+[core concepts](../explanation/concepts.qmd). An encoder's `predict` takes only
+positions, so it has no feature vintage to match.
+
+`ephysatlas.models.DECODER_VINTAGES` holds the default vintage of each published region
+decoder, the one the [alignment GUI](https://int-brain-lab.github.io/ibl-alignment-gui/channel_prediction.html) loads unless told otherwise:
+
+```python
+from ephysatlas.models import DECODER_VINTAGES
+
+DECODER_VINTAGES["int-brain-lab/ea-decoder-channel-xgboost"]   # '2026_W42'
+```
+
+## Controlling where downloads land
+
+By default files go to the standard Hugging Face cache. Override it with `cache_dir`:
+
+```python
+from pathlib import Path
+
+model = load_pretrained(
+    "int-brain-lab/ea-decoder-channel-xgboost",
+    revision="2026_W42",
+    cache_dir=Path("/data/models"),
+)
+```
+
+The download is cached, so a second call with the same id and revision is instant and
+offline. Useful on a cluster: fetch once to a shared path, then point every job at it.
+
+## Loading from a local directory
+
+Pass a path instead of a repo id and nothing touches the network:
+
+```python
+model = load_pretrained("/data/models/ea-decoder-2026_W42")
+```
+
+`load_pretrained` checks whether the argument is an existing directory, and if so uses it
+directly. This is the route for air-gapped machines, and for a model you have not
+published yet.
+
+Checksums are verified for local directories too — and **strictly**, with missing files
+treated as an error, so an incomplete or hand-edited directory is caught rather than
+half-loaded.
+
+## Integrity is checked on load
+
+Every published model ships `checksums.json`, a per-file digest of everything in the
+release. `load_pretrained` re-hashes the files and compares:
+
+```python
+from pathlib import Path
+import ephysatlas.model_registry
+
+ephysatlas.model_registry.verify_checksums(Path("/data/models/ea-decoder-2026_W42"))
+```
+
+A truncated download, a file missing from the release, or a locally modified weight file
+all fail this check. Files edited on the Hub after publication — the model card, the
+licence, `.gitattributes` — are excluded from the manifest, so they never cause a spurious
+failure.
+
+## Verify your install reproduces the model
+
+Checksums prove you have the right *bytes*. They say nothing about whether your Python
+environment turns those bytes into the same numbers. That is what `selftest` is for:
+
+```python
+model.selftest()
+# True
+```
+
+It re-predicts the example bundled with the model and compares against the shipped
+expected output. It catches:
+
+- a different XGBoost or PyTorch build whose numerics moved
+- a NumPy or pandas upgrade that changed a dtype
+- features whose units changed between vintages
+- a reordered class vector
+
+None of these raises an error; only the predictions change.
+
+```python
+try:
+    model.selftest()
+except FileNotFoundError:
+    # A model that ships no example/ directory cannot self-test
+    print("no golden files shipped; skipping")
+```
+
+Run it after every environment change.
+
+## Inspect a model without predicting
+
+The manifest describes the model, and a loaded model exposes it as `model.index`:
+
+```python
+index = model.index
+
+index["model_id"]      # '2026_W42_Cosmos_flimsy-thistle-cat'
+index["task"]          # 'region-classification'
+index["vintage"]       # '2026_W42'
+index["granularity"]   # 'channel'
+index["model_class"]   # 'xgboost.sklearn.XGBClassifier'
+
+index["inputs"]["table"]     # 'raw_ephys_features_denoised.pqt'
+index["inputs"]["index"]     # ['pid', 'channel']
+index["inputs"]["features"]  # the 48 required feature columns, in order
+index["outputs"]             # what predict() returns
+
+index["environment"]  # the exact versions the model was trained with
+index["training"]     # seed, dataset sizes, training-set hash
+```
+
+`index["environment"]` is what to compare against when a self-test fails — it records the
+Python, XGBoost, scikit-learn, NumPy and pandas versions used at training time.
+
+Full field-by-field description: [model manifest reference](../reference/model-manifest.qmd).
+
+## Troubleshooting
+
+**`ValueError: ... has no ephysatlas_model.json; it is not a loadable model`** — the
+directory is not a published model. Every release ships a manifest; one without it cannot
+be loaded.
+
+**`ValueError: ... declares model_class '...' which this version of ephysatlas cannot
+load`** — the model is newer than your install. Upgrade ibleatools; the error lists the
+`model_class` values your version knows.
+
+**A checksum mismatch** — delete the cached download and re-fetch. If it recurs on a local
+directory, a file there has been modified.
+
+**`selftest` fails** — compare your versions against `model.index["environment"]`. Do not
+work around it: a failing self-test means predictions from this install do not match the
+published model.
+
+## Next steps
+
+- [Predict brain regions](predict-regions.qmd) — run the decoders
+- [Predict features from position](predict-features-from-position.qmd) — run the spatial encoder
+- [Predict unit phenotypes from position](predict-unit-phenotypes.qmd) — run the unit encoder
+- [Model families](../explanation/model-families.qmd) — four families, one load path
+- [Model manifest reference](../reference/model-manifest.qmd)
+- [`load_pretrained` API](../api/load_pretrained.qmd)

@@ -1,0 +1,202 @@
+---
+title: "Your first brain-region predictions"
+---
+
+This tutorial takes you from an empty environment to a table of predicted brain regions.
+
+Everything comes from a public Hugging Face repository, including a small bundled example:
+the features of two complete probes. By the end you will know how to load a published
+model, verify your install reproduces it, run a prediction, and read the result.
+
+Once you have that working, the [how-to guides](../how-to/compute-features-spikeglx.qmd)
+show you how to swap in your own recording.
+
+## Prerequisites
+
+- Python 3.12 or newer
+- Network access to the Hugging Face Hub. The decoder used here, the ProbeTransformer, is
+  about 16 MB — five transformer models, one per training seed, plus the bundled example
+
+## 1. Install
+
+The lite install is all this tutorial needs — it includes model download and inference:
+
+```bash
+git clone https://github.com/int-brain-lab/ibleatools.git
+cd ibleatools
+pip install -e .
+```
+
+Check it imported:
+
+```python
+import ephysatlas
+
+print(ephysatlas.__version__)
+# 0.11.0 or later
+```
+
+## 2. Download a published model
+
+There is one entry point for every model family: `load_pretrained`. Give it a Hugging Face
+repository id, and pin a **revision** — a vintage tag such as `2026_W42`:
+
+```python
+from ephysatlas import load_pretrained
+
+model = load_pretrained(
+    "int-brain-lab/ea-decoder-channel-transformer", revision="2026_W42"
+)
+```
+
+::: {.callout-important}
+## Pin a revision to get reproducible results
+
+Without `revision=`, `load_pretrained` loads the `main` branch, which points to the
+currently recommended model. When a new model is published, `main` moves to it, and the
+same code can return different predictions. `load_pretrained` logs a warning when no
+revision is given. Pin the tag to get a reproducible result.
+:::
+
+The download is verified against the checksums published alongside the model, so a
+truncated or altered download raises an error instead of producing wrong predictions.
+
+## 3. Look at what you downloaded
+
+Every published model ships a manifest, `ephysatlas_model.json`, and the wrapper exposes it
+as `.index`. It lists what the model takes as input and what it returns:
+
+```python
+index = model.index
+
+print(index["model_id"])            # ea-decoder-channel-transformer
+print(index["task"])                # region-classification-transformer
+print(index["granularity"])         # channel
+print(index["vintage"])             # 2026_W42
+
+print(len(model.inputs["features"]))    # 51   — feature columns it needs
+print(model.inputs["position_column"])  # axial_um — each channel's depth on the probe
+print(model.inputs["index"])            # ['pid', 'channel']
+print(model.config["region_map"])       # Cosmos
+print(model.config["class_acronyms"])
+# ['void', 'MB', 'Isocortex', 'CB', 'TH', 'CNU', 'OLF', 'CTXsp', 'root', 'HB',
+#  'HPF', 'HY', 'void_fluid']
+```
+
+So this model classifies each channel into one of 13
+[**Cosmos**](../explanation/concepts.qmd#region-maps)-level regions, from 51 feature
+columns and the channel's depth along the probe, on a table indexed by `(pid, channel)`.
+
+## 4. Verify your install reproduces the model
+
+Before trusting a single prediction, run the self-test. It re-predicts the example that
+ships with the model and compares against the shipped expected output:
+
+```python
+model.selftest()
+# True
+```
+
+The self-test catches differences between your environment and the one the model was
+published from: a different torch build, a NumPy upgrade that changed a dtype, or features
+whose units moved between vintages. Each fails here, instead of changing the predicted
+regions without an error.
+
+Run it again after any change to your environment.
+
+## 5. Predict
+
+The model bundles a small example feature table, so you can predict without any data of
+your own. The ProbeTransformer reads a whole probe at once, so the example holds complete
+probes:
+
+```python
+import pandas as pd
+
+sample = model.path_model / "example" / "features_sample.parquet"
+df = pd.read_parquet(sample)
+
+print(df.shape[0])       # 768 — one row per channel: two probes of 384 channels
+print(df.index.names)    # ['pid', 'channel']
+
+out = model.predict(df)
+```
+
+## 6. Read the output
+
+`predict` returns a DataFrame indexed like its input. Channels with a missing feature value
+are left out; the example has none, so every channel gets a prediction:
+
+```python
+print(out[["predicted_acronym", "prediction_probability", "seed_agreement"]].head())
+```
+
+| column | meaning |
+|---|---|
+| `predicted_acronym` | Winning region, as an Allen acronym (`Isocortex`, `TH`, …) |
+| `predicted_atlas_id` | The same region as a numeric Allen structure id |
+| `prediction_probability` | Seed-averaged probability of the winning class |
+| `seed_agreement` | Fraction of the 5 seed models that voted for the winner |
+| `p_<acronym>` | One column per class, with its seed-averaged probability |
+
+`seed_agreement` tells you something `prediction_probability` does not. A channel with
+`prediction_probability` of 0.6 but `seed_agreement` of 1.0 is a consistent call the model
+is merely uncertain about; 0.6 with an agreement of 0.4 means the seeds disagree, which is
+a different and usually worse situation.
+
+Summarise each probe:
+
+```python
+print(out.groupby(level="pid")["predicted_acronym"].value_counts())
+
+print(
+    f"mean confidence {out['prediction_probability'].mean():.3f}, "
+    f"mean seed agreement {out['seed_agreement'].mean():.3f}"
+)
+# mean confidence 0.734, mean seed agreement 0.883
+```
+
+## 7. Join predictions back onto your features
+
+The prediction columns have their own names. Feature and cluster tables already carry
+histology-derived `acronym` and `atlas_id` columns, so bare names would collide and
+overwrite your ground truth. `predicted_*` never does:
+
+```python
+joined = df.join(out)
+print(joined.shape)   # your feature columns, plus the prediction columns
+```
+
+If your table does carry histology labels, that join is exactly how you compare the
+model's call against them.
+
+## What's next?
+
+You have run a published model end to end. To use it on your own recording you need a
+feature table in the shape this model expects: the **aggregated, denoised** features
+listed in `model.inputs["features"]` and each channel's depth (`axial_um`), one row per
+`(pid, channel)`. Features from a single
+snippet are *not* what the model was trained on. That is two steps:
+
+1. Compute the features from your recording. `compute_denoised_features` computes them
+   on several snippets, then aggregates and denoises them, whatever the source: [SpikeGLX](../how-to/compute-features-spikeglx.qmd#compute-features),
+   [NWB](../how-to/compute-features-nwb.qmd) or [Zarr](../how-to/compute-features-zarr.qmd).
+   [Aggregate and denoise](../how-to/aggregate-and-denoise.qmd) shows the steps it runs,
+   if you want to control them yourself.
+2. [Predict](../how-to/predict-regions.qmd), passing your own table instead of the sample.
+
+The [which brain regions is my probe in?](where-is-my-probe.qmd) tutorial walks through
+both on one recording, then checks the result against histology.
+
+Other directions:
+
+- [Region predictions along the probe](../visualise/predictions-along-probe.qmd) — draw
+  these predictions against depth, beside the histology of the two example probes.
+- [Predict features from position](../how-to/predict-features-from-position.qmd) — the
+  spatial encoder runs the other way round, turning coordinates into expected features.
+- [Predict unit phenotypes from position](../how-to/predict-unit-phenotypes.qmd) — the
+  same for spike-sorted units.
+- [Core concepts](../explanation/concepts.qmd) — what a vintage is, and why denoising
+  matters.
+- [Model families](../explanation/model-families.qmd) — how the four families relate.
+- [API reference](../api/index.qmd) — every parameter of everything above.
