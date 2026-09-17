@@ -196,7 +196,16 @@ class TestRemapWaveformShapeFeatures(unittest.TestCase):
             ),
         )
         # pass-through columns are untouched
-        for col in ["tip_val", "alpha_mean", "alpha_std", "polarity", "spike_count"]:
+        for col in [
+            "tip_val",
+            "alpha_mean",
+            "alpha_std",
+            "polarity",
+            "spike_count",
+            "depolarisation_slope",
+            "repolarisation_slope",
+            "recovery_slope",
+        ]:
             np.testing.assert_array_equal(df_shape[col], self.df_features[col])
 
     def test_missing_column_raises(self):
@@ -228,7 +237,7 @@ class TestRemapWaveformShapeFeatures(unittest.TestCase):
         expected_names = list(
             ephysatlas.features.ModelSpikeShapeFeatures.to_schema().columns.keys()
         )
-        self.assertEqual(remapped_vol.shape, (2, n // 2, 9))
+        self.assertEqual(remapped_vol.shape, (2, n // 2, len(expected_names)))
         self.assertEqual(remapped_vol.dtype, np.float32)
         np.testing.assert_array_equal(remapped_names, expected_names)
         for i, name in enumerate(remapped_names):

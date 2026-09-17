@@ -661,6 +661,11 @@ class ModelSpikeShapeFeatures(BaseChannelFeatures):
     `spike_width_secs` is the classic trough-to-peak width despite the name
     order.
 
+    The 3 slope columns correlate strongly with the amplitude/duration
+    columns above (r=0.96-0.99 with algebraic reconstructions from them) and
+    add no real extra information, but are kept precomputed anyway since
+    they're a commonly-used, handy quantity on their own.
+
     Attributes:
         spike_width_secs (Series[float]): Trough-to-peak spike duration (s).
         predepolarisation_width_secs (Series[float]): Tip-to-peak duration (s).
@@ -671,6 +676,9 @@ class ModelSpikeShapeFeatures(BaseChannelFeatures):
         alpha_std (Series[float]): Standard deviation of alpha parameter (N/A).
         polarity (Series[float]): Spike polarity (dimensionless).
         spike_count (Series[float]): Number of spikes, log2 transformed (log2 count).
+        depolarisation_slope (Series[float]): Tip-to-peak slope, unchanged from ModelSpikeFeatures (z-score/s).
+        repolarisation_slope (Series[float]): Peak-to-trough slope, unchanged from ModelSpikeFeatures (z-score/s).
+        recovery_slope (Series[float]): Trough-to-recovery-point slope, unchanged from ModelSpikeFeatures (z-score/s).
     """
 
     spike_width_secs: float = pa.Field(
@@ -723,6 +731,21 @@ class ModelSpikeShapeFeatures(BaseChannelFeatures):
             "transform": lambda x: np.where(x == 0, np.nan, np.log2(x.astype(float))),
         },
     )
+    depolarisation_slope: float = pa.Field(
+        coerce=True,
+        description="Slope of the line crossing the tip and peak points (unchanged from ModelSpikeFeatures).",
+        metadata={"raw_unit": "z-score/s"},
+    )
+    repolarisation_slope: float = pa.Field(
+        coerce=True,
+        description="Slope of the line crossing the peak and trough points (unchanged from ModelSpikeFeatures).",
+        metadata={"raw_unit": "z-score/s"},
+    )
+    recovery_slope: float = pa.Field(
+        coerce=True,
+        description="Slope of the line crossing the trough and recovery points (unchanged from ModelSpikeFeatures).",
+        metadata={"raw_unit": "z-score/s"},
+    )
 
 
 def _remap_waveform_shape_arrays(get):
@@ -750,6 +773,9 @@ def _remap_waveform_shape_arrays(get):
         "alpha_std": get("alpha_std"),
         "polarity": get("polarity"),
         "spike_count": get("spike_count"),
+        "depolarisation_slope": get("depolarisation_slope"),
+        "repolarisation_slope": get("repolarisation_slope"),
+        "recovery_slope": get("recovery_slope"),
     }
 
 
@@ -757,17 +783,16 @@ def remap_waveform_shape_features(df: pd.DataFrame) -> pd.DataFrame:
     """Remap `ModelSpikeFeatures`'s 14 raw waveform columns onto the sparser `ModelSpikeShapeFeatures` set.
 
     The 14 raw columns are redundant: PCA needs only ~7-8 components for 95%
-    of their variance (scree plot and per-column correlation evidence at
-    https://oliche.github.io/oliche-quarto/analyses/2026-09-17-waveform-shape-pca/).
-    Dropped: ``recovery_time_secs`` (exact constant offset of
-    ``trough_time_secs``), ``recovery_slope``/``depolarisation_slope``/
-    ``repolarisation_slope`` (near-exact functions of the amplitude/duration
-    pairs kept here), and ``peak_val``/``trough_val``/``peak_time_secs``/
+    of their variance. Only ``recovery_time_secs`` (exact constant offset of
+    ``trough_time_secs``) and ``peak_val``/``trough_val``/``peak_time_secs``/
     ``trough_time_secs``/``tip_time_secs`` (reparametrised into
     ``spike_amplitude``/``peak_to_trough_ratio_log``/``spike_width_secs``/
-    ``predepolarisation_width_secs`` without losing relative information).
-    ``tip_val`` is kept unchanged (r=0.79 with ``spike_amplitude``, not
-    redundant enough to drop).
+    ``predepolarisation_width_secs`` without losing relative information) are
+    actually dropped. ``tip_val`` and the 3 slopes
+    (``depolarisation_slope``/``repolarisation_slope``/``recovery_slope``)
+    are kept unchanged despite correlating with the amplitude/duration
+    columns (r=0.79-0.99) -- handy precomputed quantities in their own right,
+    even if not strictly independent information.
 
     Parameters
     ----------
