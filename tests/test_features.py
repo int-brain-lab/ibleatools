@@ -152,6 +152,63 @@ class TestWaveformFeatures(unittest.TestCase):
         self.assertTrue(60 < df["spike_count"].sum() < 110)
 
 
+class TestRemapWaveformShapeFeatures(unittest.TestCase):
+    def setUp(self):
+        self.df_features = ephysatlas.data.read_features_from_disk(
+            FIXTURE_PATH.joinpath("features", "2025_W28"), load_denoised=False
+        )
+
+    def test_columns_and_index(self):
+        df_shape = ephysatlas.features.remap_waveform_shape_features(self.df_features)
+        self.assertEqual(
+            set(df_shape.columns),
+            set(ephysatlas.features.ModelSpikeShapeFeatures.to_schema().columns.keys()),
+        )
+        np.testing.assert_array_equal(df_shape.index, self.df_features.index)
+        # dropped columns must not leak through
+        for col in [
+            "recovery_time_secs",
+            "recovery_slope",
+            "depolarisation_slope",
+            "repolarisation_slope",
+            "peak_time_secs",
+            "trough_time_secs",
+            "tip_time_secs",
+            "peak_val",
+            "trough_val",
+        ]:
+            self.assertNotIn(col, df_shape.columns)
+
+    def test_derived_values(self):
+        df_shape = ephysatlas.features.remap_waveform_shape_features(self.df_features)
+        np.testing.assert_allclose(
+            df_shape["spike_width_secs"],
+            self.df_features["trough_time_secs"] - self.df_features["peak_time_secs"],
+        )
+        np.testing.assert_allclose(
+            df_shape["predepolarisation_width_secs"],
+            self.df_features["peak_time_secs"] - self.df_features["tip_time_secs"],
+        )
+        np.testing.assert_allclose(
+            df_shape["spike_amplitude"],
+            self.df_features["trough_val"] - self.df_features["peak_val"],
+        )
+        np.testing.assert_allclose(
+            df_shape["peak_to_trough_ratio_log"],
+            np.log(
+                np.abs(self.df_features["peak_val"] / self.df_features["trough_val"])
+            ),
+        )
+        # pass-through columns are untouched
+        for col in ["tip_val", "alpha_mean", "alpha_std", "polarity", "spike_count"]:
+            np.testing.assert_array_equal(df_shape[col], self.df_features[col])
+
+    def test_missing_column_raises(self):
+        df_missing = self.df_features.drop(columns=["trough_val"])
+        with self.assertRaises(KeyError):
+            ephysatlas.features.remap_waveform_shape_features(df_missing)
+
+
 class TestTransformDenoiseFeatures(unittest.TestCase):
     def setUp(self):
         self.df_features = ephysatlas.data.read_features_from_disk(

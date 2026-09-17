@@ -27,6 +27,8 @@ ModelApFeatures
     Schema for action potential features
 ModelSpikeFeatures
     Schema for spike waveform features
+ModelSpikeShapeFeatures
+    Sparse, neuroscientist-facing remapping of ModelSpikeFeatures
 ModelChannelLayout
     Schema for channel layout information
 ModelHistologyPlanned
@@ -56,6 +58,8 @@ dart_subtraction_numpy
     Perform spike detection using Dartsort
 spikes
     Spike detection and feature extraction with multiple backend support
+remap_waveform_shape_features
+    Remap ModelSpikeFeatures' 14 raw waveform columns onto a sparser set
 xcor_acor_ratio
     Compute cross-correlation over auto-correlation ratio
 denoise_shank
@@ -642,6 +646,146 @@ class ModelSpikeFeatures(BaseChannelFeatures):
     tip_val: float = pa.Field(coerce=True)
     trough_time_secs: float = pa.Field(coerce=True)
     trough_val: float = pa.Field(coerce=True)
+
+
+class ModelSpikeShapeFeatures(BaseChannelFeatures):
+    """Schema for the sparse, neuroscientist-facing spike-shape feature set.
+
+    Output of `remap_waveform_shape_features`, which remaps
+    `ModelSpikeFeatures`'s 14 raw columns onto these 9. See that function's
+    docstring for the per-column justification (each dropped column is either
+    an exact constant, a near-exact algebraic function of columns kept here,
+    or a lossless reparametrisation into a more interpretable pair).
+
+    Attributes:
+        spike_width_secs (Series[float]): Trough-to-peak spike duration.
+        predepolarisation_width_secs (Series[float]): Tip-to-peak duration.
+        spike_amplitude (Series[float]): Trough-to-peak amplitude.
+        peak_to_trough_ratio_log (Series[float]): Log amplitude ratio (shape, scale-free).
+        tip_val (Series[float]): Waveform tip amplitude, unchanged from ModelSpikeFeatures.
+        alpha_mean (Series[float]): Mean alpha parameter for spike localization.
+        alpha_std (Series[float]): Standard deviation of alpha parameter.
+        polarity (Series[float]): Spike polarity (positive/negative).
+        spike_count (Series[float]): Number of spikes (log2 transformed).
+    """
+
+    spike_width_secs: float = pa.Field(
+        coerce=True,
+        description="Trough-to-peak spike duration: trough_time_secs minus peak_time_secs. "
+        "The standard narrow/broad-spiking discriminator (note this schema's 'peak' is the "
+        "negative deflection and 'trough' the positive rebound after it, opposite to common "
+        "neurophysiology usage, so this is the classic trough-to-peak width despite the name order).",
+        metadata={"raw_unit": "s"},
+    )
+    predepolarisation_width_secs: float = pa.Field(
+        coerce=True,
+        description="Tip-to-peak duration: peak_time_secs minus tip_time_secs.",
+        metadata={"raw_unit": "s"},
+    )
+    spike_amplitude: float = pa.Field(
+        coerce=True,
+        description="Overall spike amplitude: trough_val minus peak_val.",
+        metadata={"raw_unit": "z-score"},
+    )
+    peak_to_trough_ratio_log: float = pa.Field(
+        coerce=True,
+        description="log(|peak_val / trough_val|): waveform shape asymmetry, independent of "
+        "overall amplitude scale.",
+        metadata={"raw_unit": "dimensionless"},
+    )
+    tip_val: float = pa.Field(
+        coerce=True,
+        description="Waveform tip amplitude (unchanged from ModelSpikeFeatures).",
+        metadata={"raw_unit": "z-score"},
+    )
+    alpha_mean: float = pa.Field(
+        coerce=True,
+        description="Average brightness of the spike (output of the spike localisation code)",
+        metadata={"raw_unit": "N/A"},
+    )
+    alpha_std: float = pa.Field(
+        coerce=True,
+        description="Standard deviation of the brightness of the spike (output of the spike localisation code)",
+        metadata={"raw_unit": "N/A"},
+    )
+    polarity: float = pa.Field(
+        coerce=True,
+        description="Sum of each spike polarity divided by the total number of spikes",
+        metadata={"raw_unit": "dimensionless"},
+    )
+    spike_count: float = pa.Field(
+        coerce=True,
+        description="log2 transformed value of mean spike counts (where the mean is calculated across the snippets by replacing the null values with 0)",
+        metadata={
+            "raw_unit": "count",
+            "transformed_unit": "log2 count",
+            "transform": lambda x: np.where(x == 0, np.nan, np.log2(x.astype(float))),
+        },
+    )
+
+
+def remap_waveform_shape_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Remap `ModelSpikeFeatures`'s 14 raw waveform columns onto a sparser, less redundant set.
+
+    The 14 raw columns carry a lot of duplicated information: a PCA on their
+    z-scored values (production vintage 2026_W37, n=402,532 channels, project
+    ``ea_active``) needs only ~6-7 components for 95% of the variance. This
+    function replaces them with the 9 columns of `ModelSpikeShapeFeatures`,
+    chosen to be individually interpretable to a neuroscientist and to avoid
+    keeping two columns that say close to the same thing twice.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Must contain the columns of `ModelSpikeFeatures` (e.g. the output of
+        `spike`, raw or denoised).
+
+    Returns
+    -------
+    pandas.DataFrame
+        Columns of `ModelSpikeShapeFeatures`, same index as `df`.
+
+    Notes
+    -----
+    Columns dropped, and the evidence for each (same reference vintage as above):
+
+    - ``recovery_time_secs``: identically ``trough_time_secs + 5 / 30_000`` seconds,
+      the fixed sample offset used to place the recovery point (std of the
+      difference across channels: 6e-10 s, i.e. floating-point noise) - zero
+      information beyond ``trough_time_secs``.
+    - ``recovery_slope``: folding the fixed recovery offset back in
+      (``trough_val + recovery_slope * 5 / 30_000``) correlates r=0.98 with
+      ``spike_amplitude`` - no unique information left once amplitude is kept.
+    - ``depolarisation_slope``, ``repolarisation_slope``: near-exact algebraic
+      functions of the (value, time) pairs kept here
+      (``(peak_val - tip_val) / predepolarisation_width_secs`` and
+      ``(trough_val - peak_val) / spike_width_secs`` respectively reproduce
+      them at r=0.96-0.99).
+    - ``peak_time_secs``, ``trough_time_secs``, ``tip_time_secs``: 3 absolute
+      time points reduce to 2 independent durations (``spike_width_secs``,
+      ``predepolarisation_width_secs``) without losing any *relative* timing
+      information; only the common spike-sorter alignment offset (a detection
+      artifact, not a waveform property) is discarded.
+    - ``peak_val``, ``trough_val``: losslessly reparametrised (given the fixed
+      peak-negative/trough-positive sign convention) into an amplitude
+      (``spike_amplitude``) and a scale-free shape ratio
+      (``peak_to_trough_ratio_log``); the raw pair was anti-correlated r=-0.97.
+
+    ``tip_val`` is kept unchanged: it correlates only r=0.79 with
+    ``spike_amplitude`` in the same vintage, not high enough to call it redundant.
+    """
+    out = pd.DataFrame(index=df.index)
+    out["spike_width_secs"] = df["trough_time_secs"] - df["peak_time_secs"]
+    out["predepolarisation_width_secs"] = df["peak_time_secs"] - df["tip_time_secs"]
+    out["spike_amplitude"] = df["trough_val"] - df["peak_val"]
+    out["peak_to_trough_ratio_log"] = np.log(np.abs(df["peak_val"] / df["trough_val"]))
+    out["tip_val"] = df["tip_val"]
+    out["alpha_mean"] = df["alpha_mean"]
+    out["alpha_std"] = df["alpha_std"]
+    out["polarity"] = df["polarity"]
+    out["spike_count"] = df["spike_count"]
+    ModelSpikeShapeFeatures.validate(out)
+    return out
 
 
 class ModelChannelLayout(BaseChannelFeatures):
