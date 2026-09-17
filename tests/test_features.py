@@ -208,6 +208,51 @@ class TestRemapWaveformShapeFeatures(unittest.TestCase):
         with self.assertRaises(KeyError):
             ephysatlas.features.remap_waveform_shape_features(df_missing)
 
+    def test_volume_matches_dataframe(self):
+        """The volume entry point must reproduce the dataframe one exactly."""
+        raw_cols = list(
+            ephysatlas.features.ModelSpikeFeatures.to_schema().columns.keys()
+        )
+        df = self.df_features[raw_cols].dropna()
+        n = len(df) - (len(df) % 2)  # even, so it reshapes cleanly into (2, n // 2)
+        df = df.iloc[:n]
+        # Shuffle the feature order to exercise name-based (not positional) lookup,
+        # and use a non-trivial volume shape (nx, ny) rather than a flat vector.
+        shuffled_cols = raw_cols[::-1]
+        vol = np.stack([df[c].to_numpy() for c in shuffled_cols], axis=-1).reshape(
+            2, n // 2, len(shuffled_cols)
+        )
+        feature_names = np.array(shuffled_cols)
+
+        remapped_vol, remapped_names = (
+            ephysatlas.features.remap_waveform_shape_features_volume(vol, feature_names)
+        )
+        df_shape = ephysatlas.features.remap_waveform_shape_features(df)
+
+        expected_names = list(
+            ephysatlas.features.ModelSpikeShapeFeatures.to_schema().columns.keys()
+        )
+        self.assertEqual(remapped_vol.shape, (2, n // 2, 9))
+        self.assertEqual(remapped_vol.dtype, np.float32)
+        np.testing.assert_array_equal(remapped_names, expected_names)
+        for i, name in enumerate(remapped_names):
+            np.testing.assert_allclose(
+                remapped_vol[..., i].reshape(-1),
+                df_shape[name].to_numpy(),
+                rtol=1e-4,
+                atol=1e-6,
+            )
+
+    def test_volume_missing_feature_raises(self):
+        raw_cols = [
+            c
+            for c in ephysatlas.features.ModelSpikeFeatures.to_schema().columns.keys()
+            if c != "trough_val"
+        ]
+        vol = np.zeros((2, 2, 2, len(raw_cols)), dtype=np.float32)
+        with self.assertRaises(KeyError):
+            ephysatlas.features.remap_waveform_shape_features_volume(vol, raw_cols)
+
 
 class TestTransformDenoiseFeatures(unittest.TestCase):
     def setUp(self):

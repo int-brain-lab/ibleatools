@@ -60,6 +60,8 @@ spikes
     Spike detection and feature extraction with multiple backend support
 remap_waveform_shape_features
     Remap ModelSpikeFeatures' 14 raw waveform columns onto a sparser set
+remap_waveform_shape_features_volume
+    Same remapping, for a brainwide encoding volume instead of a dataframe
 xcor_acor_ratio
     Compute cross-correlation over auto-correlation ratio
 denoise_shank
@@ -724,6 +726,37 @@ class ModelSpikeShapeFeatures(BaseChannelFeatures):
     )
 
 
+def _remap_waveform_shape_arrays(get):
+    """Shared core of the waveform-shape remapping, agnostic to the container.
+
+    Parameters
+    ----------
+    get : callable
+        ``get(name)`` returns the raw `ModelSpikeFeatures` column/slice for
+        `name` (a `pandas.Series` for `remap_waveform_shape_features`, or a
+        `(nx, ny, nz)` array for `remap_waveform_shape_features_volume`). Only
+        elementwise arithmetic and `numpy` ufuncs are used below, so any
+        array-like that supports `+`, `-`, `/`, `np.log` and `np.abs` works.
+
+    Returns
+    -------
+    dict
+        Maps each `ModelSpikeShapeFeatures` column name to its array, in
+        schema-declaration order.
+    """
+    return {
+        "spike_width_secs": get("trough_time_secs") - get("peak_time_secs"),
+        "predepolarisation_width_secs": get("peak_time_secs") - get("tip_time_secs"),
+        "spike_amplitude": get("trough_val") - get("peak_val"),
+        "peak_to_trough_ratio_log": np.log(np.abs(get("peak_val") / get("trough_val"))),
+        "tip_val": get("tip_val"),
+        "alpha_mean": get("alpha_mean"),
+        "alpha_std": get("alpha_std"),
+        "polarity": get("polarity"),
+        "spike_count": get("spike_count"),
+    }
+
+
 def remap_waveform_shape_features(df: pd.DataFrame) -> pd.DataFrame:
     """Remap `ModelSpikeFeatures`'s 14 raw waveform columns onto a sparser, less redundant set.
 
@@ -774,18 +807,56 @@ def remap_waveform_shape_features(df: pd.DataFrame) -> pd.DataFrame:
     ``tip_val`` is kept unchanged: it correlates only r=0.79 with
     ``spike_amplitude`` in the same vintage, not high enough to call it redundant.
     """
-    out = pd.DataFrame(index=df.index)
-    out["spike_width_secs"] = df["trough_time_secs"] - df["peak_time_secs"]
-    out["predepolarisation_width_secs"] = df["peak_time_secs"] - df["tip_time_secs"]
-    out["spike_amplitude"] = df["trough_val"] - df["peak_val"]
-    out["peak_to_trough_ratio_log"] = np.log(np.abs(df["peak_val"] / df["trough_val"]))
-    out["tip_val"] = df["tip_val"]
-    out["alpha_mean"] = df["alpha_mean"]
-    out["alpha_std"] = df["alpha_std"]
-    out["polarity"] = df["polarity"]
-    out["spike_count"] = df["spike_count"]
+    out = pd.DataFrame(_remap_waveform_shape_arrays(df.__getitem__), index=df.index)
     ModelSpikeShapeFeatures.validate(out)
     return out
+
+
+def remap_waveform_shape_features_volume(ephys_atlas_vol, feature_names):
+    """Apply the waveform-shape remapping to a brainwide encoding volume.
+
+    Same transform as `remap_waveform_shape_features`, for the `(nx, ny, nz,
+    n_features)` volumes returned by `download_encoding_volume` instead of a
+    channel dataframe. Values there are stored unnormalised, so no
+    de-z-scoring is needed first.
+
+    Parameters
+    ----------
+    ephys_atlas_vol : numpy.ndarray
+        Shape ``(nx, ny, nz, n_features)``.
+    feature_names : numpy.ndarray or sequence of str
+        Length ``n_features``, naming `ephys_atlas_vol`'s last axis; must
+        include the 14 raw columns of `ModelSpikeFeatures`.
+
+    Returns
+    -------
+    remapped_vol : numpy.ndarray
+        Shape ``(nx, ny, nz, 9)``, dtype float32.
+    remapped_feature_names : numpy.ndarray
+        Length 9, naming `remapped_vol`'s last axis (`ModelSpikeShapeFeatures`
+        column order).
+
+    Raises
+    ------
+    KeyError
+        If a required raw feature name is absent from `feature_names`.
+
+    Notes
+    -----
+    This only remaps the volume's values; it does not attempt to derive
+    `mean_per_feature`/`std_per_feature` for the new columns, since those are
+    computed upstream from the original per-channel dataset, not from the
+    volume itself.
+    """
+    index_of = {name: i for i, name in enumerate(np.asarray(feature_names))}
+
+    def get(name):
+        return ephys_atlas_vol[..., index_of[name]].astype(np.float32)
+
+    arrays = _remap_waveform_shape_arrays(get)
+    remapped_vol = np.stack(list(arrays.values()), axis=-1)
+    remapped_feature_names = np.array(list(arrays.keys()))
+    return remapped_vol, remapped_feature_names
 
 
 class ModelChannelLayout(BaseChannelFeatures):
