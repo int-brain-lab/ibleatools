@@ -1056,9 +1056,12 @@ class ModelDenoisedFeatures(
 ):
     """Combined schema for denoised features, after the waveform-shape remap.
 
-    Identical to `ModelRawFeatures` apart from the spike block: `denoise_raw_features_data`
-    applies `remap_waveform_shape_features`, which drops `ModelSpikeFeatures`' 6 raw
-    timing/amplitude columns in favour of `ModelSpikeShapeFeatures`' 4 reparametrised ones.
+    Identical to `ModelRawFeatures` apart from the spike block: after denoising,
+    `aggregation.apply_waveform_remap` (called by `produce_output_dataframes` and
+    `feature_calculators.aggregate_snippets`) applies
+    `remap_waveform_shape_features`, which drops `ModelSpikeFeatures`' 6 raw
+    timing/amplitude columns in favour of `ModelSpikeShapeFeatures`' 4
+    reparametrised ones.
 
     Note:
         Denoised tables written before that remap still match `ModelRawFeatures`, so

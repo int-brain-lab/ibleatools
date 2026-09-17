@@ -1,0 +1,164 @@
+---
+title: "How to compute features from LFPack archives and NumPy arrays"
+---
+
+Two sources carry **only the LF band**, already preprocessed:
+
+| Source | Calculator | Typical input |
+|---|---|---|
+| An lfpack archive | `LFPackFeatureCalculator` | The [compressed LFP](load-lfp-features.qmd) IBL publishes, or one you packed yourself |
+| An array in memory | `NumpyArrayFeatureCalculator` | LF you already loaded and resampled, from any format |
+
+Both compute the `lf` and `csd` families. `ap` and `waveforms` need the AP band, which
+neither source has. Everything else, including windows, options, on-disk layout and
+aggregation, works as on the [SpikeGLX page](compute-features-spikeglx.qmd).
+
+## Two options both sources need
+
+The LF in an lfpack archive has already been high-pass filtered, common-average
+referenced, bad-channel interpolated, decimated (to ~250 Hz) and Cadzow-denoised. The
+NumPy calculator is meant for LF prepared the same way. So tell the pipeline **not** to
+redo that preprocessing at the wrong sample rate:
+
+```python
+from ephysatlas.feature_calculators import (
+    CsdParams,
+    FeatureComputationOptions,
+    FeatureParams,
+)
+
+options = FeatureComputationOptions(
+    features_to_compute=["lf", "csd"],
+    skip_lf_destripe=True,                                   # no destriping
+    feature_params=FeatureParams(
+        csd=CsdParams(decimate=1, denoise=False)             # no CSD decimation or denoising
+    ),
+)
+```
+
+Without `skip_lf_destripe=True`, destriping fails on 250 Hz data:
+
+```text
+ValueError: Digital filter critical frequencies must be 0 < Wn < fs/2 (fs=250.0 -> fs/2=125.0)
+```
+
+## From an lfpack archive
+
+```python
+from ephysatlas.feature_calculators import LFPackFeatureCalculator, SnippetWindow
+
+calc = LFPackFeatureCalculator(
+    "/data/lfp_aggregates/lf_compressed_v04_a07_default_all.h5",
+    recording="00a824c0-e060-495f-9ebc-79c82fef4c67",   # the pid of one recording
+)
+
+print(calc.available_duration())   # (None, <seconds>): LF only
+
+result = calc.compute_snippet(
+    SnippetWindow(t_start=300.0, duration_ap=0.0, duration_lf=5.0), options
+)
+print(result.computed_features)    # ('lf', 'csd')
+```
+
+| argument | default | meaning |
+|---|---|---|
+| `h5_file` | required | The archive |
+| `recording` | `None` | Recording key: the pid. Required when the archive holds more than one recording, as the published ones do |
+| `scale` | `0` | lfpack reconstruction scale (`0` = full quality) |
+| `bin_channels` | `1` | Adjacent electrodes summed per output channel |
+| `name` | `recording`, else the file stem | Recording identifier, used as the `pid` in outputs |
+
+The reader opens lazily, on first access. The channel table comes from the archive:
+`channel`, `lateral_um`, `axial_um`, `labels` and `shank`, plus `x`, `y`, `z`, `atlas_id`
+and `acronym` when the archive carries them.
+
+The archive also records where the amplifier saturated:
+
+```python
+calc.saturation_times()   # DataFrame: start_sample, stop_sample, start_time, stop_time
+calc.saturation_mask      # boolean, one value per LF sample
+```
+
+## From a NumPy array
+
+```python
+import numpy as np
+import pandas as pd
+
+from ephysatlas.feature_calculators import NumpyArrayFeatureCalculator
+
+# lf: (n_channels, n_samples) in volts, already resampled to fs_lf
+# x_um, y_um: lateral and axial position of each channel, in µm
+channels = pd.DataFrame({
+    "channel": np.arange(len(x_um)),
+    "axial_um": y_um,
+    "lateral_um": x_um,
+    "shank": 0,
+    "labels": 0,            # QC label per channel: 0 = good
+})
+
+calc = NumpyArrayFeatureCalculator(
+    lf=lf,
+    fs_lf=250.0,
+    geometry={"x": x_um, "y": y_um},
+    name="subject42_probe00",
+    channel_metadata=channels,
+)
+result = calc.compute_snippet(
+    SnippetWindow(t_start=2.0, duration_ap=0.0, duration_lf=2.0), options
+)
+```
+
+`geometry` needs at least `x` and `y`. The derived keys (`sample_shift`, `shank`, `col`,
+`row`) are filled with defaults. `t0` (default `0.0`) is the session time of the array's
+first sample, for an array cut out of a longer recording.
+
+`channel_metadata` is optional for a single snippet. Without it the calculator builds
+`channel`, `axial_um`, `lateral_um` and `shank` from `geometry`. The aggregated route
+below takes the bad-channel labels from its `labels` column, so pass it when you have
+them.
+
+## Many snippets, aggregated and denoised
+
+The one call from the [SpikeGLX page](compute-features-spikeglx.qmd#many-snippets-from-one-recording)
+works for both sources. Pass the same `options`:
+
+```python
+df = calc.compute_denoised_features(
+    n_snippets=5, duration_ap=0.0, duration_lf=5.0, options=options
+)
+print(df.index.names)   # ['pid', 'channel']
+```
+
+The result is the per-channel, denoised table, with only the `lf` and `csd` columns. A
+model that also needs `ap` and `waveforms` features cannot run on it.
+
+::: {.callout-important}
+## Channel labels come from the channel table
+
+With destriping skipped, no channel QC labels are computed. Denoising takes them from the
+channel table's `labels` column instead. A NumPy calculator without `channel_metadata`,
+or an archive recording with no labels, logs `No channel_labels in the features: all
+channels are labelled good (0)`, and bad channels are then denoised like good ones.
+:::
+
+## Troubleshooting
+
+**`ValueError: Digital filter critical frequencies must be 0 < Wn < fs/2`** — the
+options lack `skip_lf_destripe=True`.
+
+**`ValueError: Snippets starting at ... overlap`** — the recording is too short for that
+many snippets of that length. Choose the windows yourself; see
+[many snippets from one recording](compute-features-spikeglx.qmd#many-snippets-from-one-recording).
+
+**`ValueError: Multiple recordings in file, specify recording= from: [...]`** — the archive
+holds several recordings; pass the pid as `recording=`. A pid the archive does not hold
+raises `KeyError: Recording '...' not found. Available: [...]`.
+
+## Next steps
+
+- [Load compressed LFP](load-lfp-features.qmd): download the published archives
+- [Aggregate and denoise](aggregate-and-denoise.qmd): what the aggregated route does
+- [Tune the computation](tune-feature-computation.qmd): per-feature parameters
+- [`LFPackFeatureCalculator` API](../api/feature_calculators.LFPackFeatureCalculator.qmd)
+  and [`NumpyArrayFeatureCalculator` API](../api/feature_calculators.NumpyArrayFeatureCalculator.qmd)

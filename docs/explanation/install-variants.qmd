@@ -1,0 +1,148 @@
+---
+title: "Lite vs full install"
+---
+
+ibleatools has two install variants. Picking the wrong one is either a missing-dependency
+error or a very long install you did not need.
+
+## Which do you need?
+
+```bash
+pip install -e .            # lite — the default
+pip install -e ".[full]"    # full
+```
+
+| You want to | Install |
+|---|---|
+| Run a published model on existing features | lite |
+| Compute `lf` / `csd` / `ap` features | lite |
+| Aggregate and denoise features | lite |
+| Download the IBL atlas aggregates | lite |
+| Run the encoders and the probe transformer | lite |
+| Compute `waveforms` (spike) features | **full** |
+| Read NWB or SpikeInterface-Zarr recordings | **full** |
+| Run the SDSC supercomputing pipeline | **full** |
+
+If in doubt, start lite. It covers the whole
+[tutorial](../tutorials/first-predictions.qmd) and every published model.
+
+`pip install ibleatools[lite]` also works — `lite` is an explicit empty alias, so that
+dependency line is valid, but it adds nothing over the base install. It exists because
+[`ibl-alignment-gui`](https://github.com/int-brain-lab/ibl-alignment-gui) depends on
+`ibleatools[lite]` and wanted to name its intent.
+
+Both variants require **Python 3.12 or newer**. The floor was raised from 3.11 so the full
+install resolves DARTsort ≥ 0.5.29 — the last DARTsort release supporting 3.11 is 0.5.28 —
+and before that from 3.10 in version 0.7.0, because DARTsort 0.5 requires it.
+
+## What lite includes
+
+The base dependency set is deliberately substantial — lite is not a stub:
+
+| package | for |
+|---|---|
+| `ibllib`, `ibl-neuropixel` ≥ 1.14 | ONE API, `ibldsp` destriping and waveform measures, `spikeglx` readers |
+| `iblatlas` ≥ 1.2 | Brain regions, atlas volumes, genomics (the denoised MERFISH context) |
+| `xgboost` | The region classifier |
+| `torch` | The encoders and the probe transformer |
+| `specparam` | Spectral-parameterisation features |
+| `scikit-image` | Total-variation denoising |
+| `scikit-learn` | Transformers and the feature pipeline |
+| `pandera`, `pydantic` | Schema validation and typed parameters |
+| `huggingface_hub` | Model download |
+| `lfpack` ≥ 1.0 | Reading compressed LFP archives (release v04) |
+
+Note that **torch is in the base install**. The torch models are a lite-install feature;
+only the spike/waveform stack is gated.
+
+## What full adds
+
+| package | for |
+|---|---|
+| `dartsort` ≥ 0.5.25, `hdbscan`, `linear-operator`, `opt-einsum`, `h5py` ≥ 3.15.1 | Spike detection and waveform features |
+| `spikeinterface` | The NWB and Zarr calculators |
+| `pynwb`, `hdmf-zarr`, `remfile`, `fsspec`, `aiohttp`, `dandi` | Reading NWB, locally or streamed |
+| `luigi`, `iblscripts` | The SDSC supercomputing pipeline |
+| `ipykernel` | A Jupyter kernel for the environment |
+
+## Why the split exists
+
+Three reasons, in order of how much they matter.
+
+**DARTsort is a heavy tree.** Spike detection needs `dartsort`, which pulls
+`spikeinterface`, `hdbscan`, `linear-operator`, `dredge-ephys` and a recent `h5py`. Most
+users of the region decoder never compute waveform features themselves — they consume
+published features or compute the cheap LF families — and should not pay that install cost.
+
+**Version floors are contagious.** The full extra needs `h5py>=3.15.1` to avoid a DARTsort
+failure in the unit tests, and DARTsort's own floors move with each release (the reason
+for the Python 3.12 floor above). Every such constraint narrows what else the environment
+can hold, so confining them to an opt-in extra keeps the base install resolvable alongside
+other packages.
+
+**The GUI depends on lite.** `ibl-alignment-gui` requires ibleatools for model inference
+and LF feature computation. Making the base install lite is what lets the GUI depend on it
+without dragging in a spike-sorting stack.
+
+## Lazy imports make the split work
+
+The optional dependencies are imported **inside** the functions that need them, not at
+module scope. So `import ephysatlas.feature_calculators` succeeds on a lite install even
+though `NwbFeatureCalculator` cannot open a recording there — the failure arrives only when
+you try to use it, and says exactly what to install:
+
+```text
+NWB feature computation needs the optional NWB/streaming dependencies
+(spikeinterface, pynwb, hdmf-zarr, remfile, dandi).
+Install them with `pip install ibleatools[full]`.
+```
+
+The same applies to `specparam` in `features.lf()`, `lfpack` in `read_lfp_features`, and
+DARTsort in the spike path. It is why the docs CI can build the whole API reference from a
+lite install.
+
+## The xgboost / torch segfault
+
+One import-order constraint is worth knowing about, because it shapes the code and can bite
+you directly.
+
+On macOS arm64, **xgboost and torch segfault when initialised together in the wrong
+order.** `ephysatlas.regionclassifier` imports xgboost at module scope, so every
+torch-using module in the package keeps `import torch` inside its methods rather than at
+the top.
+
+If you hit a `SEGFAULT` during feature computation, it is likely
+[pytorch#132372](https://github.com/pytorch/pytorch/issues/132372). Two workarounds — import
+torch first, before anything else:
+
+```python
+import torch  # noqa: F401  — must come before the ephysatlas imports
+```
+
+or point the dynamic loader at your environment's torch libraries:
+
+```bash
+export DYLD_LIBRARY_PATH=/path/to/venv/lib/python3.12/site-packages/torch/lib
+```
+
+## Development installs
+
+The repository uses [uv](https://docs.astral.sh/uv/) with three dependency groups:
+
+```bash
+uv sync                                  # lite
+uv sync --extra full --group test        # what CI runs
+uv sync --group docs                     # to build this site
+uv sync --group lint                     # ruff
+```
+
+CI runs `uv sync --extra full --group test --group lint` on Python 3.12, then `ruff check`,
+`ruff format --check` and the unittest suite with coverage.
+
+## See also
+
+- [Compute features from SpikeGLX files](../how-to/compute-features-spikeglx.qmd) — works
+  on lite for `lf` / `csd` / `ap`
+- [Compute features from NWB](../how-to/compute-features-nwb.qmd) — needs full
+- [Model families](model-families.qmd) — why the wrapper imports are lazy
+- [`CONTRIBUTING.md`](https://github.com/int-brain-lab/ibleatools/blob/main/CONTRIBUTING.md)

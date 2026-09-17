@@ -1,0 +1,133 @@
+---
+title: "ibleatools"
+subtitle: "Electrophysiology features and brain-region inference for Neuropixels recordings"
+---
+
+**ibleatools** turns a raw Neuropixels recording into a table of electrophysiological
+features — one row per recording channel — and runs the published IBL Ephys Atlas models
+over it to infer, for example, which brain region each channel sits in.
+
+Two things you can do with it, independently:
+
+- **Compute features** from your own recording — local SpikeGLX files, NWB (including
+  streamed DANDI assets), SpikeInterface Zarr stores, lfpack LFP archives, or an LF array
+  already in memory. No IBL account needed.
+- **Run a published model** downloaded from the Hugging Face Hub. The model repositories
+  are public: no credentials, no raw data, no AWS keys.
+
+::: {.callout-note}
+This package is imported as `ephysatlas`. It is **not** the same as the `ephys_atlas`
+package (with an underscore) from the
+[paper-ephys-atlas](https://github.com/int-brain-lab/paper-ephys-atlas) repository.
+:::
+
+## Documentation
+
+| Section | Content |
+|---|---|
+| [Tutorial](tutorials/first-predictions.qmd) | Install, download a model, and predict brain regions — start here |
+| [How-To: SpikeGLX files](how-to/compute-features-spikeglx.qmd) | Compute features from local AP/LF `.bin` / `.cbin` files |
+| [How-To: NWB](how-to/compute-features-nwb.qmd) | Compute features from a local, streamed or DANDI-hosted NWB file |
+| [How-To: Zarr](how-to/compute-features-zarr.qmd) | Compute features from a SpikeInterface-native Zarr store |
+| [How-To: LFPack and NumPy](how-to/compute-features-lf-only.qmd) | Compute LF features from an lfpack archive or an array in memory |
+| [How-To: Tune the computation](how-to/tune-feature-computation.qmd) | Snippet windows, per-feature parameters, inspecting destriped data |
+| [How-To: Aggregate and denoise](how-to/aggregate-and-denoise.qmd) | Turn per-snippet features into the table a model expects |
+| [How-To: Download a model](how-to/download-models.qmd) | `load_pretrained`, pinning a vintage, and the self-test |
+| [How-To: Predict regions](how-to/predict-regions.qmd) | Run the region decoders and read their output |
+| [How-To: Predict features from position](how-to/predict-features-from-position.qmd) | Run the spatial encoder — position in, features out |
+| [How-To: Predict unit phenotypes](how-to/predict-unit-phenotypes.qmd) | Run the unit encoder — position in, unit phenotypes and cell types out |
+| [How-To: Plot along the probe](how-to/plot-features-along-probe.qmd) | Visualise how features vary with depth |
+| [How-To: Load atlas data](how-to/load-channel-features.qmd) | Download the published IBL aggregates (needs an IBL account) |
+| [Reference: API](api/index.qmd) | Full API reference, generated from the docstrings |
+| [Reference: Feature list](reference/feature-list.qmd) | Every feature column, its band and its units |
+| [Reference: S3 layout](reference/s3-layout.qmd) | Where the IBL aggregates live, and how they are versioned |
+| [Reference: Model manifest](reference/model-manifest.qmd) | The publication contract every model ships |
+| [Explanation: Core concepts](explanation/concepts.qmd) | Channels vs cells, vintages, projects, denoising |
+| [Explanation: Feature pipeline](explanation/feature-pipeline.qmd) | What happens between raw voltage and a feature table |
+| [Explanation: Model families](explanation/model-families.qmd) | Four model families, one load path |
+| [Explanation: Lite vs full](explanation/install-variants.qmd) | Which install you need, and why the split exists |
+
+## Install
+
+ibleatools requires **Python 3.12 or newer**.
+
+```bash
+git clone https://github.com/int-brain-lab/ibleatools.git
+cd ibleatools
+pip install -e .
+```
+
+That is the **lite** install, and it is the default. It covers model download and
+inference, LF / CSD / AP feature computation, aggregation and denoising, and data
+download. It does **not** include spike/waveform feature computation, which needs
+[DARTsort](https://github.com/cwindolf/dartsort):
+
+```bash
+pip install -e ".[full]"
+```
+
+See [lite vs full](explanation/install-variants.qmd) for which one you need.
+
+## Quick start
+
+Predict brain regions from a table of features, using the published decoder:
+
+```python
+import pandas as pd
+from ephysatlas import load_pretrained
+
+# Public Hugging Face repo — no account or token needed. Pin the vintage.
+model = load_pretrained(
+    "int-brain-lab/ea-decoder-channel-xgboost", revision="2026_W42"
+)
+
+# Check that this install reproduces the model's shipped output before trusting it
+model.selftest()
+
+# The model ships a small example, so this runs with no data of your own
+sample = model.path_model / "example" / "features_sample.parquet"
+out = model.predict(pd.read_parquet(sample))
+
+print(out[["predicted_acronym", "prediction_probability", "fold_agreement"]].head())
+```
+
+Compute features from a recording of your own:
+
+```python
+from ephysatlas.feature_calculators import (
+    FeatureComputationOptions,
+    SnippetWindow,
+    SpikeGLXFileFeatureCalculator,
+)
+
+calc = SpikeGLXFileFeatureCalculator(
+    ap_file="/data/probe00.ap.cbin", lf_file="/data/probe00.lf.cbin"
+)
+result = calc.compute_snippet(
+    SnippetWindow(t_start=300.0, duration_ap=1.0, duration_lf=1.0),
+    FeatureComputationOptions(features_to_compute=["lf", "csd"]),
+)
+print(result.features.shape)
+```
+
+Full walkthrough in the [tutorial](tutorials/first-predictions.qmd).
+
+## Published models
+
+| Hugging Face repo | Family | What it predicts | Vintages |
+|---|---|---|---|
+| [`int-brain-lab/ea-decoder-channel-xgboost`](https://huggingface.co/int-brain-lab/ea-decoder-channel-xgboost) | Region decoder | Brain region per channel, from features | `2026_W26`, `2026_W32`, `2026_W39`, `2026_W42` |
+| [`int-brain-lab/ea-decoder-channel-transformer`](https://huggingface.co/int-brain-lab/ea-decoder-channel-transformer) | Whole-probe region decoder | Brain region per channel, from a whole probe's features | `2026_W37`, `2026_W39`, `2026_W42` |
+| [`int-brain-lab/ea-encoder-channel`](https://huggingface.co/int-brain-lab/ea-encoder-channel) | Spatial encoder | Features per channel, from position | `2026_W26`, `2026_W32`, `2026_W39`, `2026_W41`, `2026_W42` |
+| [`int-brain-lab/ea-encoder-unit`](https://huggingface.co/int-brain-lab/ea-encoder-unit) | Unit encoder | Unit phenotypes and cell-type composition, from position | `2026_W42` |
+
+All four load through the same call, [`load_pretrained`](api/load_pretrained.qmd). The
+encoders also drive probe alignment —
+[`ephysatlas.alignment`](api/index.qmd#alignment) places a probe's channels in the brain,
+with or without histology.
+
+## Getting help
+
+Open an issue on [GitHub](https://github.com/int-brain-lab/ibleatools/issues).
+Contributions are welcome — see
+[CONTRIBUTING.md](https://github.com/int-brain-lab/ibleatools/blob/main/CONTRIBUTING.md).

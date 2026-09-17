@@ -5,6 +5,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+- Documentation moved from Sphinx to a [Quarto](https://quarto.org/) website, organised on the [Diátaxis](https://diataxis.fr/) framework (tutorial / how-to / reference / explanation). Same published URL: https://int-brain-lab.github.io/ibleatools. The API reference is now generated from the docstrings by `quartodoc` into `docs/api/` (git-ignored) instead of being hand-written, so it cannot go stale. `docs/source/**` (RST), `docs/Makefile` and `docs/make.bat` are removed; `.github/workflows/documentation.yaml` now runs `quartodoc build` + `quarto render`; the `docs` dependency group swaps the Sphinx packages for `quartodoc` + `griffe`. See `docs/README.txt` to build locally.
+- New documentation covering previously undocumented ground: computing features from non-IBL sources (local SpikeGLX files, NWB/DANDI, SpikeInterface-Zarr) via the `feature_calculators` classes; the aggregate-and-denoise step that produces the `raw_ephys_features_denoised.pqt` the published models consume; loading models from the Hugging Face Hub with `load_pretrained`; and plotting features along the probe, with figures rendered from the feature tables in `tests/fixtures/features/2025_W28/`.
+- Documentation brought up to the code and models of 0.11.0: new pages for the LF-only calculators (`LFPackFeatureCalculator`, `NumpyArrayFeatureCalculator`) and for the unit encoder; sections for multi-snippet aggregation (`compute_denoised_features`, `compute_aggregated_features`, `aggregate_snippets`, the table `attrs`, the 5-minute default margins and the short-recording route), the probe transformer, ephys edges (`download_edges_volume` and `ephysatlas.edges`) and the Cadzow parameters of the CSD (`cadzow_lfp_kwargs`, `CsdParams.cadzow_kwargs`); the lfpack v04 tiers ported from the Sphinx pages; `ephysatlas.edges` and `ephysatlas.alignment` in the API reference. Every example pins the `2026_W42` models and data and quotes real runs. Facts updated across the site: Python 3.12, the `*_bpr` columns and the CSD units (A/m³, A/m²), volts and spike rates, median aggregation, the waveform remap, four model families, the trajectory provenance fallback, and the DARTsort scratch default. The single-shank assumption of feature computation is documented, step by step, with a per-shank workaround for the LF families.
+
+### Removed
+- `config.yaml` and `config_template.yaml`, and the documentation of the config-file CLI workflow.
+
+### Fixed
+- Documentation that referenced code which does not exist: `download_cell_features` / `read_cell_features` (renamed to `download_cells_features` / `read_cells_features` in 0.7.0) and `ephysatlas.data.load_raw_data` (never existed). The duplicated `load-cluster-features` page, the repeated `automodule` blocks that emitted every symbol 4-6 times, and the `automodule` pointed at the `AtlasReveal` *class* (which emitted nothing) are all gone. Docs now lead with `load_pretrained` rather than the deprecated `compute_features` / `infer_regions`.
+- The `ModelDenoisedFeatures` docstring said `denoise_raw_features_data` applies the waveform-shape remap; `aggregation.apply_waveform_remap` does, after denoising, called by `produce_output_dataframes` and `feature_calculators.aggregate_snippets`.
+
 ## [0.11.0] - 2026-10-23
 
 ### Added

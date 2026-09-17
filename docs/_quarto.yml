@@ -1,0 +1,240 @@
+project:
+  type: website
+  output-dir: _site
+
+website:
+  title: "ibleatools"
+  repo-url: https://github.com/int-brain-lab/ibleatools
+  navbar:
+    left:
+      - text: "Tutorial"
+        file: tutorials/first-predictions.qmd
+      - text: "How-To"
+        menu:
+          - text: "--- Compute features on your data ---"
+          - text: "SpikeGLX AP/LF files"
+            file: how-to/compute-features-spikeglx.qmd
+          - text: "NWB recordings"
+            file: how-to/compute-features-nwb.qmd
+          - text: "SpikeInterface Zarr stores"
+            file: how-to/compute-features-zarr.qmd
+          - text: "LFPack archives and NumPy arrays"
+            file: how-to/compute-features-lf-only.qmd
+          - text: "Tune the computation"
+            file: how-to/tune-feature-computation.qmd
+          - text: "Aggregate and denoise"
+            file: how-to/aggregate-and-denoise.qmd
+          - text: "--- Run published models ---"
+          - text: "Download a model"
+            file: how-to/download-models.qmd
+          - text: "Predict brain regions"
+            file: how-to/predict-regions.qmd
+          - text: "Predict features from position"
+            file: how-to/predict-features-from-position.qmd
+          - text: "Predict unit phenotypes from position"
+            file: how-to/predict-unit-phenotypes.qmd
+          - text: "--- Plot ---"
+          - text: "Features along the probe"
+            file: how-to/plot-features-along-probe.qmd
+          - text: "--- Load IBL atlas data ---"
+          - text: "Channel features"
+            file: how-to/load-channel-features.qmd
+          - text: "Cells features"
+            file: how-to/load-cells-features.qmd
+          - text: "Compressed LFP"
+            file: how-to/load-lfp-features.qmd
+          - text: "Encoding volumes"
+            file: how-to/load-encoding-volume.qmd
+      - text: "Reference"
+        menu:
+          - text: "API"
+            file: api/index.qmd
+          - text: "Feature list"
+            file: reference/feature-list.qmd
+          - text: "S3 data layout"
+            file: reference/s3-layout.qmd
+          - text: "Model manifest"
+            file: reference/model-manifest.qmd
+      - text: "Explanation"
+        menu:
+          - text: "Core concepts"
+            file: explanation/concepts.qmd
+          - text: "The feature pipeline"
+            file: explanation/feature-pipeline.qmd
+          - text: "Model families"
+            file: explanation/model-families.qmd
+          - text: "Lite vs full install"
+            file: explanation/install-variants.qmd
+    right:
+      - text: "Help"
+        icon: question-circle
+        href: https://github.com/int-brain-lab/ibleatools/issues
+      - icon: github
+        href: https://github.com/int-brain-lab/ibleatools
+
+format:
+  html:
+    theme: minty
+    toc: true
+    code-copy: true
+    code-overflow: wrap
+    lightbox: true
+
+# API reference, generated from the docstrings by `quartodoc build`. Output lands in
+# docs/api/ (git-ignored) so generated pages never mix with the hand-written specs in
+# docs/reference/.
+quartodoc:
+  package: ephysatlas
+  dir: api
+  sidebar: api/_sidebar.yml
+  sections:
+    - title: "Models and inference"
+      desc: "Load a published model and predict with it."
+      contents:
+        - load_pretrained
+        - regionclassifier.RegionClassifier
+        - models.encoder_inpainting.SpatialEncoder
+        - models.unit_encoder.UnitEncoder
+        - models.probe_transformer.ProbeTransformerClassifier
+        - model_registry.resolve_model
+        - model_registry.read_manifest
+        - model_registry.verify_checksums
+    - title: "Feature computation"
+      desc: "Compute features from a recording. One calculator per source format."
+      contents:
+        - feature_calculators.SpikeGLXFileFeatureCalculator
+        - feature_calculators.NwbFeatureCalculator
+        - feature_calculators.NwbSource
+        - feature_calculators.SpikeInterfaceZarrFeatureCalculator
+        - feature_calculators.IBLPIDFeatureCalculator
+        - feature_calculators.LFPackFeatureCalculator
+        - feature_calculators.NumpyArrayFeatureCalculator
+        - feature_calculators.BaseFeatureCalculator
+    - title: "Computation options"
+      desc: "The typed parameters accepted by every calculator."
+      contents:
+        - feature_calculators.SnippetWindow
+        - feature_calculators.FeatureComputationOptions
+        - feature_calculators.FeatureComputationResult
+        - feature_calculators.FeatureParams
+        - feature_calculators.LfParams
+        - feature_calculators.CsdParams
+        - feature_calculators.WaveformParams
+        - feature_calculators.DestripeOptions
+        - feature_calculators.DestripedSnippet
+        - feature_calculators.RawSnippet
+    - title: "Functional entry points"
+      desc: "Procedural wrappers over the calculators, and the underlying engine."
+      contents:
+        - feature_computation.compute_features_from_pid
+        - feature_computation.compute_features_from_file
+        - feature_computation.compute_features_from_raw
+        - feature_computation.compute_features_from_destriped
+        - feature_computation.destripe_ap_lf
+        - feature_computation.add_target_coordinates
+    - title: "Feature primitives and schemas"
+      desc: "The per-band feature functions and the pandera schemas that validate them."
+      contents:
+        - features.lf
+        - features.csd
+        - features.cadzow_lfp_kwargs
+        - features.ap
+        - features.spikes
+        - features.get_psd_decay_features
+        - features.xcor_acor_ratio
+        - features.denoise_dataframe
+        - features.voltage_features_set
+        - features.EphysTransformer
+        - features.EphysDenoiser
+        - features.DartParameters
+        - features.remap_waveform_shape_features
+        - features.remap_waveform_shape_features_volume
+        - features.ModelRawFeatures
+        - features.ModelDenoisedFeatures
+        - features.ModelSpikeFeatures
+        - features.ModelSpikeShapeFeatures
+        - features.ModelProbeDetails
+    - title: "Aggregation"
+      desc: "Combine per-snippet features into a per-channel table, then denoise it."
+      contents:
+        - feature_calculators.compute_aggregated_features
+        - feature_calculators.get_snippet_start_times
+        - feature_calculators.check_snippet_overlap
+        - feature_calculators.aggregate_snippets
+        - aggregation.produce_output_dataframes
+        - aggregation.get_aggregated_raw_features
+        - aggregation.denoise_raw_features_data
+        - aggregation.apply_waveform_remap
+        - aggregation.get_aggregated_features_per_pid
+        - aggregation.aggregate_all_probes
+        - aggregation.concatenate_channels_data
+        - utils.get_aggregated_snippets_df
+        - utils.add_metadata_to_parquet_files
+    - title: "Data access"
+      desc: "Download and read the published IBL ephys-atlas aggregates."
+      contents:
+        - data.download_tables
+        - data.read_features_from_disk
+        - data.download_cells_features
+        - data.read_cells_features
+        - data.download_probe_details
+        - data.read_probe_details
+        - data.download_project_data
+        - data.download_lfp_features
+        - data.read_lfp_features
+        - data.download_encoding_volume
+        - data.download_edges_volume
+        - data.alpha_outlier_columns
+        - data.list_available_projects
+        - data.list_available_labels
+        - data.get_latest_label
+    - title: "Encoding-volume edges"
+      desc: "Where the ephys signature changes fastest: the local gradient of an encoding volume."
+      contents:
+        - edges.compute_edges_volume
+        - edges.load_whitened_pcs
+        - edges.edge_strength
+        - edges.save_edges_volume
+    - title: "Alignment"
+      desc: "Place a probe's channels in the brain with the published models, with or without histology."
+      contents:
+        - alignment.align_histology
+        - alignment.align_histology_with_units
+        - alignment.EphysOnlyLocalizer
+        - alignment.localize_ephys_only
+        - alignment.AlignmentResult
+        - alignment.alignment_metrics
+        - alignment.plot_alignment_result
+        - alignment.ChannelModel
+        - alignment.UnitModel
+    - title: "Cells"
+      desc: "Per-unit features: coupling, autocorrelograms, burstiness."
+      contents:
+        - cells.spike_triggered_population_coupling
+        - cells.spike_triggered_population_coupling_df
+        - cells.spike_triggered_lfp
+        - cells.compute_log_acg
+        - cells.compute_3d_acgs
+        - cells.compute_burstiness_and_memory
+        - cells.select_good_units_relaxed_rp
+        - cells.ModelClusters
+    - title: "Anatomy"
+      desc: "The brain atlas and region mappings used by the classifier."
+      contents:
+        - anatomy.ClassifierAtlas
+        - anatomy.ClassifierRegions
+        - anatomy.regions_transition_matrix
+    - title: "Plotting"
+      desc: "Figures for features, probes and model results."
+      contents:
+        - plots.figure_features_channel_space
+        - plots.plot_features_distributions
+        - plots.plot_results
+        - plots.plot_cumulative_probas
+        - plots.plot_histogram
+        - plots.plot_probe_rect
+        - plots.plot_probe_rect2
+        - plots.get_color_feat
+        - plots.get_color_br
+        - plots.select_series
+        - reveal.AtlasReveal

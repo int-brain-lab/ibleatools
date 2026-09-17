@@ -70,8 +70,7 @@ instance/
 # Scrapy stuff:
 .scrapy
 
-# Sphinx documentation
-docs/_build/
+# Documentation build output is ignored by docs/.gitignore
 
 # PyBuilder
 .pybuilder/
@@ -187,8 +186,11 @@ random_testing_scripts.py
 84c48d67-3d58-4cb6-8e57-fd206e6508d6/
 
 
-#Sphinx doucmentation
-docs/build/examples/*.pt
 examples/ea_active/
 examples/encoding_models/
 training/
+
+docs/.quarto/
+docs/_site/
+docs/api/
+docs/objects.json

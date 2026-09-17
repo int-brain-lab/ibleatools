@@ -1,0 +1,356 @@
+---
+title: "How to predict brain regions"
+---
+
+The region decoder assigns each recording channel a brain region from its
+electrophysiological features. This guide runs it and reads the output correctly.
+
+If you have not loaded a model yet, start with
+[how to download a published model](download-models.qmd).
+
+## What the model needs
+
+```python
+from ephysatlas import load_pretrained
+
+model = load_pretrained(
+    "int-brain-lab/ea-decoder-channel-xgboost", revision="2026_W42"
+)
+
+print(model.index["inputs"]["table"])   # raw_ephys_features_denoised.pqt
+print(model.inputs["index"])            # ['pid', 'channel']
+print(len(model.inputs["features"]))    # 48
+print(model.config["region_map"])       # Cosmos
+print(model.config["accuracy"])         # 0.6124
+```
+
+Three requirements, all of them enforced:
+
+1. A DataFrame indexed by **`(pid, channel)`**.
+2. Every column in `model.inputs["features"]`, by name. `predict` raises `KeyError`
+   naming any that are absent.
+3. Features that are **aggregated and denoised** for this model's vintage — see
+   [aggregate and denoise](aggregate-and-denoise.qmd). This is not enforced, because it
+   cannot be: a raw single-snippet table has the right column names and the wrong units.
+
+::: {.callout-warning}
+## The units trap
+
+Denoising transforms some features — `rms_ap` and `rms_lf` to dB, `spike_count` (a rate,
+in spikes/s) to log2 — and returns them transformed. A model trained on denoised features expects dB. Passing raw
+volts produces no error and bad regions.
+:::
+
+## Predict
+
+::: {.callout-warning}
+## `raw_ephys_features_denoised.pqt` alone is not enough
+
+It carries 47 of the 48 required columns. The missing one is **`outside`**, a boolean
+derived from `channel_labels == 3` that is computed at read time rather than stored.
+Passing the denoised table straight to `predict` raises:
+
+```text
+KeyError: 1 feature(s) required by this model are missing from the input
+DataFrame: ['outside']. Expected all of: [...]
+```
+
+Verified against the published `ea_active/2026_W42` aggregate, and against a table
+computed locally with
+[`compute_denoised_features`](compute-features-spikeglx.qmd#many-snippets-from-one-recording).
+:::
+
+Three ways to get a complete table. On vintages from `2025_W39` on, the simplest is the
+pre-merged file, which already contains `outside`:
+
+```python
+from pathlib import Path
+
+import pandas as pd
+
+path_features = Path("/data/features/aggregated")   # or a downloaded vintage
+
+df = pd.read_parquet(path_features / "df_all_cols_merged.pqt")
+out = model.predict(df)
+
+print(out[["predicted_acronym", "prediction_probability", "fold_agreement"]].head())
+```
+
+Or let `read_features_from_disk` derive it:
+
+```python
+import ephysatlas.data, ephysatlas.anatomy
+
+df = ephysatlas.data.read_features_from_disk(
+    path_features, brain_atlas=ephysatlas.anatomy.ClassifierAtlas()
+)
+out = model.predict(df)
+```
+
+Or derive it yourself — one line, and no atlas download:
+
+```python
+df = pd.read_parquet(path_features / "raw_ephys_features_denoised.pqt")
+df["outside"] = df["channel_labels"] == 3
+out = model.predict(df)
+```
+
+All three work. `out` is indexed exactly like `df`, one row per channel.
+
+A real run on one probe of `ea_active/2026_W42` (`00a824c0-e060-495f-9ebc-79c82fef4c67`,
+384 channels):
+
+```text
+predicted_acronym
+MB            197
+Isocortex     138
+void           28
+HPF            13
+void_fluid      8
+
+mean prob 0.779   mean fold_agreement 0.930
+```
+
+To try it with no data of your own, use the example the model ships:
+
+```python
+sample = model.path_model / "example" / "features_sample.parquet"
+out = model.predict(pd.read_parquet(sample))
+```
+
+## Reading the output
+
+| column | meaning |
+|---|---|
+| `predicted_acronym` | Winning region as an Allen acronym |
+| `predicted_atlas_id` | The same region as a numeric Allen structure id |
+| `prediction_probability` | Fold-averaged probability of the winning class |
+| `fold_agreement` | Fraction of fold models that voted for the winner |
+| `p_<acronym>` | One column per class, fold-averaged probability |
+
+The `2026_W42` model predicts 13 **Cosmos**-level classes:
+
+```python
+print(model.config["class_acronyms"])
+# ['void', 'MB', 'Isocortex', 'CB', 'TH', 'CNU', 'OLF', 'CTXsp', 'root', 'HB',
+#  'HPF', 'HY', 'void_fluid']
+```
+
+Note that `void` and `void_fluid` are real classes: the model can say a channel is outside
+brain tissue, which is useful for finding where a probe entered and exited.
+
+### Two different kinds of uncertainty
+
+`prediction_probability` and `fold_agreement` answer different questions, and reading only
+the first will mislead you:
+
+| probability | agreement | interpretation |
+|---|---|---|
+| high | high | Confident and consistent — trust it |
+| low | high | Every fold agrees this channel is ambiguous, likely a region boundary |
+| low | low | The folds disagree; the model has no coherent answer here |
+| high | low | Rare and suspicious — inspect the channel |
+
+```python
+# Keep only channels the ensemble agrees on
+confident = out[(out["prediction_probability"] > 0.5) & (out["fold_agreement"] >= 0.8)]
+print(f"{len(confident)} / {len(out)} channels confidently assigned")
+```
+
+The published accuracy is around 0.60 across 13 classes, so filtering on these two columns
+is not optional polish — it is how you use the output responsibly.
+
+### The full probability distribution
+
+The `p_<acronym>` columns give the whole posterior, not just the winner:
+
+```python
+prob_cols = [c for c in out.columns if c.startswith("p_")]
+print(out[prob_cols].head())
+
+# Runner-up per channel — often the anatomically adjacent region
+top2 = out[prob_cols].apply(
+    lambda r: r.nlargest(2).index[1].removeprefix("p_"), axis=1
+)
+```
+
+## Ensemble or global
+
+The release ships five cross-validation fold models plus one model trained on all
+channels. `estimator=` picks between them:
+
+```python
+out = model.predict(df, estimator="ensemble")   # default
+out = model.predict(df, estimator="global")
+```
+
+| | `"ensemble"` (default) | `"global"` |
+|---|---|---|
+| Weights | Averages the 5 fold models | The single all-data model |
+| Cost | 5 forward passes | 1 forward pass |
+| Calibration | Slightly better | Slightly worse |
+| `fold_agreement` | Real value in [0, 1] | `NaN` |
+
+`fold_agreement` is `NaN` for `global` on purpose: a single model has nothing to agree
+with, and returning `1.0` would falsely imply unanimity among folds that were never
+consulted.
+
+::: {.callout-important}
+The two estimators disagree on a small fraction of channels (3.9 % on the probe above).
+Never mix them within one analysis — pick one and use it throughout.
+:::
+
+## Whole-probe decoder
+
+A second region decoder reads a **whole probe at once**. `ProbeTransformerClassifier`
+attends across all channels of a probe, using depth along the probe as its positional
+signal. The XGBoost decoder above sees each channel independently.
+
+```python
+transformer = load_pretrained(
+    "int-brain-lab/ea-decoder-channel-transformer", revision="2026_W42"
+)
+
+print(len(transformer.inputs["features"]))       # 51
+print(transformer.inputs["position_column"])     # axial_um
+print(transformer.config["region_map"])          # Cosmos
+
+out_t = transformer.predict(df)
+print(out_t[["predicted_acronym", "prediction_probability", "seed_agreement"]].head())
+```
+
+It takes the same denoised table, `outside` included, plus `axial_um`. Its inputs add the
+four spike-shape columns (`spike_width_secs`, `predepolarisation_width_secs`,
+`spike_amplitude`, `peak_to_trough_ratio_log`) to the XGBoost list, and drop
+`channel_labels`. Two differences in the output:
+
+- A release ships one model per random seed (five for `2026_W42`), so the agreement
+  column is **`seed_agreement`**, not `fold_agreement`. `estimator="global"` uses the
+  first seed alone and returns `seed_agreement` as `NaN`.
+- Channels with any non-finite feature are dropped with a warning, so `out_t` can be a
+  subset of `df`.
+
+On the same probe, all 384 channels returned:
+
+```text
+predicted_acronym
+MB            201
+Isocortex     128
+void           29
+void_fluid     19
+HPF             7
+
+mean prob 0.816   mean seed_agreement 0.902
+```
+
+## Joining predictions onto your data
+
+Prediction columns are namespaced so the join is always safe:
+
+```python
+joined = df.join(out)
+```
+
+Both the channel feature table and the cluster table already carry histology-derived
+`acronym` and `atlas_id` columns. Bare output names would collide on join and silently
+overwrite your ground truth on assignment. `predicted_acronym` / `predicted_atlas_id`
+cannot.
+
+That makes comparison against histology a one-liner:
+
+```python
+labelled = df.join(out)
+match = labelled["predicted_acronym"] == labelled["acronym"]
+print(f"agreement with histology: {match.mean():.1%}")
+```
+
+(Only meaningful when your `acronym` column is in the same region map — `Cosmos` for this
+model. Remap first if it is not.)
+
+## Denoising inside predict
+
+If your table holds *raw* aggregated features, `predict` can denoise them for you:
+
+```python
+out = model.predict(df_raw, denoise=True)
+```
+
+Leave `denoise=False` (the default) when your features are already denoised. Denoising
+twice degrades them.
+
+Prefer denoising up front with
+[`produce_output_dataframes`](aggregate-and-denoise.qmd): you get the denoised table on
+disk for inspection, and you can reuse it across models.
+
+## Plotting the result
+
+`plot_cumulative_probas` draws the full posterior as stacked bands down the probe, in
+Allen region colours:
+
+```python
+import matplotlib.pyplot as plt
+import numpy as np
+import ephysatlas.plots
+
+# One probe at a time, sorted by depth
+pid = df.index.get_level_values("pid")[0]
+mask = df.index.get_level_values("pid") == pid
+order = np.argsort(df.loc[mask, "axial_um"].to_numpy())
+
+# The p_<acronym> columns are in class order, so they align with config["classes"]
+prob_cols = [f"p_{a}" for a in model.config["class_acronyms"]]
+
+fig, ax = plt.subplots(figsize=(3, 8))
+ephysatlas.plots.plot_cumulative_probas(
+    probas=out.loc[mask, prob_cols].to_numpy()[order],
+    depths=df.loc[mask, "axial_um"].to_numpy()[order],
+    aids=np.asarray(model.config["classes"]),   # one id per class, not per channel
+    ax=ax,
+    legend=True,
+)
+ax.set(xlabel="cumulative probability", ylabel="depth (µm)")
+plt.show()
+```
+
+Two things to get right here: `aids` is one atlas id per **class** (13 of them), not one
+per channel; and `ax` must be supplied — the function draws onto the axes you give it and
+returns it.
+
+See [plotting features along the probe](plot-features-along-probe.qmd) for the
+depth-resolved feature view beside the predictions.
+
+## Troubleshooting
+
+**`KeyError` listing feature columns** — your table is missing those columns. Usually a
+feature family you did not compute; the `2026_W42` model needs all four (`lf`, `csd`,
+`ap`, `waveforms`), and `waveforms` needs the `[full]` extra. A list of
+`peak_val`, `trough_val`, `peak_time_secs` and friends means the opposite mismatch: a
+model older than `2026_W39` on a table from `ephysatlas` 0.9.0 or later, which no longer
+has those columns. Use a `2026_W39` or later model. A list of `*_bpr` columns means a
+`2026_W42` model on an older table read with `pd.read_parquet`; read it with
+`read_features_from_disk`, which renames the `*_csd_diff1` columns, or better, use the
+model of the table's own vintage.
+
+**`ValueError` about the feature-order digest** — the manifest's feature list no longer
+matches its recorded hash, meaning the model directory has been edited. Re-download it.
+
+**Predictions look uniformly wrong** — check three things in order: `model.selftest()`
+passes; your features are denoised; the feature vintage matches
+`model.index["vintage"]`.
+
+**Everything predicted `void` or `root`** — often a sign the input is raw rather than
+denoised, so the feature values sit far outside the training distribution.
+
+**`transformer.predict` never returns after the XGBoost decoder ran in the same process
+(macOS)** — XGBoost and PyTorch each load their own OpenMP runtime, and the second one
+deadlocks. Importing `torch` first instead crashes the XGBoost predict. Start Python with
+`OMP_NUM_THREADS=1` (`OMP_NUM_THREADS=1 python my_script.py`), or run the two decoders in
+separate processes. Seen with XGBoost 3.4.1 and PyTorch 2.14 on Apple Silicon.
+
+## Next steps
+
+- [Plot features along the probe](plot-features-along-probe.qmd)
+- [Predict features from position](predict-features-from-position.qmd) — the inverse model
+- [Model manifest reference](../reference/model-manifest.qmd)
+- [`RegionClassifier` API](../api/regionclassifier.RegionClassifier.qmd) and
+  [`ProbeTransformerClassifier` API](../api/models.probe_transformer.ProbeTransformerClassifier.qmd)

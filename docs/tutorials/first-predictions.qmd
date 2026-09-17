@@ -1,0 +1,213 @@
+---
+title: "Your first brain-region predictions"
+---
+
+This tutorial takes you from an empty environment to a table of predicted brain regions,
+and then to a plot of how the features vary along the probe.
+
+It deliberately needs **no IBL account, no AWS credentials and no raw data of your own**.
+Everything comes from a public Hugging Face repository, including a small bundled example
+recording. By the end you will know how to load a published model, verify your install
+reproduces it, run a prediction, and read the result.
+
+Once you have that working, the [how-to guides](../how-to/compute-features-spikeglx.qmd)
+show you how to swap in your own recording.
+
+## Prerequisites
+
+- Python 3.12 or newer
+- Network access to the Hugging Face Hub. The decoder used here is about 30 MB — six
+  XGBoost models plus the bundled example
+
+## 1. Install
+
+The lite install is all this tutorial needs — it includes model download and inference:
+
+```bash
+git clone https://github.com/int-brain-lab/ibleatools.git
+cd ibleatools
+pip install -e .
+```
+
+Check it imported:
+
+```python
+import ephysatlas
+
+print(ephysatlas.__version__)
+# 0.11.0 or later
+```
+
+## 2. Download a published model
+
+There is one entry point for every model family: `load_pretrained`. Give it a Hugging Face
+repository id, and pin a **revision** — a vintage tag such as `2026_W42`:
+
+```python
+from ephysatlas import load_pretrained
+
+model = load_pretrained(
+    "int-brain-lab/ea-decoder-channel-xgboost", revision="2026_W42"
+)
+```
+
+::: {.callout-important}
+## Always pin a revision
+
+Omit `revision=` and you get the `main` branch, which tracks the *currently recommended*
+model and moves whenever a new vintage is published — so the same script can silently
+return different regions next month. `load_pretrained` logs a warning when you do this.
+Pin the tag and your result is reproducible.
+:::
+
+The download is verified against the checksums published alongside the model, so a
+truncated or altered download fails loudly rather than quietly predicting nonsense.
+
+## 3. Look at what you downloaded
+
+Every published model ships a manifest, `ephysatlas_model.json`, and the wrapper exposes it
+as `.index`. You never have to guess what a model consumes or emits:
+
+```python
+index = model.index
+
+print(index["model_id"])            # 2026_W42_Cosmos_flimsy-thistle-cat
+print(index["task"])                # region-classification
+print(index["granularity"])         # channel
+print(index["vintage"])             # 2026_W42
+
+print(len(model.inputs["features"]))  # 48   — feature columns it needs
+print(model.inputs["index"])          # ['pid', 'channel']
+print(model.config["region_map"])     # Cosmos
+print(model.config["class_acronyms"])
+# ['void', 'MB', 'Isocortex', 'CB', 'TH', 'CNU', 'OLF', 'CTXsp', 'root', 'HB',
+#  'HPF', 'HY', 'void_fluid']
+```
+
+So this model classifies each channel into one of 13 **Cosmos**-level regions, from 48
+feature columns, on a table indexed by `(pid, channel)`.
+
+## 4. Verify your install reproduces the model
+
+Before trusting a single prediction, run the self-test. It re-predicts the example that
+ships with the model and compares against the shipped expected output:
+
+```python
+model.selftest()
+# True
+```
+
+This is the guard against version skew. A different XGBoost build, a NumPy upgrade that
+changed a dtype, or features whose units moved between vintages all surface here as one
+explicit failure — instead of showing up later as regions that are subtly, silently wrong.
+
+Make this the first thing you run after any environment change.
+
+## 5. Predict
+
+The model bundles a small example feature table, so you can predict without any data of
+your own:
+
+```python
+import pandas as pd
+
+sample = model.path_model / "example" / "features_sample.parquet"
+df = pd.read_parquet(sample)
+
+print(df.shape[0])       # 500 — one row per channel
+print(df.index.names)    # ['pid', 'channel']
+
+out = model.predict(df)
+```
+
+## 6. Read the output
+
+`predict` returns a DataFrame indexed exactly like its input:
+
+```python
+print(out[["predicted_acronym", "prediction_probability", "fold_agreement"]].head())
+```
+
+| column | meaning |
+|---|---|
+| `predicted_acronym` | Winning region, as an Allen acronym (`Isocortex`, `TH`, …) |
+| `predicted_atlas_id` | The same region as a numeric Allen structure id |
+| `prediction_probability` | Fold-averaged probability of the winning class |
+| `fold_agreement` | Fraction of the 5 fold models that voted for the winner |
+| `p_<acronym>` | One column per class, with its fold-averaged probability |
+
+`fold_agreement` is the honest confidence signal. A channel with
+`prediction_probability` of 0.6 but `fold_agreement` of 1.0 is a consistent call the model
+is merely uncertain about; 0.6 with an agreement of 0.4 means the folds disagree, which is
+a different and usually worse situation.
+
+Summarise across the probe:
+
+```python
+print(out["predicted_acronym"].value_counts())
+
+print(
+    f"mean confidence {out['prediction_probability'].mean():.3f}, "
+    f"mean fold agreement {out['fold_agreement'].mean():.3f}"
+)
+```
+
+## 7. Join predictions back onto your features
+
+The output columns are namespaced on purpose. Feature and cluster tables already carry
+histology-derived `acronym` and `atlas_id` columns, so bare names would collide and
+overwrite your ground truth. `predicted_*` never does:
+
+```python
+joined = df.join(out)
+print(joined.shape)   # your feature columns, plus the prediction columns
+```
+
+If your table does carry histology labels, that join is exactly how you compare the
+model's call against them.
+
+## 8. Plot the features along the probe
+
+Now look at the data the prediction came from. Features vary systematically with depth,
+which is the whole reason a decoder works at all:
+
+```python
+import matplotlib.pyplot as plt
+import ephysatlas.plots
+
+fig, axs = ephysatlas.plots.plot_features_distributions(
+    df, x_list=["rms_lf", "psd_delta", "psd_gamma", "rms_ap", "spike_count"]
+)
+plt.show()
+```
+
+For the depth-resolved view — each feature as a colour-coded strip down the probe, beside
+the brain regions — see
+[plotting features along the probe](../how-to/plot-features-along-probe.qmd). That guide
+needs channel coordinates (`x`, `y`, `z`, `axial_um`, `lateral_um`) alongside the features,
+which the bundled sample does not carry.
+
+## What's next?
+
+You have run a published model end to end. To use it on your own recording you need to
+produce a feature table in the shape this model expects — 48 named columns of
+**denoised, aggregated** features. That is three steps:
+
+1. [Compute features from your recording](../how-to/compute-features-spikeglx.qmd) — or
+   from [NWB](../how-to/compute-features-nwb.qmd) /
+   [Zarr](../how-to/compute-features-zarr.qmd) sources.
+2. [Aggregate and denoise them](../how-to/aggregate-and-denoise.qmd) — a single snippet
+   table is *not* what the model was trained on. For a SpikeGLX recording, steps 1 and 2
+   are [one call](../how-to/compute-features-spikeglx.qmd#from-recording-to-brain-regions).
+3. [Predict](../how-to/predict-regions.qmd), passing your own table instead of the sample.
+
+Other directions:
+
+- [Predict features from position](../how-to/predict-features-from-position.qmd) — the
+  spatial encoder runs the other way round, turning coordinates into expected features.
+- [Predict unit phenotypes from position](../how-to/predict-unit-phenotypes.qmd) — the
+  same for spike-sorted units.
+- [Core concepts](../explanation/concepts.qmd) — what a vintage is, and why denoising
+  matters.
+- [Model families](../explanation/model-families.qmd) — how the four families relate.
+- [API reference](../api/index.qmd) — every parameter of everything above.

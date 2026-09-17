@@ -1,0 +1,167 @@
+---
+title: "How to compute features from SpikeInterface Zarr stores"
+---
+
+This guide computes features from a recording saved in the **SpikeInterface-native Zarr**
+layout — the format behind, for example, the AIND / open-ephys WavPack-compressed
+`ecephys_compressed/*.zarr` stores. Local paths and remote object stores (S3, GCS) work
+the same way.
+
+The workflow matches [SpikeGLX files](compute-features-spikeglx.qmd) — window, options,
+`compute_snippet`. Only the calculator changes.
+
+::: {.callout-important}
+## This is not NWB-with-a-Zarr-backend
+
+`SpikeInterfaceZarrFeatureCalculator` reads a `ZarrRecordingExtractor` store — the layout
+`spikeinterface.core.read_zarr` produces, with `traces_seg0` and friends inside.
+
+An **NWB** file written with a Zarr backend (`.nwb.zarr`) is a different format despite
+also being Zarr on disk. Read those with
+[`NwbFeatureCalculator`](compute-features-nwb.qmd) and `backend="zarr"`. Using the wrong
+calculator produces an opaque reader error.
+:::
+
+## Prerequisites
+
+SpikeInterface ships in the `[full]` extra:
+
+```bash
+pip install -e ".[full]"
+```
+
+Two further packages depend on where and how your store is written, and are **not**
+installed by either extra:
+
+| You need | When |
+|---|---|
+| `s3fs` | Reading a store from S3 |
+| `wavpack_numcodecs` | Decompressing AIND WavPack stores |
+
+```bash
+pip install s3fs wavpack_numcodecs
+```
+
+`wavpack_numcodecs` must be **imported** before reading, so it registers its codec with
+numcodecs:
+
+```python
+import wavpack_numcodecs  # noqa: F401  — registers the WavPack codec
+```
+
+## A public store, streamed from S3
+
+`storage_options` is forwarded straight to `read_zarr`. Use `{"anon": True}` for
+unauthenticated reads of a public bucket:
+
+```python
+import wavpack_numcodecs  # noqa: F401  — registers the WavPack codec
+
+from ephysatlas.feature_calculators import (
+    FeatureComputationOptions,
+    SnippetWindow,
+    SpikeInterfaceZarrFeatureCalculator,
+)
+
+S3_LF = (
+    "s3://aind-open-data/ecephys_830794_2026-01-26_12-02-05/ecephys/"
+    "ecephys_compressed/experiment1_Record Node 101#Neuropix-PXI-100.ProbeA-LFP.zarr"
+)
+
+calc = SpikeInterfaceZarrFeatureCalculator(
+    lf_zarr=S3_LF,
+    storage_options={"anon": True},
+    name="aind_830794_ProbeA",
+)
+
+result = calc.compute_snippet(
+    SnippetWindow(t_start=100.0, duration_ap=0.0, duration_lf=1.0),
+    FeatureComputationOptions(
+        features_to_compute=["lf", "csd"], include_trajectory=False
+    ),
+)
+print(result.features.sort_values("channel")[["channel", "rms_lf", "psd_delta"]].head())
+```
+
+::: {.callout-note}
+`include_trajectory=False` is right for non-IBL data: trajectory metadata is looked up in
+the IBL database, so leaving it enabled only logs a failed lookup.
+:::
+
+## Local stores
+
+Local stores need no `storage_options`. Point the calculator at both bands to get the full
+feature set:
+
+```python
+from pathlib import Path
+
+calc = SpikeInterfaceZarrFeatureCalculator(
+    ap_zarr="/data/ecephys_compressed/experiment1_...ProbeD-AP.zarr",
+    lf_zarr="/data/ecephys_compressed/experiment1_...ProbeD-LFP.zarr",
+    name="probeD",
+)
+
+result = calc.compute_snippet(
+    SnippetWindow(t_start=100.0, duration_ap=1.0, duration_lf=1.0),
+    FeatureComputationOptions(
+        features_to_compute=["lf", "csd", "ap"],
+        output_dir=Path("/data/features"),
+        include_trajectory=False,
+    ),
+)
+print(result.features.shape)
+```
+
+AP and LF live in **separate stores** in this format — unlike NWB, where one file usually
+holds both bands. Note the `-AP` / `-LFP` suffixes above.
+
+At least one of `ap_zarr` / `lf_zarr` is required; supplying neither raises `ValueError`.
+Stores are opened lazily on first access, so constructing the calculator is cheap.
+
+## Naming the output
+
+`name` defaults to the stem of the first available store, which for these paths is long
+and awkward. Set it explicitly — it becomes the first index level of the feature table and
+the probe-level output directory:
+
+```python
+calc = SpikeInterfaceZarrFeatureCalculator(lf_zarr=S3_LF, name="aind_830794_ProbeA")
+```
+
+## Probe version
+
+`neuropixel_version` (default `1`) is forwarded to destriping. Set `2` for NP2 probes:
+
+```python
+calc = SpikeInterfaceZarrFeatureCalculator(
+    lf_zarr=..., name=..., neuropixel_version=2
+)
+```
+
+## Troubleshooting
+
+**`ValueError: At least one of ap_zarr or lf_zarr must be provided`** — neither store was
+given.
+
+**A numcodecs error about an unknown codec `wavpack`** — you did not import
+`wavpack_numcodecs` before reading. Import it at the top of your script.
+
+**A filesystem error on an `s3://` path** — install `s3fs`. If the bucket is public, also
+pass `storage_options={"anon": True}`; without it, `read_zarr` tries to sign the request
+and fails on missing credentials.
+
+**A reader error mentioning missing groups or attributes** — you may have an NWB-Zarr
+file rather than an SI-native store. See the callout at the top of this page.
+
+**`NotImplementedError: ... recording spans 4 shanks/groups ...`** — the store's channel
+groups cover more than one shank, and feature computation is single-shank. Give each
+calculator one shank's channels; see
+[one shank per calculator](../explanation/feature-pipeline.qmd#one-shank-per-calculator).
+
+## Next steps
+
+- [Tune the computation](tune-feature-computation.qmd) — parameters shared by every source
+- [Aggregate and denoise](aggregate-and-denoise.qmd) — the step before prediction
+- [Predict brain regions](predict-regions.qmd)
+- [`SpikeInterfaceZarrFeatureCalculator` API](../api/feature_calculators.SpikeInterfaceZarrFeatureCalculator.qmd)

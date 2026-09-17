@@ -1,0 +1,389 @@
+---
+title: "Model manifest"
+---
+
+Every published model ships `ephysatlas_model.json` — the **publication contract**. It is
+a discriminated union keyed on `model_class` that normalises every model family into one
+shape, which is what lets a single `load_pretrained` call serve them all.
+
+A model directory without a manifest is not loadable. The manifest is also the only record
+of settings that cannot be recovered from the weights, such as the spatial encoder's
+neighbourhood radius.
+
+ibleatools only ever **reads** this file:
+[`read_manifest`](../api/model_registry.read_manifest.qmd) parses it,
+[`resolve_model`](../api/model_registry.resolve_model.qmd) fetches the directory, and
+[`verify_checksums`](../api/model_registry.verify_checksums.qmd) validates the bytes.
+
+```python
+model = load_pretrained(
+    "int-brain-lab/ea-decoder-channel-xgboost", revision="2026_W42"
+)
+print(model.index)   # the parsed manifest
+```
+
+## Common blocks
+
+Every manifest, regardless of family, carries these.
+
+| key | type | meaning |
+|---|---|---|
+| `model_id` | str | Human-readable release id, e.g. `2026_W42_Cosmos_flimsy-thistle-cat` |
+| `task` | str | What the model does: `region-classification`, `spatial-encoding`, `unit-encoding`, … |
+| `model_class` | str | **The dispatch key.** Selects the wrapper class |
+| `vintage` | str | The release this model belongs to |
+| `granularity` | str | `channel` or `unit` |
+| `method` | str | Model type, e.g. `xgboost`, `transformer`, `hierarchical_gmm` |
+| `artifacts` | dict | Role → filename(s), for every published file the loader needs |
+| `inputs` | dict | Row identity and required columns |
+| `outputs` | dict | What `predict` returns |
+| `config` | dict | Family-specific settings |
+| `training` | dict | Seed, dataset sizes, training-set hash |
+| `environment` | dict | Package versions at training time |
+
+### `model_class` dispatch
+
+`load_pretrained` maps `model_class` to a wrapper 1:1. Each family's trainer writes a
+different flavour of name — the encoders and the probe transformer record the bare class
+name, the region classifier the fully-qualified XGBoost class:
+
+| `model_class` | wrapper |
+|---|---|
+| `xgboost.sklearn.XGBClassifier` | [`RegionClassifier`](../api/regionclassifier.RegionClassifier.qmd) |
+| `ProbeTransformer` | [`ProbeTransformerClassifier`](../api/models.probe_transformer.ProbeTransformerClassifier.qmd) |
+| `NeighborInpaintingModel` | [`SpatialEncoder`](../api/models.encoder_inpainting.SpatialEncoder.qmd) |
+| `UnitAutoencoder` | [`UnitEncoder`](../api/models.unit_encoder.UnitEncoder.qmd) |
+
+An unrecognised value raises `ValueError` listing the known ones and suggesting an
+upgrade — a model published by a newer ibleatools than yours fails clearly rather than
+loading half-correctly.
+
+### `environment`
+
+The versions the model was trained with. This is the reference to compare against when
+[`selftest`](../how-to/download-models.qmd) fails. The region decoder `2026_W42`:
+
+```json
+{
+  "python": "3.12.12",
+  "xgboost": "3.4.1",
+  "scikit_learn": "1.8.0",
+  "numpy": "2.5.4",
+  "pandas": "2.3.3",
+  "torch": "2.14.1",
+  "ephysatlas": "0.9.0",
+  "iblatlas": "1.3.0"
+}
+```
+
+## Region-classification manifests
+
+`task: "region-classification"`, `model_class: "xgboost.sklearn.XGBClassifier"`.
+
+```json
+{
+  "model_id": "2026_W42_Cosmos_flimsy-thistle-cat",
+  "task": "region-classification",
+  "model_class": "xgboost.sklearn.XGBClassifier",
+  "vintage": "2026_W42",
+  "granularity": "channel",
+  "method": "xgboost",
+  "artifacts": {
+    "weights": "model.ubj",
+    "folds": ["FOLD00", "FOLD01", "FOLD02", "FOLD03", "FOLD04"],
+    "split": "split.json"
+  },
+  "inputs": {
+    "table": "raw_ephys_features_denoised.pqt",
+    "index": ["pid", "channel"],
+    "features": ["rms_lf", "psd_lfp", "..."],
+    "feature_order_sha256": "7493de89a612e7e348ca2f077898dc599603bf1ba6c73803507ffef66c3f23bb"
+  },
+  "outputs": {
+    "kind": "categorical",
+    "columns": ["predicted_acronym", "predicted_atlas_id",
+                "prediction_probability", "fold_agreement"]
+  },
+  "config": {
+    "classes": [0, 313, 315, 512, 549, 623, 698, 703, 997, 1065, 1089, 1097, 2000],
+    "class_acronyms": ["void", "MB", "Isocortex", "CB", "TH", "CNU", "OLF",
+                       "CTXsp", "root", "HB", "HPF", "HY", "void_fluid"],
+    "region_map": "Cosmos",
+    "accuracy": 0.6123792770419426
+  }
+}
+```
+
+| key | meaning |
+|---|---|
+| `artifacts.weights` | The all-data model, used by `estimator="global"` |
+| `artifacts.folds` | Fold subdirectories under `folds/`, averaged by `estimator="ensemble"` |
+| `artifacts.split` | The insertion split used in training |
+| `inputs.table` | Which published table the features must come from — **the denoised one** |
+| `inputs.features` | The required columns, **in order** (48 for `2026_W42`) |
+| `config.classes` | Allen structure ids, index-aligned with `class_acronyms` |
+| `config.region_map` | Region ontology of the classes, e.g. `Cosmos` |
+| `config.accuracy` | Held-out accuracy at training time |
+
+A fold is loadable when its weights file is present. Folds ship weights only and carry no
+manifest of their own, which is why the loader keys on the weights file — that is what
+keeps every fold in the ensemble instead of silently dropping some.
+
+### The probe transformer
+
+`task: "region-classification-transformer"`, `model_class: "ProbeTransformer"`. The same
+classes and region map, with a whole-probe model per seed instead of folds:
+
+```json
+{
+  "model_id": "ea-decoder-channel-transformer",
+  "task": "region-classification-transformer",
+  "model_class": "ProbeTransformer",
+  "vintage": "2026_W42",
+  "granularity": "channel",
+  "artifacts": {
+    "weights": "best_model.pt",
+    "scaler": "feature_scaler.npz",
+    "seeds": ["SEED00", "SEED01", "SEED02", "SEED03", "SEED04"]
+  },
+  "inputs": {
+    "index": ["pid", "channel"],
+    "features": ["alpha_mean", "alpha_std", "..."],
+    "feature_order_sha256": "49a1fc2d942c7187f1f2b050526e95dc85a91d3e17999d88abbc0b5d86816753",
+    "position_column": "axial_um"
+  },
+  "outputs": {
+    "kind": "categorical",
+    "columns": ["predicted_acronym", "predicted_atlas_id",
+                "prediction_probability", "seed_agreement"]
+  },
+  "config": {
+    "classes": [0, 313, "..."],
+    "class_acronyms": ["void", "MB", "..."],
+    "region_map": "Cosmos",
+    "model_config": {"d_model": 128, "n_heads": 4, "n_transformer_layers": 4,
+                     "dropout": 0.3, "n_features": 51, "n_classes": 13}
+  }
+}
+```
+
+`inputs.position_column` is the depth the transformer uses as its positional signal, read
+alongside the 51 features. `estimator="ensemble"` averages the seeds; `"global"` uses the
+first one.
+
+## Spatial-encoding manifests
+
+`task: "spatial-encoding"`, `model_class: "NeighborInpaintingModel"`.
+
+```json
+{
+  "model_id": "2026_W42_encoder",
+  "task": "spatial-encoding",
+  "model_class": "NeighborInpaintingModel",
+  "vintage": "2026_W42",
+  "granularity": "channel",
+  "method": "transformer",
+  "artifacts": {
+    "weights": "spatial_encoder.pt",
+    "context": ["agea_vol_pca.npy", "merfish_vol_pca.npy"],
+    "confidence": "confidence_model.pt",
+    "neighbor_bank": "neighbor_bank.npz",
+    "stats": "preprocessing/channel_stats.npz",
+    "split": "split.json",
+    "results": ["results/confidence_validation.json", "results/test_r2.json"]
+  },
+  "inputs": {
+    "table": "channels.pqt",
+    "index": ["pid", "channel"],
+    "columns": ["x", "y", "z"]
+  },
+  "outputs": {
+    "kind": "continuous",
+    "columns": ["rms_lf", "psd_delta", "..."],
+    "feature_order_sha256": "06be1cc9256bcb6bd85b0b45e9e1769f35ef417bf6ee9f0dc8d5603f947163c6"
+  },
+  "config": {
+    "architecture": {"f_ctx": 100, "f_ephys": 43, "f_out": 43, "d_model": 128,
+                     "nhead": 8, "depth": 2, "drop": 0.15, "use_positions": false},
+    "neighbourhood": {"radius_um": 500.0, "m_max": 8,
+                      "selection": "nearest", "allow_same_probe": false},
+    "context": {"n_cell_pcs": 50, "n_gene_pcs": 50, "voxel_um": 200, "sources": {"...": "..."}}
+  }
+}
+```
+
+Note the direction: `inputs.columns` are coordinates and `outputs.columns` are features —
+the reverse of the classifier.
+
+**The weights alone are not a usable model.** It also needs the frozen PCA context volumes
+and a bank of training-channel features to draw neighbours from, neither of which can be
+recomputed downstream:
+
+| role | why it ships |
+|---|---|
+| `weights` | The encoder itself |
+| `context` | Frozen AGEA + MERFISH PCA volumes, sampled at the query coordinates |
+| `neighbor_bank` | Real features of training channels, to draw neighbours from |
+| `confidence` | The per-probe confidence model |
+| `stats` | The training statistics, including the per-feature clipping thresholds |
+| `split` | The insertion split used in training |
+| `results` | Validation metrics, for the record |
+
+`config.neighbourhood` is not reconstructible from the weights, so the manifest is the only
+record of it. `allow_same_probe: false` means neighbours come from *other* probes only,
+which keeps a prediction honest for a probe already in the bank.
+`architecture.use_positions: false` (from `2026_W39` on) means the model was trained
+without the position input; an `ephysatlas` that predates the option cannot load it.
+
+## Unit-encoding manifests
+
+`task: "unit-encoding"`, `model_class: "UnitAutoencoder"`.
+
+```json
+{
+  "model_id": "2026_W42_unit",
+  "task": "unit-encoding",
+  "model_class": "UnitAutoencoder",
+  "vintage": "2026_W42",
+  "granularity": "unit",
+  "method": "hierarchical_gmm",
+  "artifacts": {
+    "autoencoder": "autoencoder.pt",
+    "config": "config.json",
+    "scaler": "shared_latent_scaler.joblib",
+    "types": "types_gmm.joblib",
+    "subtypes": "subtypes_gmm.joblib",
+    "subtype_parent": "subtype_parent.npy",
+    "context_transform": "context_transform.joblib",
+    "type_weights": "context_weights_types.pt",
+    "subtype_weights": "context_weights_subtypes.pt",
+    "members": "members.npz",
+    "stats": "preprocessing/unit_stats.npz",
+    "split": "split.json",
+    "context": ["agea_vol_pca.npy", "merfish_vol_pca.npy"],
+    "results": ["results/summary.json"]
+  },
+  "inputs": {
+    "index": ["pid", "cluster"],
+    "columns": ["x", "y", "z"],
+    "modalities": ["waveform", "acg", "stpc"]
+  },
+  "outputs": {
+    "kind": "continuous",
+    "columns": ["depolarisation_slope", "recovery_slope", "..."],
+    "feature_order_sha256": "8536d8c5c99959110df046905224cf91de680434287153131d3ba85eaed968af",
+    "latent_dim": 60
+  },
+  "config": {
+    "architecture": {"modalities": ["waveform", "acg", "stpc"], "modality_latent_dim": 20,
+                     "latent_dim": 60, "n_types": 30, "n_subtypes": 300,
+                     "max_subtypes_per_type": 10, "min_units_per_subtype": 20},
+    "context": {"n_cell_pcs": 50, "n_gene_pcs": 50,
+                "source_model": "int-brain-lab/ea-encoder-channel", "data_vintage": "2026_W41"}
+  }
+}
+```
+
+`inputs.columns` are again coordinates: `predict` maps positions to the expected unit
+phenotype, the 10 `outputs.columns`. `inputs.modalities` are what `encode` takes for a
+unit. The artifacts split the model into its parts:
+
+- the autoencoder and its latent scaler;
+- the type and sub-type mixtures, and the parent type of each sub-type;
+- the context networks for the type and sub-type weights;
+- the training members each sub-type is read out through.
+
+`config.context.source_model` names the spatial-encoder release whose context volumes the
+unit model shares.
+
+## Feature-order digests
+
+Where a manifest carries `feature_order_sha256`, the loader re-hashes the feature list and
+compares. A mismatch raises `ValueError`.
+
+This catches a manifest that has been edited or reordered — which would otherwise feed the
+model a correctly-named but wrongly-ordered feature matrix and produce plausible,
+completely wrong numbers.
+
+```python
+import ephysatlas.model_registry as mr
+
+digest = mr.feature_order_sha256(model.inputs["features"])
+mr.validate_feature_order(
+    model.inputs["features"], model.inputs.get("feature_order_sha256")
+)
+```
+
+## `checksums.json`
+
+Published alongside the manifest: a per-file digest of everything in the release, verified
+on load so a truncated download or a file silently dropped at publish time fails loudly.
+
+Supported hashers are `blake2b`, `md5` and `sha1`.
+
+Files edited on the Hub *after* publication are excluded, so they never cause a spurious
+failure: `checksums.json` itself (it cannot cover itself), `README.md` (the model card),
+`LICENSE`, `.gitattributes`, and the Hub's `.git/` and `.cache/` trees.
+
+```python
+from pathlib import Path
+import ephysatlas.model_registry as mr
+
+# missing_ok=False is what load_pretrained uses for a local directory
+mr.verify_checksums(Path("/data/models/ea-decoder-2026_W42"), missing_ok=False)
+```
+
+## `example/` — the golden files
+
+A release may ship an `example/` directory:
+
+```text
+example/
+├── features_sample.parquet      a small input the model can run on
+└── expected_predictions.parquet the output the publisher got from it
+```
+
+The unit encoder ships positions and synthetic units instead
+(`positions_sample.parquet`, `units_sample.npz`, `expected_predictions.parquet`,
+`expected_latents.npy`), so its self-test covers both `predict` and `encode`.
+
+This is what [`selftest`](../how-to/download-models.qmd) uses, and what makes the tutorial
+runnable with no data of your own. `selftest` raises `FileNotFoundError` when a model ships
+no `example/` — the probe transformer's `2026_W37` release, for one.
+
+Tolerances differ by family, for a reason:
+
+| family | tolerance | why |
+|---|---|---|
+| `RegionClassifier` | `rtol=1e-5` | Tree ensembles are near-exactly reproducible |
+| `ProbeTransformerClassifier` | `rtol=1e-4`, `atol=1e-5` | float32 network outputs, as below |
+| `SpatialEncoder` | `rtol=1e-4`, `atol=1e-5` | float32 transformer outputs genuinely drift ~1e-4 from BLAS and library differences. `atol` guards near-zero outputs, which no relative bound can |
+| `UnitEncoder` | `rtol=1e-4`, `atol=1e-5` | float32 network outputs, as above |
+
+All are far tighter than real corruption or a wrong model, which drift by orders of
+magnitude more.
+
+## Reading a manifest without loading a model
+
+```python
+from pathlib import Path
+import ephysatlas.model_registry as mr
+
+manifest = mr.read_manifest(Path("/data/models/ea-decoder-2026_W42"))
+
+# A flattened summary of the common fields
+print(mr.meta_from_manifest(manifest))
+
+# Class ids -> acronyms in the manifest's region map
+print(mr.class_acronyms(manifest["config"]["classes"],
+                        manifest["config"]["region_map"]))
+```
+
+`read_manifest` returns `None` when there is no manifest, rather than raising — the
+wrappers turn that into an explicit error.
+
+## See also
+
+- [Download a published model](../how-to/download-models.qmd)
+- [Model families](../explanation/model-families.qmd)
+- [`model_registry` API](../api/model_registry.read_manifest.qmd)

@@ -1,0 +1,254 @@
+---
+title: "How to tune feature computation"
+---
+
+Everything on this page applies to **every** calculator —
+[SpikeGLX](compute-features-spikeglx.qmd), [NWB](compute-features-nwb.qmd),
+[Zarr](compute-features-zarr.qmd), IBL PID, and the
+[LFPack and NumPy](compute-features-lf-only.qmd) LF-only sources alike. The
+source-specific pages cover getting a computation running; this one covers changing how
+it runs. The same `options` also go to `compute_denoised_features`, which applies them to
+every snippet.
+
+## Computation options
+
+`FeatureComputationOptions` controls one `compute_snippet` call. Every field has a working
+default, so set only what you need to change.
+
+### What to compute, and where it goes
+
+| field | default | effect |
+|---|---|---|
+| `features_to_compute` | `None` | Families to compute: any of `"lf"`, `"csd"`, `"ap"`, `"waveforms"`. `None` computes everything the available bands support |
+| `output_dir` | `None` | Root for the probe/snippet output tree. `None` writes nothing and returns features in memory only |
+| `scratch_dir` | `None` | Scratch space for waveform extraction. `None` uses `dartsort/` in the system temp directory (`$TMPDIR`). Point this at a fast local disk when computing `waveforms`; a directory that cannot be created raises `OSError` |
+
+### Caching and reruns
+
+| field | default | effect |
+|---|---|---|
+| `skip_saved_computation` | `False` | Reuse feature files already in the snippet directory instead of recomputing them |
+| `recompute_channels` | `False` | Rewrite `channels.pqt` even when it exists |
+| `save_waveforms` | `False` | Persist the waveform arrays, not just the derived features |
+
+`skip_saved_computation=True` is what makes a long multi-snippet run resumable. Which
+families were reused is reported back:
+
+```python
+result = calc.compute_snippet(window, options)
+print(result.computed_features)   # recalculated in this call
+print(result.cached_features)     # loaded from disk
+```
+
+### Trajectory metadata
+
+| field | default | effect |
+|---|---|---|
+| `include_trajectory` | `True` | Try to add `x_target` / `y_target` / `z_target` to the channel table |
+| `require_trajectory` | `False` | Raise instead of continuing when that metadata is missing |
+
+For non-IBL data set `include_trajectory=False`: the lookup goes to the IBL database, so
+leaving it on only logs a failure. If your pipeline *depends* on those coordinates, set
+`require_trajectory=True` so a missing trajectory fails loudly rather than producing a
+table that quietly lacks the columns.
+
+### Destriping and bad channels
+
+| field | default | effect |
+|---|---|---|
+| `lf_k_filter` | `False` | Spatial-filter mode for LF destriping. `None` disables LF spatial filtering entirely |
+| `skip_lf_destripe` | `False` | Skip LF destriping altogether, for LF that is already preprocessed and decimated (lfpack archives, arrays). Channel labels then come from the source's channel table |
+| `channel_labels` | `None` | Explicit per-channel bad-channel labels, overriding automatic detection |
+| `extra_kwargs` | `{}` | Passed straight through to the underlying engine |
+
+By default the calculator resolves channel labels automatically — from stored labels, from
+the `.cbin` metadata, or by detecting them on the snippet. Pass `channel_labels` to
+override that. To **disable** bad-channel handling completely, pass an all-zero array:
+
+```python
+import numpy as np
+
+options = FeatureComputationOptions(
+    features_to_compute=["lf"],
+    channel_labels=np.zeros(384),   # every channel treated as good
+)
+```
+
+That is useful when comparing against an external pipeline that does no bad-channel
+rejection, or when debugging a suspicion that detection is discarding good channels.
+
+## Per-feature parameters
+
+`feature_params` reaches inside individual feature families. It accepts either the typed
+objects or an equivalent nested dict — these two are the same:
+
+```python
+from ephysatlas.feature_calculators import CsdParams, FeatureParams
+
+FeatureParams(csd=CsdParams(scale=False))
+{"csd": {"scale": False}}
+```
+
+Only what you set changes; every other parameter keeps its default, and the default
+`FeatureParams()` reproduces the standard output exactly.
+
+::: {.callout-tip}
+Typos fail loudly. An unknown family name raises `ValueError` and an unknown sub-parameter
+raises `TypeError`, so a misspelled option can never be silently ignored — which is the
+main reason to prefer the typed objects: your editor catches it before Python does.
+:::
+
+### LF parameters — `LfParams`
+
+| field | default | meaning |
+|---|---|---|
+| `bands` | `None` | Frequency bands for the LF spectral step. `None` uses the standard delta/theta/alpha/beta/gamma set |
+| `decay_features` | `True` | Compute the PSD-decay (spectral parameterisation) features. The `csd` family never computes them on its CSD and BPR traces |
+| `compute_rms_no_car` | `False` | Also emit `rms_lf_no_car` — LF RMS destriped *without* common-average referencing |
+
+```python
+from ephysatlas.feature_calculators import LfParams
+
+options = FeatureComputationOptions(
+    features_to_compute=["lf"],
+    feature_params=FeatureParams(lf=LfParams(compute_rms_no_car=True)),
+)
+```
+
+`rms_lf_no_car` is opt-in because CAR removes shared signal across channels; the no-CAR
+RMS retains it, which is informative for some analyses and misleading for others.
+
+### CSD parameters — `CsdParams`
+
+| field | default | meaning |
+|---|---|---|
+| `bands` | `None` | Frequency bands for the CSD spectral step |
+| `decimate` | `10` | Temporal decimation applied before computing the CSD. `1` skips it |
+| `scale` | `True` | Scale the spatial differences by the tissue conductivity and the intercontact distance (A/m³ for CSD, A/m² for BPR). `False` keeps the raw differences in V |
+| `denoise` | `True` | Apply the Cadzow denoiser to the decimated LF before the CSD and BPR finite differences. Turn it off for LF that is already Cadzow-denoised, so it is not denoised twice |
+| `cadzow_kwargs` | `None` | Overrides of the Cadzow parameters. `None` uses `features.cadzow_lfp_kwargs(geometry)`; `fs` and `h` cannot be overridden |
+
+LF-only sources whose LF is already decimated and denoised need
+`CsdParams(decimate=1, denoise=False)`; see
+[LFPack archives and NumPy arrays](compute-features-lf-only.qmd).
+
+```python
+options = FeatureComputationOptions(
+    features_to_compute=["csd"],
+    feature_params={"csd": {"scale": False}},
+)
+```
+
+The Cadzow defaults depend on the probe layout. `cadzow_lfp_kwargs` returns the
+ibl-neuropixel LFP defaults: Gavish-Donoho shrinkage (`shrinkage=2.25`) on the full
+lateral × depth grid (`fill_grid=True`) for the NP1 checkerboard, and `shrinkage=1.22`
+without grid filling for NP2, whose contacts already fill their grid. To see what a
+geometry gets, or to go back to the rank cut used before vintage `2026_W42`:
+
+```python
+import neuropixel
+from ephysatlas.features import cadzow_lfp_kwargs
+
+print(cadzow_lfp_kwargs(neuropixel.trace_header(version=1)))
+# {'fill_grid': True, 'rank': 5, 'niter': 1, 'fmax': None, 'nswx': 64, 'ovx': 32,
+#  'ppca_k': 2.0, 'shrinkage': 2.25}
+
+previous = CsdParams(
+    cadzow_kwargs={"fill_grid": False, "shrinkage": None, "gap_threshold": 2.0, "fmax": 125}
+)
+```
+
+Changing the Cadzow parameters changes every `*_csd` and `*_bpr` value, so the output no
+longer matches the published models.
+
+### Waveform parameters — `WaveformParams`
+
+These are DARTsort detection parameters, and they need the `[full]` extra.
+
+| field | default | meaning |
+|---|---|---|
+| `n_jobs` | `0` | `0` runs in the main process (CUDA initialised in-process; GPU memory is not freed between calls). `1` runs in a worker subprocess, which frees GPU memory on exit but needs a working multiprocessing environment |
+| `detection_threshold` | `4.0` | Peak detection threshold, in units of channel RMS |
+| `spatial_dedup_radius_um` | `150.0` | Radius within which only the largest simultaneous peak is kept |
+| `positive_temporal_dedup_radius_samples` | `7` | Samples around a trough in which positive peaks are suppressed |
+| `residnorm_decrease_threshold` | `3.162` | Minimum residual-norm decrease for a detected spike to be subtracted |
+
+```python
+from ephysatlas.feature_calculators import WaveformParams
+
+options = FeatureComputationOptions(
+    features_to_compute=["waveforms"],
+    scratch_dir="/fast/scratch",
+    feature_params=FeatureParams(
+        waveforms=WaveformParams(detection_threshold=5.0, n_jobs=1)
+    ),
+)
+```
+
+::: {.callout-warning}
+Changing `detection_threshold` changes `spike_count` and every waveform-shape feature —
+which means the result no longer matches what the published models were trained on. Keep
+the defaults if you intend to run a published model over the output.
+:::
+
+## Inspecting the destriped data
+
+`get_destriped_snippet` runs the same destriping as `compute_snippet` but stops there, so
+you can look at the intermediate voltage without paying for feature computation:
+
+```python
+snippet = calc.get_destriped_snippet(window)
+
+snippet.raw.raw_ap      # (channels, samples) raw AP, volts — or None
+snippet.raw.raw_lf      # (channels, samples) raw LF, volts — or None
+snippet.raw.fs_ap       # AP sampling rate, Hz
+snippet.raw.fs_lf       # LF sampling rate, Hz
+snippet.des_ap          # destriped AP — or None
+snippet.des_lf          # destriped LF — or None
+snippet.geometry        # channel geometry used by the destriper
+snippet.channel_labels  # bad-channel labels the destriper applied
+```
+
+This is the tool for "the features look wrong" — plot raw against destriped and see
+whether destriping is the culprit:
+
+```python
+import matplotlib.pyplot as plt
+
+fig, (ax_raw, ax_des) = plt.subplots(1, 2, figsize=(12, 6), sharey=True)
+ax_raw.imshow(snippet.raw.raw_lf, aspect="auto", cmap="RdBu_r")
+ax_raw.set(title="raw LF", ylabel="channel")
+ax_des.imshow(snippet.des_lf, aspect="auto", cmap="RdBu_r")
+ax_des.set(title="destriped LF")
+plt.show()
+```
+
+`get_destriped_snippet` also accepts a `DestripeOptions` to vary `lf_k_filter`,
+`ap_k_filter`, `neuropixel_version` and `nshank` for the inspection alone, without
+touching your production options.
+
+## Provenance
+
+Every feature file written carries the run's provenance in its pandas `.attrs` — package
+versions and the parameters used:
+
+```python
+print(result.provenance)
+
+import pandas as pd
+df = pd.read_parquet(result.snippet_level_dir / "lf_features.pqt")
+print(df.attrs)
+```
+
+This is how you establish, months later, which parameters produced a table on disk. When
+`skip_saved_computation` reuses a cached family, its file keeps the provenance of the run
+that originally created it — so a mixed directory tells you the truth about each part.
+
+## Next steps
+
+- [Aggregate and denoise](aggregate-and-denoise.qmd) — combine snippets into a
+  model-ready table
+- [Feature list reference](../reference/feature-list.qmd) — the columns each family emits
+- [The feature pipeline](../explanation/feature-pipeline.qmd) — why destriping and
+  denoising are separate steps
+- [`FeatureComputationOptions` API](../api/feature_calculators.FeatureComputationOptions.qmd)

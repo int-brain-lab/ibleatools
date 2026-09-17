@@ -1,0 +1,146 @@
+---
+title: "How to load compressed LFP"
+---
+
+This guide downloads and loads the **full-recording compressed LFP** archives produced by
+[lfpack](https://github.com/int-brain-lab/lfpack). They are lossy HDF5 encodings of the
+entire LFP trace for every insertion (release **v04**, 1099 insertions), at three tiers.
+
+Unlike the [cells aggregates](load-cells-features.qmd), which hold short per-cell
+snippets, these are the **whole recording**, decompressed on demand.
+
+::: {.callout-important}
+These archives are in a private S3 bucket and need an IBL account — pass a logged-in
+`one.api.ONE` instance.
+:::
+
+::: {.callout-note}
+Reading v04 (lfpack format 2) requires **`lfpack>=1.0.0`**. The v03 archives and their
+`mild` / `aggressive` levels are removed: asking for either level raises `ValueError`.
+`small` replaces `mild`.
+:::
+
+## Tiers
+
+All tiers use the same codec (ε = 100). They differ only in α, the wavelet-packet
+threshold, which is the only parameter that moves decoding:
+
+| `level` | α | File | Size | File / float32 at 250 Hz |
+|---|---|---|---|---|
+| `small` | 14 | `lf_compressed_v04_a14_small_all.h5` | 11.2 GB | 0.57 % |
+| `default` | 7 | `lf_compressed_v04_a07_default_all.h5` | 21.5 GB | 1.10 % |
+| `fine` | 2.5 | `lf_compressed_v04_a2p5_fine_all.h5` | 46.1 GB | 2.35 % |
+
+Use `default` unless size matters (`small`, which decodes like the former v03 `mild` at a
+third of the size) or fidelity matters (`fine`).
+
+Every recording carries its brain locations (`ml` / `ap` / `dv` / `atlas_id` /
+`acronym`), sync knots, bad-channel `labels` and a saturation table.
+
+Known exceptions: insertion `bf96f6d6` has no bad-channel labels, and two insertions are
+fully flagged bad and decode to zeros
+([lfpack#21](https://github.com/int-brain-lab/lfpack/issues/21)).
+
+## S3 layout
+
+```text
+aggregates/atlas/projects/{project}/
+│
+└── lfp_aggregates/
+    ├── lf_compressed_v04_a14_small_all.h5     small   (ε=100, α=14)   ~11 GB
+    ├── lf_compressed_v04_a07_default_all.h5   default (ε=100, α=7)    ~21.5 GB
+    └── lf_compressed_v04_a2p5_fine_all.h5     fine    (ε=100, α=2.5)  ~46 GB
+```
+
+Each archive is a single multi-recording HDF5 file with one top-level group per insertion
+(`pid`), produced by `lfpack.merge_h5`.
+
+## Download
+
+```python
+from pathlib import Path
+
+from one.api import ONE
+import ephysatlas.data
+
+one = ONE(base_url="https://alyx.internationalbrainlab.org")
+local_path = Path("/datadisk/ephys-atlas")
+project = "ibl_neuropixel_brainwide_01"
+
+# default tier (~21.5 GB)
+ephysatlas.data.download_lfp_features(local_path, project=project, one=one)
+
+# small tier (~11 GB)
+ephysatlas.data.download_lfp_features(
+    local_path, project=project, one=one, level="small"
+)
+```
+
+## Load
+
+```python
+from pathlib import Path
+
+import ephysatlas.data
+
+local_path = Path("/datadisk/ephys-atlas")
+project = "ibl_neuropixel_brainwide_01"
+pid = "00a824c0-e060-495f-9ebc-79c82fef4c67"
+
+sr = ephysatlas.data.read_lfp_features(local_path / project, pid)   # level="default"
+
+traces = sr[0:2500, :]   # (2500, nc) float32, volts
+print(sr.nc, sr.fs)      # channel count, sample rate (Hz)
+```
+
+`read_lfp_features` returns an `lfpack.LFPackReader`, a **drop-in replacement for
+`spikeglx.Reader`**. Slicing decompresses only the chunks you ask for, so the full
+recording never enters memory — the 21.5 GB default archive is usable on a laptop.
+
+## Reducing what you read
+
+Two arguments cut the cost of a read:
+
+```python
+# Sum adjacent channels on read: 384 channels -> 96 spatial bins
+sr = ephysatlas.data.read_lfp_features(
+    local_path / project, pid, bin_channels=4
+)
+
+# Open a coarser pyramidal level
+sr = ephysatlas.data.read_lfp_features(local_path / project, pid, scale=1)
+
+# Another tier, if that is what you downloaded
+sr = ephysatlas.data.read_lfp_features(
+    local_path / project, pid, level="small"
+)
+```
+
+`bin_channels` is the one to reach for when sweeping across many recordings: adjacent
+channels are strongly correlated at LFP frequencies, so binning by 4 keeps depth
+resolution useful while quartering the memory.
+
+## Computing features from the archives
+
+To compute the `lf` and `csd` feature families straight from an archive, use
+`LFPackFeatureCalculator`; see
+[compute features from LFPack archives](compute-features-lf-only.qmd). The LF in the
+archive is already destriped, decimated and denoised, so it needs two specific options.
+
+## Working with lfpack directly
+
+`read_lfp_features` is a convenience wrapper that resolves the archive path for you. For
+anything beyond opening a recording — session-clock timestamps, saturation quality
+control, embedded per-channel brain regions, listing the recordings in an archive — use
+`LFPackReader` directly and see the
+[lfpack documentation](https://int-brain-lab.github.io/lfpack/), which documents this
+dataset in depth.
+
+## Next steps
+
+- [Compute features from LFPack archives](compute-features-lf-only.qmd)
+- [Load cells features](load-cells-features.qmd) — spike-triggered LFP, per cell rather
+  than whole-recording
+- [S3 layout reference](../reference/s3-layout.qmd)
+- [`read_lfp_features` API](../api/data.read_lfp_features.qmd)
+- [lfpack documentation](https://int-brain-lab.github.io/lfpack/)
