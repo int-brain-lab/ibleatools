@@ -1324,11 +1324,6 @@ def compute_features_from_destriped(
             df[feature_name], waveforms = config["func"](
                 **config["args"], **config["kwargs"]
             )
-            # Convert spike count to integer type for consistency
-            df[feature_name]["spike_count"] = df[feature_name]["spike_count"].astype(
-                "Int64"
-            )
-
             # Save waveform files if requested from the function call of compute_features_from_raw
             if (output_dir is not None) and kwargs.get("save_waveforms", False):
                 waveforms_dir = output_dir / "waveforms"

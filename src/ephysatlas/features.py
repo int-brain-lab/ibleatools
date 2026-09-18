@@ -597,27 +597,28 @@ class ModelApFeatures(BaseChannelFeatures):
     )
 
 
-class ModelSpikeFeatures(BaseChannelFeatures):
-    """Schema for spike waveform features.
-
-    This schema defines the structure and validation rules for spike waveform
-    features including timing, amplitude, and slope characteristics.
+class ModelSpikeSharedFeatures(BaseChannelFeatures):
+    """Spike-shape fields shared verbatim by `ModelSpikeFeatures` and
+    `ModelSpikeShapeFeatures` (the sparse remap keeps these unchanged).
 
     Attributes:
-        alpha_mean (Series[float]): Mean alpha parameter for spike localization.
-        alpha_std (Series[float]): Standard deviation of alpha parameter.
-        depolarisation_slope (Series[float]): Slope during depolarization phase.
-        peak_time_secs (Series[float]): Time to peak in seconds.
-        peak_val (Series[float]): Peak amplitude value.
-        polarity (Series[float]): Spike polarity (positive/negative).
-        recovery_slope (Series[float]): Slope during recovery phase.
-        recovery_time_secs (Series[float]): Recovery time in seconds.
-        repolarisation_slope (Series[float]): Slope during repolarization phase.
-        spike_count (float): Number of spikes (log2 transformed).
-        tip_time_secs (Series[float]): Time to tip in seconds.
-        tip_val (Series[float]): Tip amplitude value.
-        trough_time_secs (Series[float]): Time to trough in seconds.
-        trough_val (Series[float]): Trough amplitude value.
+        alpha_mean (Series[float]): Mean alpha parameter for spike localization (N/A).
+        alpha_std (Series[float]): Standard deviation of alpha parameter (N/A).
+        depolarisation_slope (Series[float]): Slope during depolarization phase (V/s).
+        polarity (Series[float]): Spike polarity, dimensionless.
+        recovery_slope (Series[float]): Slope during recovery phase (V/s).
+        repolarisation_slope (Series[float]): Slope during repolarization phase (V/s).
+        spike_count (Series[float]): Spike rate, spikes/s (log2 transformed).
+        tip_val (Series[float]): Tip amplitude value (V).
+
+    Note:
+        `tip_val` and the 3 slope columns are computed from waveforms that
+        `dart_subtraction_numpy` has already rescaled back to Volts (DARTsort
+        z-scores internally by channel RMS for detection only).
+        `alpha_mean`/`alpha_std` are DARTsort's localisation amplitude, fit
+        jointly across a multichannel snippet whose channels each carry a
+        different RMS; there is no single scale factor to recover Volts from
+        them, so they stay in DARTsort's native, non-physical units.
     """
 
     alpha_mean: float = pa.Field(
@@ -630,61 +631,94 @@ class ModelSpikeFeatures(BaseChannelFeatures):
         description="Standard deviation of the brightness of the spike (output of the spike localisation code)",
         metadata={"raw_unit": "N/A"},
     )
-    depolarisation_slope: float = pa.Field(coerce=True)
-    peak_time_secs: float = pa.Field(coerce=True)
-    peak_val: float = pa.Field(coerce=True)
+    depolarisation_slope: float = pa.Field(
+        coerce=True,
+        description="Slope of the line crossing the tip and peak points.",
+        metadata={"raw_unit": "V/s"},
+    )
     polarity: float = pa.Field(
         coerce=True,
         description="Sum of each spike polarity divided by the total number of spikes",
         metadata={"raw_unit": "dimensionless"},
     )
-    recovery_slope: float = pa.Field(coerce=True)
-    recovery_time_secs: float = pa.Field(coerce=True)
-    repolarisation_slope: float = pa.Field(coerce=True)
+    recovery_slope: float = pa.Field(
+        coerce=True,
+        description="Slope of the line crossing the trough and recovery points.",
+        metadata={"raw_unit": "V/s"},
+    )
+    repolarisation_slope: float = pa.Field(
+        coerce=True,
+        description="Slope of the line crossing the peak and trough points.",
+        metadata={"raw_unit": "V/s"},
+    )
     spike_count: float = pa.Field(
         coerce=True,
-        description="log2 transformed value of mean spike counts (where the mean is calculated across the snippets by replacing the null values with 0)",
+        description="log2 transformed value of mean spike rate (spikes/s, independent of "
+        "the snippet duration; the mean is calculated across the snippets by "
+        "replacing the null values with 0)",
         metadata={
-            "raw_unit": "count",
-            "transformed_unit": "log2 count",
+            "raw_unit": "count/s",
+            "transformed_unit": "log2 (count/s)",
             "transform": lambda x: np.where(x == 0, np.nan, np.log2(x.astype(float))),
         },
     )
+    tip_val: float = pa.Field(
+        coerce=True,
+        description="Waveform tip amplitude.",
+        metadata={"raw_unit": "V"},
+    )
+
+
+class ModelSpikeFeatures(ModelSpikeSharedFeatures):
+    """Schema for spike waveform features.
+
+    This schema defines the structure and validation rules for spike waveform
+    features including timing, amplitude, and slope characteristics. Adds
+    the raw per-spike-event columns to `ModelSpikeSharedFeatures`.
+
+    Attributes:
+        peak_time_secs (Series[float]): Time to peak in seconds.
+        peak_val (Series[float]): Peak amplitude value (V).
+        recovery_time_secs (Series[float]): Recovery time in seconds.
+        tip_time_secs (Series[float]): Time to tip in seconds.
+        trough_time_secs (Series[float]): Time to trough in seconds.
+        trough_val (Series[float]): Trough amplitude value (V).
+
+    Note:
+        `peak_val`/`trough_val` are computed from waveforms that
+        `dart_subtraction_numpy` has already rescaled back to Volts; see
+        `ModelSpikeSharedFeatures` for `tip_val`/the slopes/`alpha`.
+    """
+
+    peak_time_secs: float = pa.Field(coerce=True)
+    peak_val: float = pa.Field(coerce=True, metadata={"raw_unit": "V"})
+    recovery_time_secs: float = pa.Field(coerce=True)
     tip_time_secs: float = pa.Field(coerce=True)
-    tip_val: float = pa.Field(coerce=True)
     trough_time_secs: float = pa.Field(coerce=True)
-    trough_val: float = pa.Field(coerce=True)
+    trough_val: float = pa.Field(coerce=True, metadata={"raw_unit": "V"})
 
 
-class ModelSpikeShapeFeatures(BaseChannelFeatures):
+class ModelSpikeShapeFeatures(ModelSpikeSharedFeatures):
     """Schema for the sparse, neuroscientist-facing spike-shape feature set.
 
-    Output of `remap_waveform_shape_features`. Amplitudes stay in z-score
-    units, unchanged from `ModelSpikeFeatures` (RMS-normalised before spike
-    detection in `dart_subtraction_numpy`; never rescaled back to volts).
+    Output of `remap_waveform_shape_features`. Adds the reparametrised
+    columns to `ModelSpikeSharedFeatures`'s unchanged pass-through fields.
     Note this schema's 'peak' is the negative deflection and 'trough' the
     positive rebound after it, opposite common neurophysiology usage, so
     `spike_width_secs` is the classic trough-to-peak width despite the name
     order.
 
-    The 3 slope columns correlate strongly with the amplitude/duration
-    columns above (r=0.96-0.99 with algebraic reconstructions from them) and
-    add no real extra information, but are kept precomputed anyway since
-    they're a commonly-used, handy quantity on their own.
+    The 3 inherited slope columns correlate strongly with the
+    amplitude/duration columns below (r=0.96-0.99 with algebraic
+    reconstructions from them) and add no real extra information, but are
+    kept precomputed anyway since they're a commonly-used, handy quantity on
+    their own.
 
     Attributes:
         spike_width_secs (Series[float]): Trough-to-peak spike duration (s).
         predepolarisation_width_secs (Series[float]): Tip-to-peak duration (s).
-        spike_amplitude (Series[float]): Trough-to-peak amplitude (z-score).
+        spike_amplitude (Series[float]): Trough-to-peak amplitude (V).
         peak_to_trough_ratio_log (Series[float]): Log amplitude ratio (dimensionless).
-        tip_val (Series[float]): Waveform tip amplitude (z-score), unchanged from ModelSpikeFeatures.
-        alpha_mean (Series[float]): Mean alpha parameter for spike localization (N/A).
-        alpha_std (Series[float]): Standard deviation of alpha parameter (N/A).
-        polarity (Series[float]): Spike polarity (dimensionless).
-        spike_count (Series[float]): Number of spikes, log2 transformed (log2 count).
-        depolarisation_slope (Series[float]): Tip-to-peak slope, unchanged from ModelSpikeFeatures (z-score/s).
-        repolarisation_slope (Series[float]): Peak-to-trough slope, unchanged from ModelSpikeFeatures (z-score/s).
-        recovery_slope (Series[float]): Trough-to-recovery-point slope, unchanged from ModelSpikeFeatures (z-score/s).
     """
 
     spike_width_secs: float = pa.Field(
@@ -700,57 +734,13 @@ class ModelSpikeShapeFeatures(BaseChannelFeatures):
     spike_amplitude: float = pa.Field(
         coerce=True,
         description="Overall spike amplitude: trough_val minus peak_val.",
-        metadata={"raw_unit": "z-score"},
+        metadata={"raw_unit": "V"},
     )
     peak_to_trough_ratio_log: float = pa.Field(
         coerce=True,
         description="log(|peak_val / trough_val|): waveform shape asymmetry, independent of "
         "overall amplitude scale.",
         metadata={"raw_unit": "dimensionless"},
-    )
-    tip_val: float = pa.Field(
-        coerce=True,
-        description="Waveform tip amplitude (unchanged from ModelSpikeFeatures).",
-        metadata={"raw_unit": "z-score"},
-    )
-    alpha_mean: float = pa.Field(
-        coerce=True,
-        description="Average brightness of the spike (output of the spike localisation code)",
-        metadata={"raw_unit": "N/A"},
-    )
-    alpha_std: float = pa.Field(
-        coerce=True,
-        description="Standard deviation of the brightness of the spike (output of the spike localisation code)",
-        metadata={"raw_unit": "N/A"},
-    )
-    polarity: float = pa.Field(
-        coerce=True,
-        description="Sum of each spike polarity divided by the total number of spikes",
-        metadata={"raw_unit": "dimensionless"},
-    )
-    spike_count: float = pa.Field(
-        coerce=True,
-        description="log2 transformed value of mean spike counts (where the mean is calculated across the snippets by replacing the null values with 0)",
-        metadata={
-            "raw_unit": "count",
-            "transformed_unit": "log2 count",
-            "transform": lambda x: np.where(x == 0, np.nan, np.log2(x.astype(float))),
-        },
-    )
-    depolarisation_slope: float = pa.Field(
-        coerce=True,
-        description="Slope of the line crossing the tip and peak points (unchanged from ModelSpikeFeatures).",
-        metadata={"raw_unit": "z-score/s"},
-    )
-    repolarisation_slope: float = pa.Field(
-        coerce=True,
-        description="Slope of the line crossing the peak and trough points (unchanged from ModelSpikeFeatures).",
-        metadata={"raw_unit": "z-score/s"},
-    )
-    recovery_slope: float = pa.Field(
-        coerce=True,
-        description="Slope of the line crossing the trough and recovery points (unchanged from ModelSpikeFeatures).",
-        metadata={"raw_unit": "z-score/s"},
     )
 
 
@@ -769,19 +759,21 @@ def _remap_waveform_shape_arrays(get):
     dict
         Maps each `ModelSpikeShapeFeatures` column name to its array.
     """
+    # Keyed in ModelSpikeShapeFeatures.to_schema() column order (inherited
+    # ModelSpikeSharedFeatures fields first, then this schema's own).
     return {
+        "alpha_mean": get("alpha_mean"),
+        "alpha_std": get("alpha_std"),
+        "depolarisation_slope": get("depolarisation_slope"),
+        "polarity": get("polarity"),
+        "recovery_slope": get("recovery_slope"),
+        "repolarisation_slope": get("repolarisation_slope"),
+        "spike_count": get("spike_count"),
+        "tip_val": get("tip_val"),
         "spike_width_secs": get("trough_time_secs") - get("peak_time_secs"),
         "predepolarisation_width_secs": get("peak_time_secs") - get("tip_time_secs"),
         "spike_amplitude": get("trough_val") - get("peak_val"),
         "peak_to_trough_ratio_log": np.log(np.abs(get("peak_val") / get("trough_val"))),
-        "tip_val": get("tip_val"),
-        "alpha_mean": get("alpha_mean"),
-        "alpha_std": get("alpha_std"),
-        "polarity": get("polarity"),
-        "spike_count": get("spike_count"),
-        "depolarisation_slope": get("depolarisation_slope"),
-        "repolarisation_slope": get("repolarisation_slope"),
-        "recovery_slope": get("recovery_slope"),
     }
 
 
@@ -1040,7 +1032,7 @@ DEFAULT_FAC = {
     "raw_ap": 0.1,
     "raw_lf": 0.1,
     "raw_lf_csd": 0.1,
-    "waveforms": 5,
+    "waveforms": 3,
 }
 
 
@@ -1430,8 +1422,8 @@ def dart_subtraction_numpy(data, fs, geometry, params=None, scratch_dir=None, **
     Dartsort algorithm with configurable parameters.
 
     Args:
-        data (np.ndarray): Voltage traces array with shape [nc, ns] where nc is
-            number of channels and ns is number of samples. Data can be z-scored or not.
+        data (np.ndarray): Voltage traces array with shape [nc, ns] in Volts, where
+            nc is number of channels and ns is number of samples.
         fs (float): Sampling frequency in Hz.
         geometry (dict): Dictionary with channel geometry containing 'x' and 'y' arrays.
         **params: Additional parameters for Dartsort configuration.
@@ -1440,14 +1432,26 @@ def dart_subtraction_numpy(data, fs, geometry, params=None, scratch_dir=None, **
         tuple: A tuple containing:
 
             - df_spikes (pd.DataFrame): DataFrame with spike information including
-              sample indices, channels, peak-to-peak amplitudes, and localizations.
+              sample indices, channels, peak-to-peak amplitudes (Volts), and
+              localizations.
             - d_waveforms (dict): Dictionary containing raw and denoised waveforms
-              and channel indices.
+              (Volts) and channel indices.
 
     Note:
         This function requires the dartsort package to be installed.
         It creates temporary directories for processing and cleans them up afterward.
         GPU acceleration is supported when available.
+
+        DARTsort detects spikes on ``data`` normalised by its own per-channel RMS
+        (a fixed detection threshold in units of channel RMS), but that scaling is
+        un-applied before returning: ``ptp`` and the waveform snippets are rescaled
+        back to Volts using the same per-channel RMS, so every amplitude derived
+        from them downstream (``peak_val``/``trough_val``/``tip_val`` and the
+        slopes computed by ``ibldsp.waveforms.compute_spike_features``) comes out
+        in real units. The localisation amplitude (``alpha``) is the one exception:
+        it is fit jointly across a multichannel snippet whose channels each carry a
+        different RMS, so there is no single scale factor to un-apply and it is
+        left in DARTsort's native (arbitrary) units.
     """
 
     # Resolve params from a DartParameters object (as _spikes_dartsort passes it), a
@@ -1478,7 +1482,11 @@ def dart_subtraction_numpy(data, fs, geometry, params=None, scratch_dir=None, **
 
     dart_xy = np.c_[geometry["x"], geometry["y"]]
 
-    zdata = data / ibldsp.utils.rms(data, axis=-1)[:, np.newaxis]
+    # DARTsort's detection threshold is expressed in units of channel RMS, so
+    # spikes are detected on RMS-normalised data. This scaling is un-applied
+    # below (using this same per-channel RMS, in Volts) before returning.
+    rms_channel = ibldsp.utils.rms(data, axis=-1)
+    zdata = data / rms_channel[:, np.newaxis]
     rec_np = sc.NumpyRecording(zdata.T, sampling_frequency=fs)
     rec_np.set_dummy_probe_from_locations(dart_xy)
 
@@ -1576,11 +1584,14 @@ def dart_subtraction_numpy(data, fs, geometry, params=None, scratch_dir=None, **
     if detected_spikes is None or detected_spikes.parent_h5_path is None:
         raise RuntimeError("DARTsort subtraction did not produce a feature file")
 
+    # denoised_ptp_amplitudes is evaluated at each spike's detection channel, so a
+    # single per-spike RMS-normalised amplitude, exactly un-scaled here.
     df_spikes = pd.DataFrame(
         {
             "sample": detected_spikes.times_samples,
             "channel": detected_spikes.channels,
-            "ptp": detected_spikes.denoised_ptp_amplitudes,
+            "ptp": detected_spikes.denoised_ptp_amplitudes
+            * rms_channel[detected_spikes.channels],
             "xloc": detected_spikes.point_source_localizations[:, 0],  # xyza
             "yloc": detected_spikes.point_source_localizations[:, 1],  # xyza
             "zloc": detected_spikes.point_source_localizations[:, 2],  # xyza
@@ -1595,6 +1606,21 @@ def dart_subtraction_numpy(data, fs, geometry, params=None, scratch_dir=None, **
             "denoised": np.array(h5file["denoised_waveforms"]),
             "channel_index": np.array(h5file["channel_index"]),
         }
+
+    # Each waveform snippet column is a different real channel, each with its own
+    # RMS: rescale per neighbour channel using DARTsort's channel_index lookup
+    # (nc, n_neighbors), padded with a neutral 1.0 scale for its out-of-range
+    # sentinel (== nc, used for unused/zero-padded neighbour slots).
+    rms_padded = np.append(rms_channel, 1.0)
+    spike_channel_scale = rms_padded[
+        d_waveforms["channel_index"][detected_spikes.channels]
+    ]  # (n_spikes, n_neighbors)
+    d_waveforms["raw"] = d_waveforms["raw"] * spike_channel_scale[:, np.newaxis, :]
+    d_waveforms["denoised"] = (
+        d_waveforms["denoised"] * spike_channel_scale[:, np.newaxis, :]
+    )
+    d_waveforms["channel_rms"] = rms_channel
+
     shutil.rmtree(temp_folder)
     return df_spikes, d_waveforms
 
@@ -1826,6 +1852,11 @@ def spikes(
         trough_offset = params_obj.get("trough_offset", 42)
 
     fcn_mean_time = lambda x: np.mean((x - trough_offset)) / fs  # NOQA
+    # A raw count depends on the duration of `data`; divide by it so
+    # spike_count is a rate (spikes/s), comparable across snippets of
+    # different lengths.
+    duration_secs = data.shape[-1] / fs
+    fcn_rate = lambda x: x.count() / duration_secs  # NOQA
 
     # Aggregation by channel of the spikes / waveforms features
     df_spiking = (
@@ -1833,7 +1864,7 @@ def spikes(
         .agg(
             alpha_mean=pd.NamedAgg(column="alpha", aggfunc="mean"),
             alpha_std=pd.NamedAgg(column="alpha", aggfunc=lambda x: np.std(x, ddof=0)),
-            spike_count=pd.NamedAgg(column="alpha", aggfunc="count"),
+            spike_count=pd.NamedAgg(column="alpha", aggfunc=fcn_rate),
             peak_time_secs=pd.NamedAgg(column="peak_time_idx", aggfunc=fcn_mean_time),
             peak_val=pd.NamedAgg(column="peak_val", aggfunc="mean"),
             trough_time_secs=pd.NamedAgg(
