@@ -20,7 +20,10 @@ dynamic = ["version"]
 # transitively by ibl-neuropixel)
 dependencies = [
     "ibllib>=3.3.1",          # brainbox, ibllib.pipes, ONE-api (one.api/one.remote.aws), iblutil
-    "ibl-neuropixel>=1.12.0", # ibldsp, neuropixel, spikeglx
+    # >=1.12.1: ibldsp.waveforms.compute_spatial_spread fix (wrong dist_chanel_from_peak
+    # arg, signed weights fed into the weighted spread average) -- used by #123's
+    # spatial_spread_um feature below.
+    "ibl-neuropixel>=1.12.1", # ibldsp, neuropixel, spikeglx
     "lfpack>=0.2.0",          # data.py read_lfp_features() lazy import (LFPackReader)
     "iblatlas",               # iblatlas.atlas/regions/genomics
     "xgboost>=3.0.1",         # regionclassifier (top-level import)
@@ -49,7 +52,13 @@ full = [
     # 0.5.24+: do_enforce_decrease is a Literal, not a bool. DARTsort installs
     # dredge-ephys itself.
     "dartsort>=0.5.24",
-    "spikeinterface>=0.104.0",
+    # >=0.104.0 is incompatible with dartsort 0.5.24: private API renames
+    # (recording._recording_segments -> _segments,
+    # get_chunk_with_margin(channel_indices=...) -> last_dimension_indices) land
+    # somewhere between 0.104.0 and later 0.104.x commits, breaking
+    # dartsort.subtract(). Confirmed working: spikeinterface==0.104.9 (latest
+    # PyPI release as of 2026-09-18) + dartsort==0.5.24.
+    "spikeinterface>=0.104.9",
     "hdbscan>=0.8.40",
     "h5py==3.15.1", #Some dartsort error arises in the unit tests, if I don't fix this.
     "linear-operator>=0.6",
