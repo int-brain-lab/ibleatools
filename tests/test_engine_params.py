@@ -25,6 +25,7 @@ import numpy as np
 import pandas as pd
 
 import neuropixel
+import ibldsp.utils
 import ibldsp.voltage
 
 from ephysatlas import features
@@ -402,6 +403,11 @@ class TestDartsortAdapter(unittest.TestCase):
             )
             parent_h5_path = None
 
+        # DARTsort's real channel_index is (n_channels, n_neighbors), each row
+        # listing the neighbour channels of a max-channel; here all 4 channels
+        # see each other, so every row is the same full [0, 1, 2, 3].
+        channel_index = np.tile(np.arange(4), (4, 1))
+
         def fake_subtract(*, output_dir, **_kwargs):
             """Create only the tiny HDF5 datasets consumed by ibleatools."""
             output_dir.mkdir(parents=True)
@@ -411,10 +417,17 @@ class TestDartsortAdapter(unittest.TestCase):
                     "collisioncleaned_waveforms", data=np.ones((2, 3, 4))
                 )
                 h5file.create_dataset("denoised_waveforms", data=np.zeros((2, 3, 4)))
-                h5file.create_dataset("channel_index", data=np.arange(4))
+                h5file.create_dataset("channel_index", data=channel_index)
             return FakeSorting()
 
-        data = np.random.RandomState(0).randn(4, 300).astype("float32")
+        # Distinct, non-unit per-channel scale so un-applying the z-score is
+        # actually exercised (a scale of 1 everywhere wouldn't catch a missing
+        # rescale).
+        channel_scale = np.array([2.0, 4.0, 6.0, 8.0])
+        data = (
+            np.random.RandomState(0).randn(4, 300) * channel_scale[:, np.newaxis]
+        ).astype("float32")
+        rms_channel = ibldsp.utils.rms(data, axis=-1)
         geometry = {
             "x": np.array([0.0, 32.0, 0.0, 32.0]),
             "y": np.array([0.0, 0.0, 20.0, 20.0]),
@@ -428,8 +441,18 @@ class TestDartsortAdapter(unittest.TestCase):
             self.assertEqual(spikes["zloc"].tolist(), [3.0, 7.0])
             self.assertEqual(waveforms["raw"].shape, (2, 3, 4))
             self.assertEqual(waveforms["denoised"].shape, (2, 3, 4))
-            self.assertTrue((waveforms["raw"] == 1).all())
+            # Un-z-scored: each snippet channel column is scaled by that
+            # channel's RMS (Volts), not left as the raw fake constant.
+            np.testing.assert_allclose(
+                waveforms["raw"], np.tile(rms_channel, (2, 3, 1)), rtol=1e-5
+            )
             self.assertTrue((waveforms["denoised"] == 0).all())
+            np.testing.assert_allclose(waveforms["channel_rms"], rms_channel)
+            np.testing.assert_allclose(
+                spikes["ptp"],
+                FakeSorting.denoised_ptp_amplitudes * rms_channel[FakeSorting.channels],
+                rtol=1e-5,
+            )
             self.assertEqual(list(Path(scratch).iterdir()), [])
 
     def test_waveform_config_accepts_calibrated_sampling_frequency(self):
