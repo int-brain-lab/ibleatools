@@ -624,9 +624,9 @@ class ModelSpikeSharedFeatures(BaseChannelFeatures):
         different RMS; there is no single scale factor to recover Volts from
         them, so they stay in DARTsort's native, non-physical units.
         `slowness_s_per_m`/`spatial_spread_um` are also weighted by these
-        Volts-scale amplitudes (see `compute_slowness`/
-        `ibldsp.waveforms.compute_spatial_spread`), but the values themselves are
-        geometric (seconds per metre / micrometres), not amplitudes.
+        Volts-scale amplitudes (see `ibldsp.waveforms.compute_slowness`/
+        `compute_spatial_spread`), but the values themselves are geometric
+        (seconds per metre / micrometres), not amplitudes.
     """
 
     alpha_mean: float = pa.Field(
@@ -1858,157 +1858,6 @@ def _neighbour_channel_xy_um(channel_index, spike_channels, x_um, y_um):
     return xy_padded[channel_index[spike_channels]]
 
 
-def _windowed_segment(arr, i, peak_time_idx, half_win, hann):
-    """One spike's Hanning-tapered window around its peak sample, clipped to the
-    array bounds. Returns (None, t0, t1) if the window falls entirely outside."""
-    nsw = arr.shape[1]
-    t0, t1 = peak_time_idx - half_win, peak_time_idx + half_win + 1
-    w0, w1 = max(0, -t0), len(hann) - max(0, t1 - nsw)
-    t0c, t1c = max(0, t0), min(nsw, t1)
-    if t1c <= t0c:
-        return None, t0c, t1c
-    return arr[i, t0c:t1c, :] * hann[w0:w1, np.newaxis], t0c, t1c
-
-
-def _xcorr_pick(seg, ref_row):
-    """Sub-sample timing pick of every channel in `seg` against its reference
-    (peak) channel `ref_row`, by cross-correlation.
-
-    Cross-correlates each channel's windowed snippet against the reference
-    channel's own windowed snippet; the sub-sample lag is picked with parabolic
-    interpolation (`ibldsp.utils.parabolic_max`) on `|corr|`, so a phase-inverted
-    channel (negative correlation peak) is still matched on shape, not just
-    amplitude sign. The weight returned is the normalized cross-correlation
-    coefficient magnitude (0-1): a fit-quality score, robust to gradual
-    non-stationarity in waveform shape across channels.
-
-    Validated (2026-09-18, ibldevtools/olivier prototype for #123) against a
-    frequency-domain phase-slope regression alternative
-    (`ibldsp.waveforms.get_apf_from2spikes`/`get_phase_slope`, the basis of
-    `wave_shift_phase`): parabolic interpolation is not locking to the nearest
-    sample (~6% of real picks land within 0.01 samples of an integer). Phase
-    regression is exact in the noiseless case, but under real denoised-channel
-    residual noise this cross-correlation pick is *more* accurate (RMSE 0.099 vs
-    0.147 samples) -- matching `wave_shift_phase`'s own documented caveat that it
-    "does not work well with raw data sampled at 30kHz" without a per-template
-    calibration step too slow to run per spike per channel.
-
-    Args:
-        seg (np.ndarray): (window, n_channels) Hanning-tapered snippet.
-        ref_row (int): column index of the reference (peak) channel in `seg`.
-
-    Returns:
-        tuple[np.ndarray, np.ndarray]: (lag_samples, weight), each (n_channels,).
-    """
-    win = seg.shape[0]
-    ref = seg[:, ref_row]
-    n_fft = 2 * win
-    R = np.fft.rfft(ref, n=n_fft)
-    S = np.fft.rfft(seg, n=n_fft, axis=0)
-    corr_full = np.fft.fftshift(
-        np.fft.irfft(np.conj(R)[:, np.newaxis] * S, n=n_fft, axis=0), axes=0
-    )
-    lags = np.arange(n_fft) - n_fft // 2
-    keep_lag = np.abs(lags) <= (win - 1)
-    corr, lags_c = corr_full[keep_lag, :], lags[keep_lag]
-    ipeak, cpeak = ibldsp.utils.parabolic_max(np.abs(corr).T)  # per-channel sub-sample peak
-    lag_at_peak = lags_c[0] + ipeak
-    norm = np.sqrt(np.sum(ref**2) * np.sum(seg**2, axis=0))
-    weight = np.where(norm > 0, cpeak / norm, np.nan)
-    return lag_at_peak, weight
-
-
-def _weighted_lstsq_slope(x, y, w):
-    """Weighted least-squares slope of y ~ x + const, given non-negative weights w."""
-    sw = np.sqrt(w)
-    X = np.c_[x, np.ones_like(x)] * sw[:, np.newaxis]
-    beta, *_ = np.linalg.lstsq(X, y * sw, rcond=None)
-    return beta[0]
-
-
-def compute_slowness(
-    arr,
-    df,
-    xy_um,
-    fs=30_000.0,
-    half_window_ms=0.5,
-    min_channels=4,
-    min_weight_frac=0.1,
-):
-    """Signed slowness (s/m) per spike and add it to `df` as `slowness_s_per_m`.
-
-    From a weighted linear fit of per-channel cross-correlation pick time vs axial
-    (y, along the probe) offset from the reference (peak) channel:
-    ``dt = slowness_s_per_m * dy + t0``.
-
-    Per ibleatools#123: computes the *inverse* of velocity (slowness, proportional
-    to delta T) rather than fitting velocity directly, since velocity =
-    1/slowness blows up whenever the fit's dt/dy slope is near zero (e.g.
-    near-simultaneous arrival across the local neighbourhood). Picks come from
-    `_xcorr_pick` (see its docstring for why cross-correlation + parabolic
-    interpolation was chosen over a frequency-domain phase-slope regression).
-
-    Sign convention: channel geometry y is assumed to increase away from the
-    probe tip (towards the brain surface), the ibldsp/neuropixel convention.
-    `slowness_s_per_m` > 0 means later pick times at larger y (up the probe) ->
-    wave moving "up"; velocity = 1 / slowness_s_per_m carries the same sign.
-
-    A lateral (x, across shank columns) component was tried and dropped: on a
-    single-shank NP1.0 probe the local neighbourhood's lateral extent (a few
-    columns, tens of um) is short enough relative to its axial extent that the
-    lateral slowness estimate comes out noise-dominated rather than a real
-    signal, without a fundamentally more careful estimator (larger radius,
-    pooled across spikes per unit, ...).
-
-    Args:
-        arr (np.ndarray): Multi-channel waveform snippets, shape
-            (n_spikes, nsw, ncw), Volts.
-        df (pd.DataFrame): Must contain `peak_trace_idx`/`peak_time_idx` (e.g.
-            from `ibldsp.waveforms.find_peak(arr)` or `compute_spike_features`).
-        xy_um (np.ndarray): Per-spike neighbour channel (x, y) coordinates, shape
-            (n_spikes, ncw, 2), micrometres, NaN for padded/unused channel slots
-            (e.g. from `_neighbour_channel_xy_um`).
-        fs (float): Sampling frequency (Hz).
-        half_window_ms (float): Half-width of the Hanning window in ms, centred
-            on the reference peak time.
-        min_channels (int): Minimum number of channels kept after thresholding
-            for a fit to be attempted.
-        min_weight_frac (float): Channels with a weight below this fraction of
-            the neighbourhood's max are dropped before fitting (keeps the fit
-            local to channels with a real pick, not noise floor).
-
-    Returns:
-        pd.DataFrame: `df` with an added `slowness_s_per_m` column (NaN where a
-        fit couldn't be attempted).
-    """
-    n_spikes, nsw, ncw = arr.shape
-    half_win = int(round(half_window_ms * 1e-3 * fs))
-    hann = np.hanning(2 * half_win + 1)
-
-    peak_time = df["peak_time_idx"].to_numpy()
-    peak_trace = df["peak_trace_idx"].to_numpy()
-
-    slowness = np.full(n_spikes, np.nan)
-    for i in range(n_spikes):
-        seg, t0c, t1c = _windowed_segment(arr, i, peak_time[i], half_win, hann)
-        if seg is None:
-            continue
-        lag, weight = _xcorr_pick(seg, peak_trace[i])
-        dt = lag / fs
-
-        dy = xy_um[i, :, 1] - xy_um[i, peak_trace[i], 1]
-        valid = np.isfinite(weight) & np.isfinite(dy) & (weight > 0)
-        if valid.sum() < min_channels:
-            continue
-        w = weight[valid]
-        keep = w >= min_weight_frac * w.max()
-        if keep.sum() < min_channels:
-            continue
-        slowness[i] = _weighted_lstsq_slope(dy[valid][keep] * 1e-6, dt[valid][keep], w[keep])
-    df["slowness_s_per_m"] = slowness
-    return df
-
-
 def spikes(
     data,
     fs: int,
@@ -2095,7 +1944,9 @@ def spikes(
             d_waveforms["denoised"], df_spikes, channel_geometry_3d
         )
         df_spikes = df_spikes.rename(columns={"spatial_spread": "spatial_spread_um"})
-        df_spikes = compute_slowness(d_waveforms["denoised"], df_spikes, neighbor_xy_um)
+        df_spikes = ibldsp.waveforms.compute_slowness(
+            d_waveforms["denoised"], df_spikes, channel_geometry_3d
+        )
     else:
         df_spikes["spatial_spread_um"] = np.nan
         df_spikes["slowness_s_per_m"] = np.nan

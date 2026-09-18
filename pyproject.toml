@@ -20,10 +20,10 @@ dynamic = ["version"]
 # transitively by ibl-neuropixel)
 dependencies = [
     "ibllib>=3.3.1",          # brainbox, ibllib.pipes, ONE-api (one.api/one.remote.aws), iblutil
-    # >=1.12.1: ibldsp.waveforms.compute_spatial_spread fix (wrong dist_chanel_from_peak
-    # arg, signed weights fed into the weighted spread average) -- used by #123's
-    # spatial_spread_um feature below.
-    "ibl-neuropixel>=1.12.1", # ibldsp, neuropixel, spikeglx
+    # >=1.13.0: ibldsp.waveforms.compute_slowness (new) and compute_spatial_spread fix
+    # (wrong dist_chanel_from_peak arg, signed weights fed into the weighted spread
+    # average) -- both used by #123's spatial_spread_um/slowness_s_per_m features below.
+    "ibl-neuropixel>=1.13.0", # ibldsp, neuropixel, spikeglx
     "lfpack>=0.2.0",          # data.py read_lfp_features() lazy import (LFPackReader)
     "iblatlas",               # iblatlas.atlas/regions/genomics
     "xgboost>=3.0.1",         # regionclassifier (top-level import)
