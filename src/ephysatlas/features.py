@@ -1032,7 +1032,7 @@ DEFAULT_FAC = {
     "raw_ap": 0.1,
     "raw_lf": 0.1,
     "raw_lf_csd": 0.1,
-    "waveforms": 5,
+    "waveforms": 3,
 }
 
 
