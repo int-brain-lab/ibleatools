@@ -7,6 +7,7 @@ import numpy as np
 
 import neuropixel
 import ibldsp.utils
+import ibldsp.waveforms
 import ephysatlas.features
 import ephysatlas.data
 
@@ -19,9 +20,10 @@ print(f"Torch number of threads = {torch.get_num_threads()}")
 
 class TestFeatureSets(unittest.TestCase):
     def test_sets(self):
-        self.assertEqual(len(ephysatlas.features.voltage_features_set("all")), 53)
+        # 53/36 + spatial_spread_um/slowness_s_per_m (#123) = 55/38
+        self.assertEqual(len(ephysatlas.features.voltage_features_set("all")), 55)
         self.assertEqual(len(ephysatlas.features.voltage_features_set(["raw_ap"])), 3)
-        self.assertEqual(len(ephysatlas.features.voltage_features_set()), 36)
+        self.assertEqual(len(ephysatlas.features.voltage_features_set()), 38)
 
 
 class TestLFPFeatures(unittest.TestCase):
@@ -163,6 +165,55 @@ class TestWaveformFeatures(unittest.TestCase):
         self.assertTrue((df["trough_val"].abs().median() < 100 * rms_scale))
 
 
+class TestComputeSlowness(unittest.TestCase):
+    """Deterministic ground-truth test for #123's compute_slowness: a single-column
+    5-channel synthetic waveform, sub-sample shifted per channel by a known
+    slowness via ibldsp.fourier.fshift, must recover that slowness."""
+
+    def _make_synthetic_wave(self, slowness_true, fs=30_000.0, n_channels=5, dy_um=20.0):
+        import ibldsp.fourier
+
+        ns = 91
+        t0, sigma = 45.0, 4.0
+        t = np.arange(ns)
+        pulse = -np.exp(-(((t - t0) / sigma) ** 2))  # smooth negative bump
+
+        peak_idx = n_channels // 2
+        y_um = (np.arange(n_channels) - peak_idx) * dy_um
+        arr = np.zeros((1, ns, n_channels))
+        for c in range(n_channels):
+            dy_m = y_um[c] * 1e-6
+            shift_samples = slowness_true * dy_m * fs
+            amplitude = np.exp(-abs(y_um[c]) / (dy_um * (n_channels + 2)))  # mild decay
+            arr[0, :, c] = amplitude * ibldsp.fourier.fshift(pulse, shift_samples)
+
+        xy_um = np.zeros((1, n_channels, 2))
+        xy_um[0, :, 1] = y_um
+        return arr, xy_um, peak_idx
+
+    def test_recovers_known_slowness(self):
+        for slowness_true in (-0.4, 0.0, 0.3):
+            with self.subTest(slowness_true=slowness_true):
+                arr, xy_um, peak_idx = self._make_synthetic_wave(slowness_true)
+                df = ibldsp.waveforms.find_peak(arr)
+                self.assertEqual(df["peak_trace_idx"].iloc[0], peak_idx)
+
+                out = ephysatlas.features.compute_slowness(arr, df, xy_um)
+                # Sub-sample pick + a 5-channel fit (much less averaging than a real
+                # ~20-30 channel neighbourhood) leaves more estimation noise than the
+                # ~0.1-sample RMSE measured on real data (see compute_slowness's
+                # docstring), hence the fairly loose tolerance.
+                self.assertAlmostEqual(
+                    out["slowness_s_per_m"].iloc[0], slowness_true, delta=0.1
+                )
+
+    def test_too_few_channels_is_nan(self):
+        arr, xy_um, peak_idx = self._make_synthetic_wave(0.2, n_channels=5)
+        df = ibldsp.waveforms.find_peak(arr)
+        out = ephysatlas.features.compute_slowness(arr, df, xy_um, min_channels=6)
+        self.assertTrue(np.isnan(out["slowness_s_per_m"].iloc[0]))
+
+
 class TestRemapWaveformShapeFeatures(unittest.TestCase):
     def setUp(self):
         self.df_features = ephysatlas.data.read_features_from_disk(
@@ -229,7 +280,17 @@ class TestRemapWaveformShapeFeatures(unittest.TestCase):
         raw_cols = list(
             ephysatlas.features.ModelSpikeFeatures.to_schema().columns.keys()
         )
-        df = self.df_features[raw_cols].dropna()
+        # slowness_s_per_m/spatial_spread_um (#123, nullable) postdate this fixture:
+        # add them as NaN rather than re-recording real waveform-derived data for it.
+        # They pass through both the dataframe and volume remap paths unchanged either
+        # way, so also exclude them from the "must have real data" dropna gate below.
+        nullable_cols = {"slowness_s_per_m", "spatial_spread_um"}
+        df_source = self.df_features.assign(
+            **{c: np.nan for c in nullable_cols if c not in self.df_features.columns}
+        )
+        df = df_source[raw_cols].dropna(
+            subset=[c for c in raw_cols if c not in nullable_cols]
+        )
         n = len(df) - (len(df) % 2)  # even, so it reshapes cleanly into (2, n // 2)
         df = df.iloc[:n]
         # Shuffle the feature order to exercise name-based (not positional) lookup,
