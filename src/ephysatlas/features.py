@@ -253,12 +253,18 @@ class ChannelDataFrameSchema(pa.DataFrameModel):
     This schema defines the structure and validation rules for channel
     information including spatial coordinates and anatomical labels.
 
+    Note:
+        ``x``/``y``/``z`` are in **metres**, while ``axial_um``/``lateral_um`` are in
+        micrometres. The two length units coexist in one table: the coordinates follow the
+        IBL/iblatlas convention (metres from Bregma), whereas the probe
+        geometry is expressed in the micrometres.
+
     Attributes:
         pid (Series[str]): Probe insertion ID.
         channel (Series[int]): Channel index.
-        x (Series[float]): X-coordinate in micrometers.
-        y (Series[float]): Y-coordinate in micrometers.
-        z (Series[float]): Z-coordinate in micrometers.
+        x (Series[float]): X-coordinate in metres from Bregma (IBL coordinates space).
+        y (Series[float]): Y-coordinate in metres from Bregma (IBL coordinates space).
+        z (Series[float]): Z-coordinate in metres from Bregma (IBL coordinates space).
         axial_um (Series[float]): Axial distance in micrometers.
         lateral_um (Series[float]): Lateral distance in micrometers.
         acronym (Series[str]): Brain region acronym.
@@ -273,18 +279,18 @@ class ChannelDataFrameSchema(pa.DataFrameModel):
     )
     x: float = pa.Field(
         coerce=True,
-        description="X-coordinate in micrometers",
-        metadata={"raw_unit": "um"},
+        description="x-position in metres from Bregma (in IBL coordinates space)",
+        metadata={"raw_unit": "m"},
     )
     y: float = pa.Field(
         coerce=True,
-        description="Y-coordinate in micrometers",
-        metadata={"raw_unit": "um"},
+        description="y-position in metres from Bregma (in IBL coordinates space)",
+        metadata={"raw_unit": "m"},
     )
     z: float = pa.Field(
         coerce=True,
-        description="Z-coordinate in micrometers",
-        metadata={"raw_unit": "um"},
+        description="z-position in metres from Bregma (in IBL coordinates space)",
+        metadata={"raw_unit": "m"},
     )
     axial_um: float = pa.Field(
         coerce=True,
@@ -879,26 +885,34 @@ class ModelHistologyPlanned(BaseChannelFeatures):
     This schema defines the structure and validation rules for planned
     histology coordinates before actual histological analysis.
 
+    Note:
+        Same coordinate space as :class:`ModelHistologyResolved` (IBL, metres from Bregma);
+        Populated by ``feature_computation.add_target_coordinates``, which queries Alyx
+        trajectories with ``provenance__lte,30`` and prefers the ``Micro-manipulator``
+        estimate (Alyx provenance 30), falling back to the first trajectory returned. The
+        trajectory is converted from the needles (in-vivo) atlas into Allen space before
+        being interpolated along the track.
+
     Attributes:
-        x_target (Series[float]): Target X-coordinate in micrometers.
-        y_target (Series[float]): Target Y-coordinate in micrometers.
-        z_target (Series[float]): Target Z-coordinate in micrometers.
+        x_target (Series[float]): Target X-coordinate in metres from Bregma (IBL coordinates space).
+        y_target (Series[float]): Target Y-coordinate in metres from Bregma (IBL coordinates space).
+        z_target (Series[float]): Target Z-coordinate in metres from Bregma (IBL coordinates space).
     """
 
     x_target: float = pa.Field(
         coerce=True,
-        description="Target X-coordinate in micrometers using the micro-manipulator trajectory",
-        metadata={"raw_unit": "um"},
+        description="Target x-position in metres from Bregma (in IBL coordinates space), from the Alyx Micro-manipulator trajectory (provenance 30)",
+        metadata={"raw_unit": "m"},
     )
     y_target: float = pa.Field(
         coerce=True,
-        description="Target Y-coordinate in micrometers using the micro-manipulator trajectory",
-        metadata={"raw_unit": "um"},
+        description="Target y-position in metres from Bregma (in IBL coordinates space), from the Alyx Micro-manipulator trajectory (provenance 30)",
+        metadata={"raw_unit": "m"},
     )
     z_target: float = pa.Field(
         coerce=True,
-        description="Target Z-coordinate in micrometers using the micro-manipulator trajectory",
-        metadata={"raw_unit": "um"},
+        description="Target z-position in metres from Bregma (in IBL coordinates space), from the Alyx Micro-manipulator trajectory (provenance 30)",
+        metadata={"raw_unit": "m"},
     )
 
 
@@ -908,28 +922,35 @@ class ModelHistologyResolved(BaseChannelFeatures):
     This schema defines the structure and validation rules for resolved
     histology coordinates after actual histological analysis.
 
+    Note:
+        Same coordinate space as :class:`ModelHistologyPlanned`. These come from
+        ``SpikeSortingLoader.load_channels()`` -- the highest-provenance alignment Alyx holds
+        for the insertion, above the micro-manipulator estimate the ``*_target`` columns use,
+        hence "at the most recent histology step".
+
     Attributes:
-        x (Series[float]): Resolved X-coordinate in micrometers.
-        y (Series[float]): Resolved Y-coordinate in micrometers.
-        z (Series[float]): Resolved Z-coordinate in micrometers.
+        x (Series[float]): Resolved X-coordinate in metres from Bregma (IBL coordinates space).
+        y (Series[float]): Resolved Y-coordinate in metres from Bregma (IBL coordinates space).
+        z (Series[float]): Resolved Z-coordinate in metres from Bregma (IBL coordinates space).
         atlas_id (Series[int]): Atlas region identifier.
         acronym (Series[str]): Brain region acronym.
     """
 
+    # Metres from Bregma, the IBL coordinate convention iblatlas expects.
     x: float = pa.Field(
         coerce=True,
-        description=" x-position in um from Bregma (in IBL coordinates space). Coordinates at the most recent histology step",
-        metadata={"raw_unit": "um"},
+        description="x-position in metres from Bregma (in IBL coordinates space). Coordinates at the most recent histology step",
+        metadata={"raw_unit": "m"},
     )
     y: float = pa.Field(
         coerce=True,
-        description=" y-position in um from Bregma (in IBL coordinates space). Coordinates at the most recent histology step",
-        metadata={"raw_unit": "um"},
+        description="y-position in metres from Bregma (in IBL coordinates space). Coordinates at the most recent histology step",
+        metadata={"raw_unit": "m"},
     )
     z: float = pa.Field(
         coerce=True,
-        description=" z-position in um from Bregma (in IBL coordinates space). Coordinates at the most recent histology step",
-        metadata={"raw_unit": "um"},
+        description="z-position in metres from Bregma (in IBL coordinates space). Coordinates at the most recent histology step",
+        metadata={"raw_unit": "m"},
     )
     atlas_id: int = pa.Field(
         coerce=True,
