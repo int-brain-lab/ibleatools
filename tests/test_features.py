@@ -7,6 +7,7 @@ import numpy as np
 
 import neuropixel
 import ibldsp.utils
+import ibldsp.waveforms
 import ephysatlas.features
 import ephysatlas.data
 
@@ -19,9 +20,10 @@ print(f"Torch number of threads = {torch.get_num_threads()}")
 
 class TestFeatureSets(unittest.TestCase):
     def test_sets(self):
-        self.assertEqual(len(ephysatlas.features.voltage_features_set("all")), 53)
+        # 53/36 + spatial_spread_um/slowness_s_per_m (#123) = 55/38
+        self.assertEqual(len(ephysatlas.features.voltage_features_set("all")), 55)
         self.assertEqual(len(ephysatlas.features.voltage_features_set(["raw_ap"])), 3)
-        self.assertEqual(len(ephysatlas.features.voltage_features_set()), 36)
+        self.assertEqual(len(ephysatlas.features.voltage_features_set()), 38)
 
 
 class TestLFPFeatures(unittest.TestCase):
@@ -229,7 +231,17 @@ class TestRemapWaveformShapeFeatures(unittest.TestCase):
         raw_cols = list(
             ephysatlas.features.ModelSpikeFeatures.to_schema().columns.keys()
         )
-        df = self.df_features[raw_cols].dropna()
+        # slowness_s_per_m/spatial_spread_um (#123, nullable) postdate this fixture:
+        # add them as NaN rather than re-recording real waveform-derived data for it.
+        # They pass through both the dataframe and volume remap paths unchanged either
+        # way, so also exclude them from the "must have real data" dropna gate below.
+        nullable_cols = {"slowness_s_per_m", "spatial_spread_um"}
+        df_source = self.df_features.assign(
+            **{c: np.nan for c in nullable_cols if c not in self.df_features.columns}
+        )
+        df = df_source[raw_cols].dropna(
+            subset=[c for c in raw_cols if c not in nullable_cols]
+        )
         n = len(df) - (len(df) % 2)  # even, so it reshapes cleanly into (2, n // 2)
         df = df.iloc[:n]
         # Shuffle the feature order to exercise name-based (not positional) lookup,
