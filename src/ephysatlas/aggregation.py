@@ -454,7 +454,7 @@ def denoise_raw_features_data(
         fac (float or dict, optional): TV denoising factor forwarded to `denoise_dataframe`. Either a
             single scalar applied to every feature group, or a dict mapping a subset of
             {'raw_ap', 'raw_lf', 'raw_lf_csd', 'waveforms'} to their own factor. Default is
-            `DEFAULT_FAC` (raw_ap=raw_lf=raw_lf_csd=0.1, waveforms=5).
+            `DEFAULT_FAC` (raw_ap=raw_lf=raw_lf_csd=0.1, waveforms=3).
 
     Returns:
         pandas.DataFrame: A DataFrame with the same structure as the input but with denoised feature values.
