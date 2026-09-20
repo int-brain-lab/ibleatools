@@ -152,6 +152,113 @@ class TestWaveformFeatures(unittest.TestCase):
         self.assertTrue(60 < df["spike_count"].sum() < 110)
 
 
+class TestRemapWaveformShapeFeatures(unittest.TestCase):
+    def setUp(self):
+        self.df_features = ephysatlas.data.read_features_from_disk(
+            FIXTURE_PATH.joinpath("features", "2025_W28"), load_denoised=False
+        )
+
+    def test_columns_and_index(self):
+        df_shape = ephysatlas.features.remap_waveform_shape_features(self.df_features)
+        self.assertEqual(
+            set(df_shape.columns),
+            set(ephysatlas.features.ModelSpikeShapeFeatures.to_schema().columns.keys()),
+        )
+        np.testing.assert_array_equal(df_shape.index, self.df_features.index)
+        # dropped columns must not leak through
+        raw_cols = set(
+            ephysatlas.features.ModelSpikeFeatures.to_schema().columns.keys()
+        )
+        shape_cols = set(
+            ephysatlas.features.ModelSpikeShapeFeatures.to_schema().columns.keys()
+        )
+        for col in raw_cols - shape_cols:
+            self.assertNotIn(col, df_shape.columns)
+
+    def test_derived_values(self):
+        df_shape = ephysatlas.features.remap_waveform_shape_features(self.df_features)
+        np.testing.assert_allclose(
+            df_shape["spike_width_secs"],
+            self.df_features["trough_time_secs"] - self.df_features["peak_time_secs"],
+        )
+        np.testing.assert_allclose(
+            df_shape["predepolarisation_width_secs"],
+            self.df_features["peak_time_secs"] - self.df_features["tip_time_secs"],
+        )
+        np.testing.assert_allclose(
+            df_shape["spike_amplitude"],
+            self.df_features["trough_val"] - self.df_features["peak_val"],
+        )
+        np.testing.assert_allclose(
+            df_shape["peak_to_trough_ratio_log"],
+            np.log(
+                np.abs(self.df_features["peak_val"] / self.df_features["trough_val"])
+            ),
+        )
+        # pass-through columns are untouched
+        for col in [
+            "tip_val",
+            "alpha_mean",
+            "alpha_std",
+            "polarity",
+            "spike_count",
+            "depolarisation_slope",
+            "repolarisation_slope",
+            "recovery_slope",
+        ]:
+            np.testing.assert_array_equal(df_shape[col], self.df_features[col])
+
+    def test_missing_column_raises(self):
+        df_missing = self.df_features.drop(columns=["trough_val"])
+        with self.assertRaises(KeyError):
+            ephysatlas.features.remap_waveform_shape_features(df_missing)
+
+    def test_volume_matches_dataframe(self):
+        """The volume entry point must reproduce the dataframe one exactly."""
+        raw_cols = list(
+            ephysatlas.features.ModelSpikeFeatures.to_schema().columns.keys()
+        )
+        df = self.df_features[raw_cols].dropna()
+        n = len(df) - (len(df) % 2)  # even, so it reshapes cleanly into (2, n // 2)
+        df = df.iloc[:n]
+        # Shuffle the feature order to exercise name-based (not positional) lookup,
+        # and use a non-trivial volume shape (nx, ny) rather than a flat vector.
+        shuffled_cols = raw_cols[::-1]
+        vol = np.stack([df[c].to_numpy() for c in shuffled_cols], axis=-1).reshape(
+            2, n // 2, len(shuffled_cols)
+        )
+        feature_names = np.array(shuffled_cols)
+
+        remapped_vol, remapped_names = (
+            ephysatlas.features.remap_waveform_shape_features_volume(vol, feature_names)
+        )
+        df_shape = ephysatlas.features.remap_waveform_shape_features(df)
+
+        expected_names = list(
+            ephysatlas.features.ModelSpikeShapeFeatures.to_schema().columns.keys()
+        )
+        self.assertEqual(remapped_vol.shape, (2, n // 2, len(expected_names)))
+        self.assertEqual(remapped_vol.dtype, np.float32)
+        np.testing.assert_array_equal(remapped_names, expected_names)
+        for i, name in enumerate(remapped_names):
+            np.testing.assert_allclose(
+                remapped_vol[..., i].reshape(-1),
+                df_shape[name].to_numpy(),
+                rtol=1e-4,
+                atol=1e-6,
+            )
+
+    def test_volume_missing_feature_raises(self):
+        raw_cols = [
+            c
+            for c in ephysatlas.features.ModelSpikeFeatures.to_schema().columns.keys()
+            if c != "trough_val"
+        ]
+        vol = np.zeros((2, 2, 2, len(raw_cols)), dtype=np.float32)
+        with self.assertRaises(KeyError):
+            ephysatlas.features.remap_waveform_shape_features_volume(vol, raw_cols)
+
+
 class TestTransformDenoiseFeatures(unittest.TestCase):
     def setUp(self):
         self.df_features = ephysatlas.data.read_features_from_disk(

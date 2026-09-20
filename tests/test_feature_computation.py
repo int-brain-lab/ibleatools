@@ -2,7 +2,11 @@ import unittest
 import numpy as np
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import pandas as pd
+
+from iblatlas.atlas import AllenAtlas, Insertion
+from ibllib.pipes.histology import interpolate_along_track
 
 from ephysatlas.feature_computation import (
     load_data_from_files,
@@ -11,6 +15,15 @@ from ephysatlas.feature_computation import (
 )
 
 import ephysatlas
+
+# Provenance values as Alyx stores them, used by the fake ONE client below to reproduce
+# the server-side "provenance__lte" filter.
+ALYX_PROVENANCE = {
+    "Planned": 10,
+    "Micro-manipulator": 30,
+    "Histology track": 50,
+    "Ephys aligned histology track": 70,
+}
 
 
 class TestFeatureComputation(unittest.TestCase):
@@ -88,6 +101,126 @@ class TestFeatureComputation(unittest.TestCase):
         self.assertIn("rawInd", result)
         self.assertEqual(len(result["rawInd"]), 384)
         self.assertTrue(np.array_equal(result["rawInd"], np.arange(384)))
+
+    # ------------------------------------------------------------------
+    # Trajectory provenance preference (Alyx mode)
+    # ------------------------------------------------------------------
+    # Minimal Alyx-like trajectories for one insertion, one per provenance. The
+    # angles differ between them so the chosen trajectory is identifiable from the
+    # coordinates it produces. The Histology track values are those Alyx holds for
+    # pid 1a924329-65aa-465d-b201-c2dd898aebd0, an insertion with no
+    # Micro-manipulator and no Planned trajectory.
+    MICRO_MANIPULATOR_TRAJ = {
+        "provenance": "Micro-manipulator",
+        "x": -2243.1,
+        "y": -1999.8,
+        "z": -361.0,
+        "depth": 4000.0,
+        "theta": 15.0,
+        "phi": 180.0,
+    }
+    PLANNED_TRAJ = {
+        "provenance": "Planned",
+        "x": -2200.0,
+        "y": -2050.0,
+        "z": -300.0,
+        "depth": 4200.0,
+        "theta": 10.0,
+        "phi": 170.0,
+    }
+    HISTOLOGY_TRAJ = {
+        "provenance": "Histology track",
+        "x": -2514.0,
+        "y": -1950.0,
+        "z": -193.0,
+        "depth": 6089.9,
+        "theta": 11.56,
+        "phi": -173.13,
+    }
+    EPHYS_ALIGNED_TRAJ = {
+        "provenance": "Ephys aligned histology track",
+        "x": -2464.0,
+        "y": -2000.0,
+        "z": -193.0,
+        "depth": 5687.6,
+        "theta": 11.48,
+        "phi": -169.04,
+    }
+
+    @staticmethod
+    def _target_channels():
+        """Small 10-channel input shared by the trajectory preference tests."""
+        return {"rawInd": np.arange(10), "axial_um": np.linspace(0, 3840, 10)}
+
+    @staticmethod
+    def _fake_one(trajs):
+        """Stand in for a remote ONE client serving ``trajs`` through Alyx's REST filter."""
+
+        def rest(*args, django=None, **kwargs):
+            # Reproduce "provenance__lte,<value>" server side, so the tests cover which
+            # provenances the query lets through as well as which one is then picked.
+            ceiling = (
+                int(django.split(",")[-1]) if django else max(ALYX_PROVENANCE.values())
+            )
+            return [t for t in trajs if ALYX_PROVENANCE[t["provenance"]] <= ceiling]
+
+        return SimpleNamespace(mode="remote", alyx=SimpleNamespace(rest=rest))
+
+    def _assert_same_targets(self, result, expected):
+        """Assert two add_target_coordinates outputs hold the same target coordinates."""
+        for key in ("x_target", "y_target", "z_target"):
+            np.testing.assert_allclose(result[key], expected[key])
+
+    def test_add_target_coordinates_prefers_micro_manipulator(self):
+        """Micro-manipulator wins when Planned and Histology track are also available"""
+        trajs = [self.HISTOLOGY_TRAJ, self.PLANNED_TRAJ, self.MICRO_MANIPULATOR_TRAJ]
+        result = add_target_coordinates(
+            pid="pid", one=self._fake_one(trajs), channels=self._target_channels()
+        )
+        expected = add_target_coordinates(
+            channels=self._target_channels(),
+            traj_dict=dict(self.MICRO_MANIPULATOR_TRAJ),
+        )
+        self._assert_same_targets(result, expected)
+
+    def test_add_target_coordinates_falls_back_to_planned(self):
+        """Without a Micro-manipulator trajectory, Planned is preferred over histology"""
+        trajs = [self.HISTOLOGY_TRAJ, self.PLANNED_TRAJ]
+        result = add_target_coordinates(
+            pid="pid", one=self._fake_one(trajs), channels=self._target_channels()
+        )
+        expected = add_target_coordinates(
+            channels=self._target_channels(), traj_dict=dict(self.PLANNED_TRAJ)
+        )
+        self._assert_same_targets(result, expected)
+
+    def test_add_target_coordinates_falls_back_to_histology_track(self):
+        """Histology track is the last resort, read in the Allen frame it is stored in
+
+        The Ephys aligned track alongside it must be ignored: the query stops at 50.
+        """
+        channels = self._target_channels()
+        result = add_target_coordinates(
+            pid="pid",
+            one=self._fake_one([self.HISTOLOGY_TRAJ, self.EPHYS_ALIGNED_TRAJ]),
+            channels=channels,
+        )
+        # A Histology track trajectory is stored as "IBL-Allen", so the expected track is
+        # a plain Allen insertion: no -5 degree pitch correction, no needles -> Allen scaling.
+        txyz = np.flipud(
+            Insertion.from_dict(dict(self.HISTOLOGY_TRAJ), brain_atlas=AllenAtlas()).xyz
+        )
+        expected = interpolate_along_track(txyz, channels["axial_um"] / 1e6)
+        np.testing.assert_allclose(
+            np.c_[result["x_target"], result["y_target"], result["z_target"]], expected
+        )
+
+    def test_add_target_coordinates_no_usable_trajectory(self):
+        """An insertion with none of the three usable provenances raises ValueError"""
+        with self.assertRaises(ValueError):
+            add_target_coordinates(
+                pid="pid", one=self._fake_one([]), channels=self._target_channels()
+            )
 
     def test_compute_features_from_raw_with_destriped_files(self):
         """Test compute_features_from_raw using the available destriped data files"""
