@@ -3,6 +3,18 @@
 This file documents the changes to the features for supported feature versions.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+- `ephysatlas.features.ModelSpikeShapeFeatures`: a sparser, neuroscientist-facing spike-shape schema that reparametrises `ModelSpikeFeatures`'s 14 raw waveform columns into 12. Four are new and directly interpretable -- `spike_width_secs` (trough-to-peak duration), `predepolarisation_width_secs` (tip-to-peak duration), `spike_amplitude` (trough-to-peak amplitude) and `peak_to_trough_ratio_log` (amplitude-independent shape asymmetry). Eight pass through unchanged (`tip_val`, `alpha_mean`, `alpha_std`, `polarity`, `spike_count` and the three slopes). Six are dropped as redundant: `peak_val`, `trough_val`, `peak_time_secs`, `trough_time_secs` and `tip_time_secs` are reparametrised into the four new columns without losing relative information, and `recovery_time_secs` is an exact constant offset of `trough_time_secs`. PCA over the raw set needs only ~7-8 components for 95% of its variance, which motivated the reduction (#118)
+- `ephysatlas.features.remap_waveform_shape_features(df)`: applies the remapping to a channel-level dataframe, returning `ModelSpikeShapeFeatures` columns on the same index (#118)
+- `ephysatlas.features.remap_waveform_shape_features_volume(vol, feature_names)`: the same transform for a `download_encoding_volume` array, returning the remapped volume and its feature names. Both entry points share one container-agnostic implementation, so the dataframe and volume paths cannot drift (#118)
+
+### Fixed
+- `feature_computation.add_target_coordinates` no longer fails on insertions that have neither a micro-manipulator nor a planned trajectory. The Alyx query is widened from `provenance__lte,30` to `provenance__lte,50` and trajectories are chosen by the new `feature_computation.PROVENANCE_PREFERENCE`: micro-manipulator, else planned, else histology track. Insertions that resolved before resolve to the same trajectory as before, so `x_target` / `y_target` / `z_target` are unchanged for them; insertions with none of the three now raise `ValueError` instead of `IndexError`. Example of an insertion this fixes: `1a924329-65aa-465d-b201-c2dd898aebd0`
+- A histology track trajectory is read in the Allen frame Alyx stores it in (`coordinate_system` `IBL-Allen`), skipping the -5 degree pitch correction and the needles -> Allen conversion that only apply to planned and micro-manipulator trajectories (`Needles-Allen`). Putting one through the needles path displaces the channels by ~320-460 um
+- `feature_computation.add_target_coordinates` no longer writes the tilt-corrected `theta` / `phi` back into the caller's `traj_dict`, which made a second call on the same dictionary apply the -5 degree correction twice
+
 ## [0.8.0] - 2026-09-15
 
 ### Added
