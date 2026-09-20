@@ -6,6 +6,7 @@ import unittest
 import numpy as np
 
 import neuropixel
+import ibldsp.utils
 import ephysatlas.features
 import ephysatlas.data
 
@@ -145,11 +146,22 @@ class TestWaveformFeatures(unittest.TestCase):
                 n_jobs=0,
             )
         self.assertTrue(df.shape[0] == waveforms["df_spikes"]["channel"].nunique())
-        self.assertEqual(4, len(waveforms.keys()))
+        self.assertEqual(5, len(waveforms.keys()))
         self.assertEqual(waveforms["raw"].shape[1], 121)
         self.assertEqual(waveforms["denoised"].shape[1], 121)
-        # Exact count for this fixture is 81, so to catch any deviations
+        # spike_count is a rate, and this fixture is exactly 1.0 s, so the summed
+        # rate is numerically the raw count: 81 here. Bracketed to catch deviations.
         self.assertTrue(60 < df["spike_count"].sum() < 110)
+
+        # Amplitudes must be un-z-scored back to Volts: on the order of the
+        # fixture's real per-channel AP-band RMS, not O(1)-O(10) z-score units.
+        rms_channel = ibldsp.utils.rms(self.data_ap, axis=-1)
+        rms_scale = np.median(rms_channel)
+        ptp = waveforms["df_spikes"]["ptp"]
+        self.assertTrue((ptp.abs() > 0.1 * rms_scale).all())
+        self.assertTrue((ptp.abs() < 100 * rms_scale).all())
+        self.assertTrue((df["peak_val"].abs().median() < 100 * rms_scale))
+        self.assertTrue((df["trough_val"].abs().median() < 100 * rms_scale))
 
 
 class TestRemapWaveformShapeFeatures(unittest.TestCase):
