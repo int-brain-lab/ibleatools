@@ -149,7 +149,8 @@ class TestWaveformFeatures(unittest.TestCase):
         self.assertEqual(5, len(waveforms.keys()))
         self.assertEqual(waveforms["raw"].shape[1], 121)
         self.assertEqual(waveforms["denoised"].shape[1], 121)
-        # Exact count for this fixture is 81, so to catch any deviations
+        # spike_count is a rate, and this fixture is exactly 1.0 s, so the summed
+        # rate is numerically the raw count: 81 here. Bracketed to catch deviations.
         self.assertTrue(60 < df["spike_count"].sum() < 110)
 
         # Amplitudes must be un-z-scored back to Volts: on the order of the

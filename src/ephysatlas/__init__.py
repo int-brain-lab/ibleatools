@@ -16,6 +16,6 @@ To run a published model, there is a single entry point for every model family:
     >>> out = model.predict(df_features)
 """
 
-__version__ = "0.8.0"
+__version__ = "0.9.0"
 
 from ephysatlas.models import load_pretrained  # noqa: E402,F401  (public API re-export)

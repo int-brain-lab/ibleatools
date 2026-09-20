@@ -138,7 +138,7 @@ import ibldsp.voltage
 logger = logging.getLogger(__name__)
 
 __features_version__ = (
-    "2025.12.18"  # this is the version of this feature extractor code
+    "2026.09.20"  # this is the version of this feature extractor code
 )
 
 
@@ -882,10 +882,12 @@ class ModelHistologyPlanned(BaseChannelFeatures):
     Note:
         Same coordinate space as :class:`ModelHistologyResolved` (IBL, metres from Bregma);
         Populated by ``feature_computation.add_target_coordinates``, which queries Alyx
-        trajectories with ``provenance__lte,30`` and prefers the ``Micro-manipulator``
-        estimate (Alyx provenance 30), falling back to the first trajectory returned. The
-        trajectory is converted from the needles (in-vivo) atlas into Allen space before
-        being interpolated along the track.
+        trajectories with ``provenance__lte,50`` and takes the best provenance available
+        per ``PROVENANCE_PREFERENCE``: ``Micro-manipulator`` (30), else ``Planned`` (10),
+        else ``Histology track`` (50); an insertion with none of the three raises
+        ``ValueError``. A micro-manipulator or planned trajectory is converted from the
+        needles (in-vivo) atlas into Allen space before being interpolated along the
+        track; a histology track is already in Allen space and is interpolated as is.
 
     Attributes:
         x_target (Series[float]): Target X-coordinate in metres from Bregma (IBL coordinates space).
@@ -895,17 +897,17 @@ class ModelHistologyPlanned(BaseChannelFeatures):
 
     x_target: float = pa.Field(
         coerce=True,
-        description="Target x-position in metres from Bregma (in IBL coordinates space), from the Alyx Micro-manipulator trajectory (provenance 30)",
+        description="Target x-position in metres from Bregma (in IBL coordinates space), from the best available Alyx trajectory (micro-manipulator, else planned, else histology track)",
         metadata={"raw_unit": "m"},
     )
     y_target: float = pa.Field(
         coerce=True,
-        description="Target y-position in metres from Bregma (in IBL coordinates space), from the Alyx Micro-manipulator trajectory (provenance 30)",
+        description="Target y-position in metres from Bregma (in IBL coordinates space), from the best available Alyx trajectory (micro-manipulator, else planned, else histology track)",
         metadata={"raw_unit": "m"},
     )
     z_target: float = pa.Field(
         coerce=True,
-        description="Target z-position in metres from Bregma (in IBL coordinates space), from the Alyx Micro-manipulator trajectory (provenance 30)",
+        description="Target z-position in metres from Bregma (in IBL coordinates space), from the best available Alyx trajectory (micro-manipulator, else planned, else histology track)",
         metadata={"raw_unit": "m"},
     )
 
@@ -1855,7 +1857,7 @@ def spikes(
     # spike_count is a rate (spikes/s), comparable across snippets of
     # different lengths.
     duration_secs = data.shape[-1] / fs
-    fcn_rate = lambda x: x.count() / duration_secs  # NOQA
+    fcn_rate = lambda x: x.size / duration_secs  # NOQA
 
     # Aggregation by channel of the spikes / waveforms features
     df_spiking = (
