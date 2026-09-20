@@ -806,8 +806,7 @@ def remap_waveform_shape_features(df: pd.DataFrame) -> pd.DataFrame:
         Columns of `ModelSpikeShapeFeatures`, same index as `df`.
     """
     out = pd.DataFrame(_remap_waveform_shape_arrays(df.__getitem__), index=df.index)
-    ModelSpikeShapeFeatures.validate(out)
-    return out
+    return ModelSpikeShapeFeatures.validate(out)
 
 
 def remap_waveform_shape_features_volume(ephys_atlas_vol, feature_names):
@@ -829,9 +828,9 @@ def remap_waveform_shape_features_volume(ephys_atlas_vol, feature_names):
     Returns
     -------
     remapped_vol : numpy.ndarray
-        Shape ``(nx, ny, nz, 9)``, dtype float32.
+        Shape ``(nx, ny, nz, 12)``, dtype float32.
     remapped_feature_names : numpy.ndarray
-        Length 9, naming `remapped_vol`'s last axis (`ModelSpikeShapeFeatures`
+        Length 12, naming `remapped_vol`'s last axis (`ModelSpikeShapeFeatures`
         column order).
 
     Raises
@@ -840,6 +839,7 @@ def remap_waveform_shape_features_volume(ephys_atlas_vol, feature_names):
         If a required raw feature name is absent from `feature_names`.
     """
     index_of = {name: i for i, name in enumerate(np.asarray(feature_names))}
+    assert len(index_of) == len(feature_names), "duplicate names in feature_names"
 
     def get(name):
         return ephys_atlas_vol[..., index_of[name]].astype(np.float32)
@@ -877,7 +877,9 @@ class ModelHistologyPlanned(BaseChannelFeatures):
     """Schema for planned histology coordinates.
 
     This schema defines the structure and validation rules for planned
-    histology coordinates before actual histological analysis.
+    histology coordinates before actual histological analysis. The coordinates come from
+    the best trajectory Alyx holds for the insertion -- micro-manipulator, else planned,
+    else histology track -- see feature_computation.PROVENANCE_PREFERENCE.
 
     Attributes:
         x_target (Series[float]): Target X-coordinate in micrometers.
@@ -887,17 +889,17 @@ class ModelHistologyPlanned(BaseChannelFeatures):
 
     x_target: float = pa.Field(
         coerce=True,
-        description="Target X-coordinate in micrometers using the micro-manipulator trajectory",
+        description="Target X-coordinate in micrometers from the insertion trajectory",
         metadata={"raw_unit": "um"},
     )
     y_target: float = pa.Field(
         coerce=True,
-        description="Target Y-coordinate in micrometers using the micro-manipulator trajectory",
+        description="Target Y-coordinate in micrometers from the insertion trajectory",
         metadata={"raw_unit": "um"},
     )
     z_target: float = pa.Field(
         coerce=True,
-        description="Target Z-coordinate in micrometers using the micro-manipulator trajectory",
+        description="Target Z-coordinate in micrometers from the insertion trajectory",
         metadata={"raw_unit": "um"},
     )
 
@@ -1298,8 +1300,7 @@ def lf(data, fs, bands=None, decay_features=True):
     assert len(set(df_decay.columns) & set(df_lf.columns)) == 0
     df_lf = pd.concat([df_lf, df_decay], axis=1)
 
-    ModelLfFeatures.validate(df_lf)
-    return df_lf
+    return ModelLfFeatures.validate(df_lf)
 
 
 def csd(data, fs, geometry, bands=None, decimate=10, scale=True):
@@ -1365,8 +1366,7 @@ def csd(data, fs, geometry, bands=None, decimate=10, scale=True):
     )
 
     df_csd = pd.concat([df_csd, df_csd_diff1.drop(columns=["channel"])], axis=1)
-    ModelCsdFeatures.validate(df_csd)
-    return df_csd
+    return ModelCsdFeatures.validate(df_csd)
 
 
 def ap(data, geometry=None, channel_labels=None):
@@ -1398,8 +1398,7 @@ def ap(data, geometry=None, channel_labels=None):
     df_ap["rms_ap"] = ibldsp.utils.rms(data, axis=-1)
     df_ap["cor_ratio"] = xcor_acor_ratio(data, geometry=geometry)
     df_ap["channel_labels"] = channel_labels
-    ModelApFeatures.validate(df_ap)
-    return df_ap
+    return ModelApFeatures.validate(df_ap)
 
 
 def dart_subtraction_numpy(data, fs, geometry, params=None, scratch_dir=None, **extra):
@@ -1838,7 +1837,7 @@ def spikes(
         .reset_index()
     )
 
-    ModelSpikeFeatures.validate(df_spiking)
+    df_spiking = ModelSpikeFeatures.validate(df_spiking)
 
     if return_waveforms:
         return df_spiking, d_waveforms | {"df_spikes": df_spikes}
