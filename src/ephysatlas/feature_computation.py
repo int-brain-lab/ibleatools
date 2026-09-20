@@ -24,15 +24,23 @@ import os
 # Set up logger
 logger = logging.getLogger(__name__)
 
+# Prefer micro-manipulator trajectories over planned ones, and both over histology tracks.
+PROVENANCE_PREFERENCE = {
+    "Micro-manipulator": 30,
+    "Planned": 10,
+    "Histology track": 50,
+}
+
 
 def add_target_coordinates(pid=None, one=None, channels=None, traj_dict=None):
-    """Add micro-manipulator target coordinates to channel information using trajectory data.
+    """Add target coordinates to channel information using trajectory data.
 
     This function calculates the 3D target coordinates (x_target, y_target, z_target) for each channel
     based on the probe insertion trajectory. It supports two modes: retrieving trajectory data from
-    the Alyx database using a probe ID, or using a direct trajectory dictionary. The function applies
-    pitch correction and coordinate system transformations to convert from in-vivo coordinates to
-    the Allen coordinate system.
+    the Alyx database using a probe ID, or using a direct trajectory dictionary. For a trajectory in
+    the in-vivo Needles frame the function applies pitch correction and a coordinate system
+    transformation to convert to the Allen coordinate system; a histology track is already in Allen
+    coordinates and is used as is.
 
     Args:
         pid (str, optional): Probe insertion ID. Required if using Alyx database mode (when one is provided).
@@ -49,7 +57,8 @@ def add_target_coordinates(pid=None, one=None, channels=None, traj_dict=None):
             containing the 3D coordinates for each channel.
 
     Raises:
-        ValueError: If neither (pid, one) nor traj_dict is provided.
+        ValueError: If neither (pid, one) nor traj_dict is provided, or if Alyx holds none of
+            the usable provenances in PROVENANCE_PREFERENCE for the given pid.
 
     Example:
         >>> from one.api import ONE
@@ -60,11 +69,17 @@ def add_target_coordinates(pid=None, one=None, channels=None, traj_dict=None):
         ... )
 
     Note:
-        - The function applies a -5 degree pitch correction to account for probe tilt.
-        - Coordinates are transformed from in-vivo to Allen coordinate system.
+        - For a Needles-frame trajectory, the function applies a -5 degree pitch correction
+          to account for probe tilt, then transforms the coordinates from in-vivo to the
+          Allen coordinate system.
         - If channels don't have 'rawInd' or 'channel' fields, it picks the number of channels from the axial_um field.
         - The function interpolates coordinates along the probe track for each channel.
-        - For Alyx database mode, it prioritizes micro-manipulator provenance trajectories.
+        - For Alyx database mode, trajectories are picked following PROVENANCE_PREFERENCE:
+          micro-manipulator, else planned, else histology track. Insertions with none of the
+          three raise rather than returning coordinates from an unrelated trajectory.
+        - Planned and micro-manipulator trajectories are stored in the Needles (in-vivo) frame,
+          histology tracks in the Allen frame, and each is read in its own frame. A traj_dict
+          passed by the caller carries no provenance and is treated as a Needles one.
     """
     # Initialize atlas objects for coordinate transformations
     needles = NeedlesAtlas()
@@ -75,6 +90,8 @@ def add_target_coordinates(pid=None, one=None, channels=None, traj_dict=None):
     # Validate input combinations and retrieve trajectory data
     if pid is not None and one is not None:
         # Mode 1: Using Alyx database to retrieve trajectory information
+        # Ask Alyx only for the provenances we accept, i.e. "provenance__lte,50"
+        django_filter = f"provenance__lte,{max(PROVENANCE_PREFERENCE.values())}"
         # Check if one is in local mode or remote mode,
         # TODO - Doing this for SDSC computation but need to do it cleaner.
         if one.mode == "local":
@@ -83,39 +100,67 @@ def add_target_coordinates(pid=None, one=None, channels=None, traj_dict=None):
 
             one_remote = ONE(mode="remote")
             trajs = one_remote.alyx.rest(
-                "trajectories", "list", probe_insertion=pid, django="provenance__lte,30"
+                "trajectories", "list", probe_insertion=pid, django=django_filter
             )
         else:
             # For remote mode, use the existing ONE client
             trajs = one.alyx.rest(
-                "trajectories", "list", probe_insertion=pid, django="provenance__lte,30"
+                "trajectories", "list", probe_insertion=pid, django=django_filter
             )
-        # Prioritize micro-manipulator trajectories, fallback to first available
+        # Take the best provenance available, first match within it. Some insertions have
+        # neither a micro-manipulator nor a planned trajectory and fall back to histology.
         traj = next(
-            (t for t in trajs if t["provenance"] == "Micro-manipulator"), trajs[0]
+            (
+                t
+                for provenance in PROVENANCE_PREFERENCE
+                for t in trajs
+                if t["provenance"] == provenance
+            ),
+            None,
         )
+        if traj is None:
+            raise ValueError(
+                f"No {' / '.join(PROVENANCE_PREFERENCE)} trajectory found for pid {pid}"
+            )
     elif traj_dict is not None:
         # Mode 2: Using direct trajectory dictionary
         traj = traj_dict
     else:
         raise ValueError("Either provide (pid, one) or traj_dict")
 
-    # Apply the pitch correction by using iblatlas.atlas.tilt_spherical()
-    # This corrects for the -5 degree tilt of the probe during insertion
-    new_theta, new_phi = iblatlas.atlas.tilt_spherical(
-        traj["theta"], traj["phi"], tilt_angle=-5
-    )
-    traj["theta"] = new_theta
-    traj["phi"] = new_phi
+    # Avoid mutating the dict, otherwise it will rewrite theta/phi inside
+    # the caller's traj_dict, tilting it again on every subsequent call.
+    traj = dict(traj)
 
-    # Create an Insertion object from the trajectory data
-    ins = Insertion.from_dict(traj, brain_atlas=needles)
+    if traj.get("provenance") == "Histology track":
+        # A histology track is already in the Allen coordinate system (Alyx stores it with
+        # coordinate_system "IBL-Allen"), so it takes neither the pitch correction nor the
+        # needles -> Allen conversion below: both only apply to the in-vivo Needles frame.
+        ins = Insertion.from_dict(traj, brain_atlas=allen)
 
-    # Get the trajectory coordinates and flip them (deepest point first)
-    txyz = np.flipud(ins.xyz)
-    # Convert the coordinates from in-vivo to the Allen coordinate system
-    # This involves transforming through the needles atlas to Allen atlas
-    txyz = allen.bc.i2xyz(needles.bc.xyz2i(txyz / 1e6, round=False, mode="clip")) * 1e6
+        # Get the trajectory coordinates and flip them (deepest point first)
+        txyz = np.flipud(ins.xyz)
+    else:
+        # Planned and micro-manipulator trajectories are in the in-vivo Needles frame
+        # ("Needles-Allen"), as is a caller-supplied traj_dict, which carries no provenance.
+        # Apply the pitch correction by using iblatlas.atlas.tilt_spherical()
+        # This corrects for the -5 degree tilt of the probe during insertion
+        new_theta, new_phi = iblatlas.atlas.tilt_spherical(
+            traj["theta"], traj["phi"], tilt_angle=-5
+        )
+        traj["theta"] = new_theta
+        traj["phi"] = new_phi
+
+        # Create an Insertion object from the trajectory data
+        ins = Insertion.from_dict(traj, brain_atlas=needles)
+
+        # Get the trajectory coordinates and flip them (deepest point first)
+        txyz = np.flipud(ins.xyz)
+        # Convert the coordinates from in-vivo to the Allen coordinate system
+        # This involves transforming through the needles atlas to Allen atlas
+        txyz = (
+            allen.bc.i2xyz(needles.bc.xyz2i(txyz / 1e6, round=False, mode="clip")) * 1e6
+        )
     # Interpolate coordinates along the probe track for each channel position
     xyz_mm = interpolate_along_track(txyz, channels["axial_um"] / 1e6)
 

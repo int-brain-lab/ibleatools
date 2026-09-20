@@ -352,7 +352,7 @@ def parse_logs_to_dataframe(base_dir: str) -> pd.DataFrame:
         "error": "Traceback",
         "timerange_error": "ValueError: Requested time range",
         "nodata_error": "AssertionError: Failed to load data",
-        "traj_error": '(t for t in trajs if t["provenance"] == "Micro-manipulator")',
+        "traj_error": "trajectory found for pid",
         "axial_um_error": "KeyError: 'axial_um'",
         "outside_brain_error": "ValueError: At least one y value lies outside of the atlas volume",
         "http_error": "requests.exceptions.HTTPError",
