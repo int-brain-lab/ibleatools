@@ -6,8 +6,16 @@ from functools import reduce
 from joblib import Parallel, delayed
 from ephysatlas.utils import get_aggregated_snippets_df
 from ephysatlas.data import outlier_treatment, replace_nan
-from ephysatlas.features import ChannelDataFrameSchema, ModelRawFeatures, ModelSpikeFeatures
-from ephysatlas.features import denoise_dataframe, DEFAULT_FAC, remap_waveform_shape_features
+from ephysatlas.features import (
+    ChannelDataFrameSchema,
+    ModelRawFeatures,
+    ModelSpikeFeatures,
+)
+from ephysatlas.features import (
+    denoise_dataframe,
+    DEFAULT_FAC,
+    remap_waveform_shape_features,
+)
 import numpy as np
 
 # Set up logger
@@ -432,25 +440,25 @@ def get_aggregated_raw_features(
 
 def apply_waveform_remap(agg_ephys_features: pd.DataFrame) -> pd.DataFrame:
     """Apply waveform shape feature remapping to replace ModelSpikeFeatures with ModelSpikeShapeFeatures.
-    
+
     This function takes a DataFrame containing aggregated electrophysiological features and applies
     the waveform shape feature remapping. It converts the 14 raw spike waveform columns from
     ModelSpikeFeatures to the 12 columns of ModelSpikeShapeFeatures, which are more interpretable
     spike-shape metrics.
-    
+
     Args:
         agg_ephys_features (pandas.DataFrame): DataFrame containing aggregated electrophysiological
             features, typically indexed by ('pid', 'channel'). Must contain the columns of
             ModelSpikeFeatures for the remapping to work.
-    
+
     Returns:
         pandas.DataFrame: A DataFrame with the same structure as the input but with waveform spike
             features remapped from ModelSpikeFeatures to ModelSpikeShapeFeatures. The 8 shared
-            columns are preserved, while the 6 dropped columns (peak_time_secs, peak_val, 
+            columns are preserved, while the 6 dropped columns (peak_time_secs, peak_val,
             recovery_time_secs, tip_time_secs, trough_time_secs, trough_val) are replaced by
             4 new columns (spike_width_secs, predepolarisation_width_secs, spike_amplitude,
             peak_to_trough_ratio_log).
-    
+
     Note:
         - If the input DataFrame does not contain all required ModelSpikeFeatures columns,
           the function will log a warning and return the original DataFrame unchanged.
@@ -458,7 +466,7 @@ def apply_waveform_remap(agg_ephys_features: pd.DataFrame) -> pd.DataFrame:
           (after the first application, the old columns are gone and cannot be remapped again).
     """
     spike_cols = list(ModelSpikeFeatures.to_schema().columns.keys())
-    
+
     # Check if we have all the required spike columns
     missing_cols = [c for c in spike_cols if c not in agg_ephys_features.columns]
     if missing_cols:
@@ -467,7 +475,7 @@ def apply_waveform_remap(agg_ephys_features: pd.DataFrame) -> pd.DataFrame:
             "Returning original DataFrame unchanged."
         )
         return agg_ephys_features
-    
+
     try:
         df_spike_shape = remap_waveform_shape_features(agg_ephys_features)
         # Drop the old ModelSpikeFeatures columns
@@ -477,7 +485,9 @@ def apply_waveform_remap(agg_ephys_features: pd.DataFrame) -> pd.DataFrame:
         df_remapped = pd.concat([df_remapped, df_spike_shape], axis=1)
         return df_remapped
     except Exception as e:
-        logger.warning(f"Failed to apply waveform remap: {e}. Returning original dataframe.")
+        logger.warning(
+            f"Failed to apply waveform remap: {e}. Returning original dataframe."
+        )
         return agg_ephys_features
 
 
@@ -518,6 +528,7 @@ def denoise_raw_features_data(
         - Denoising requires channel labels, which must be present in the 'channel_labels' column.
         - If `output_dir` is provided, the result is saved as 'raw_ephys_features_denoised.pqt'.
     """
+
     # Helper function to process a single PID group
     def denoise_pid(pid_df_tuple):
         pid, df_pid = pid_df_tuple
