@@ -6,8 +6,8 @@ from functools import reduce
 from joblib import Parallel, delayed
 from ephysatlas.utils import get_aggregated_snippets_df
 from ephysatlas.data import outlier_treatment, replace_nan
-from ephysatlas.features import ChannelDataFrameSchema, ModelRawFeatures
-from ephysatlas.features import denoise_dataframe, DEFAULT_FAC
+from ephysatlas.features import ChannelDataFrameSchema, ModelRawFeatures, ModelSpikeFeatures
+from ephysatlas.features import denoise_dataframe, DEFAULT_FAC, remap_waveform_shape_features
 import numpy as np
 
 # Set up logger
@@ -430,9 +430,59 @@ def get_aggregated_raw_features(
     return agg_df
 
 
+def apply_waveform_remap(agg_ephys_features: pd.DataFrame) -> pd.DataFrame:
+    """Apply waveform shape feature remapping to replace ModelSpikeFeatures with ModelSpikeShapeFeatures.
+    
+    This function takes a DataFrame containing aggregated electrophysiological features and applies
+    the waveform shape feature remapping. It converts the 14 raw spike waveform columns from
+    ModelSpikeFeatures to the 12 columns of ModelSpikeShapeFeatures, which are more interpretable
+    spike-shape metrics.
+    
+    Args:
+        agg_ephys_features (pandas.DataFrame): DataFrame containing aggregated electrophysiological
+            features, typically indexed by ('pid', 'channel'). Must contain the columns of
+            ModelSpikeFeatures for the remapping to work.
+    
+    Returns:
+        pandas.DataFrame: A DataFrame with the same structure as the input but with waveform spike
+            features remapped from ModelSpikeFeatures to ModelSpikeShapeFeatures. The 8 shared
+            columns are preserved, while the 6 dropped columns (peak_time_secs, peak_val, 
+            recovery_time_secs, tip_time_secs, trough_time_secs, trough_val) are replaced by
+            4 new columns (spike_width_secs, predepolarisation_width_secs, spike_amplitude,
+            peak_to_trough_ratio_log).
+    
+    Note:
+        - If the input DataFrame does not contain all required ModelSpikeFeatures columns,
+          the function will log a warning and return the original DataFrame unchanged.
+        - This transform is idempotent: applying it multiple times will produce the same result
+          (after the first application, the old columns are gone and cannot be remapped again).
+    """
+    spike_cols = list(ModelSpikeFeatures.to_schema().columns.keys())
+    
+    # Check if we have all the required spike columns
+    missing_cols = [c for c in spike_cols if c not in agg_ephys_features.columns]
+    if missing_cols:
+        logger.warning(
+            f"Missing ModelSpikeFeatures columns for remapping: {missing_cols}. "
+            "Returning original DataFrame unchanged."
+        )
+        return agg_ephys_features
+    
+    try:
+        df_spike_shape = remap_waveform_shape_features(agg_ephys_features)
+        # Drop the old ModelSpikeFeatures columns
+        spike_cols_to_drop = [c for c in spike_cols if c in agg_ephys_features.columns]
+        df_remapped = agg_ephys_features.drop(columns=spike_cols_to_drop)
+        # Add the new spike shape columns
+        df_remapped = pd.concat([df_remapped, df_spike_shape], axis=1)
+        return df_remapped
+    except Exception as e:
+        logger.warning(f"Failed to apply waveform remap: {e}. Returning original dataframe.")
+        return agg_ephys_features
+
+
 def denoise_raw_features_data(
     agg_raw_ephys_features: pd.DataFrame,
-    output_dir: Path | None = None,
     n_jobs: int = -1,
     verbose: int = 1,
     fac: float | dict = DEFAULT_FAC,
@@ -441,14 +491,11 @@ def denoise_raw_features_data(
 
     This function takes aggregated raw features and applies denoising algorithms to reduce noise
     and improve signal quality. The denoising is performed PID-by-PID in parallel using the `denoise_dataframe`
-    function, which requires channel labels for each PID. The process preserves the original column
-    structure while handling nan and noisy results.
+    function, which requires channel labels for each PID.
 
     Args:
         agg_raw_ephys_features (pandas.DataFrame): DataFrame containing aggregated raw electrophysiological features, typically indexed by
             ('pid', 'channel'). Must contain a 'channel_labels' column for each PID.
-        output_dir (Path or None, optional): If provided, the denoised DataFrame is saved as 'raw_ephys_features_denoised.pqt' in this directory.
-            The directory is created if it does not exist. Default is None (no file is written).
         n_jobs (int, optional): Number of parallel jobs to run. -1 means using all processors. Default is -1.
         verbose (int, optional): Verbosity level for joblib.Parallel. 0 means no messages, 1 means progress messages, >1 means more detailed messages. Default is 1.
         fac (float or dict, optional): TV denoising factor forwarded to `denoise_dataframe`. Either a
@@ -457,13 +504,13 @@ def denoise_raw_features_data(
             `DEFAULT_FAC` (raw_ap=raw_lf=raw_lf_csd=0.1, waveforms=3).
 
     Returns:
-        pandas.DataFrame: A DataFrame with the same structure as the input but with denoised feature values.
+        pandas.DataFrame: A DataFrame with denoised feature values.
             The denoising process reduces noise while preserving the original column structure.
 
     Example:
         >>> import pandas as pd
         >>> # Assuming agg_df is a DataFrame with aggregated raw features
-        >>> denoised_df = denoise_raw_features_data(agg_df, output_dir=Path('output'))
+        >>> denoised_df = denoise_raw_features_data(agg_df)
         >>> print(denoised_df.head())
 
     Note:
@@ -471,9 +518,6 @@ def denoise_raw_features_data(
         - Denoising requires channel labels, which must be present in the 'channel_labels' column.
         - If `output_dir` is provided, the result is saved as 'raw_ephys_features_denoised.pqt'.
     """
-    # Store the original column names to preserve structure
-    original_columns = agg_raw_ephys_features.columns.tolist()
-
     # Helper function to process a single PID group
     def denoise_pid(pid_df_tuple):
         pid, df_pid = pid_df_tuple
@@ -481,8 +525,7 @@ def denoise_raw_features_data(
         df_denoised = denoise_dataframe(
             df_pid, fac=fac, channel_labels=df_pid["channel_labels"].to_numpy()
         )
-        # Keep only the original columns to maintain structure
-        return df_denoised.loc[:, original_columns]
+        return df_denoised
 
     # Collect all PID groups
     pid_groups = list(agg_raw_ephys_features.groupby("pid"))
@@ -503,13 +546,6 @@ def denoise_raw_features_data(
         df_features_denoise, columns=df_features_denoise.columns
     )
 
-    # Optionally save the denoised features to a Parquet file
-    if output_dir is not None:
-        # Create the output directory if it doesn't exist
-        output_dir.mkdir(parents=True, exist_ok=True)
-        # Save the denoised DataFrame to a Parquet file
-        df_features_denoise.to_parquet(output_dir / "raw_ephys_features_denoised.pqt")
-
     return df_features_denoise
 
 
@@ -522,7 +558,8 @@ def produce_output_dataframes(
 
     This function serves as the main entry point for processing electrophysiological data from multiple
     probes. It coordinates the entire pipeline: aggregating channel metadata, processing raw features,
-    and applying denoising. The function handles both the data processing and optional file output.
+    applying denoising, and remapping waveform spike features to the sparse ModelSpikeShapeFeatures schema.
+    The function handles both the data processing and optional file output.
 
     Args:
         snippets_df (pandas.DataFrame): DataFrame containing snippet information for multiple PIDs. Must have columns:
@@ -535,7 +572,7 @@ def produce_output_dataframes(
             - 'snippets_df.pqt': Input snippets DataFrame
             - 'channels.pqt': Aggregated channel metadata
             - 'raw_ephys_features.pqt': Aggregated raw features
-            - 'raw_ephys_features_denoised.pqt': Denoised features
+            - 'raw_ephys_features_denoised.pqt': Denoised features with remapped waveform spike features
             The directory is created if it does not exist. Default is None (no files are written).
 
     Returns:
@@ -558,7 +595,7 @@ def produce_output_dataframes(
 
     Note:
         - The function searches for 'channels.pqt' files recursively in the input directory.
-        - All processing steps are performed sequentially: channel aggregation, feature aggregation, then denoising.
+        - All processing steps are performed sequentially: channel aggregation, feature aggregation, denoising, then waveform spike feature remapping.
         - If output_dir is provided, all intermediate and final results are saved as Parquet files.
         - This function serves as a high-level wrapper around the individual processing functions.
     """
@@ -581,7 +618,17 @@ def produce_output_dataframes(
     df_raw_ephys = get_aggregated_raw_features(snippets_df, output_dir=output_dir)
 
     # Apply denoising to the aggregated raw features
-    df_features_denoise = denoise_raw_features_data(df_raw_ephys, output_dir=output_dir)
+    df_features_denoise = denoise_raw_features_data(df_raw_ephys)
+
+    # Apply waveform shape feature remapping
+    df_features_denoise = apply_waveform_remap(df_features_denoise)
+
+    # Save the denoised and remapped features to a Parquet file
+    if output_dir is not None:
+        # Create the output directory if it doesn't exist
+        output_dir.mkdir(parents=True, exist_ok=True)
+        # Save the denoised DataFrame to a Parquet file
+        df_features_denoise.to_parquet(output_dir / "raw_ephys_features_denoised.pqt")
 
     return df_channels, df_raw_ephys, df_features_denoise
 
