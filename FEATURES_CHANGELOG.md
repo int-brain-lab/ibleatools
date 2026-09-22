@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 - Two multi-channel waveform features (#123): `spatial_spread_um`, the amplitude-weighted mean distance of a waveform's neighbour channels from its peak channel, and `slowness_s_per_m`, the signed slowness (inverse apparent velocity, s/m -- reported as slowness rather than velocity since velocity blows up whenever the underlying fit's slope is near zero) of the waveform's propagation along the probe axis, from a weighted linear fit of per-channel cross-correlation pick time vs distance from the peak channel. Both nullable: NaN wherever too few neighbour channels have a usable pick.
+- Per-channel standard deviations of the two features above (#127): `spatial_spread_um_std` and `slowness_s_per_m_std`, the spread of the per-spike values across the spikes detected on a channel, alongside the existing means. A large `slowness_s_per_m_std` next to a near-zero `slowness_s_per_m`, for instance, marks a channel whose mean is averaging over opposite-signed fits rather than one with genuinely simultaneous arrival. Sample standard deviation (ddof=1), computed over the spikes that have a usable value; nullable like the means, and NaN wherever fewer than two spikes on the channel qualify.
 
 ### Modified
 - Modified aggregation pipeline to replace NaN values with median after outlier treatment in `denoise_raw_features_data`
