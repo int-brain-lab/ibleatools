@@ -46,6 +46,7 @@ _ACG3D_FILES = [
 _LFP_AGGREGATES_FILES = {
     "default": "lf_compressed_all.h5",  # epsilon=150, alpha=28, ~23 GB
     "aggressive": "lf_compressed_aggressive_all.h5",  # epsilon=450, alpha=96, ~12 GB
+    "mild": "lf_compressed_mild_all.h5",  # gentlest compression, highest fidelity, ~34 GB
 }
 
 
@@ -771,10 +772,11 @@ def download_lfp_features(
         ONE client instance for AWS authentication.
     overwrite : bool, optional
         Force re-download if the file already exists locally. Defaults to False.
-    level : {"default", "aggressive"}, optional
+    level : {"default", "aggressive", "mild"}, optional
         Compression level to download. "default" (epsilon=150, alpha=28, ~23 GB) is
         higher fidelity; "aggressive" (epsilon=450, alpha=96, ~12 GB) trades fidelity
-        for size. Defaults to "default".
+        for size; "mild" (~34 GB) is the gentlest compression of the three, i.e. the
+        closest to the raw LFP. Defaults to "default".
 
     Returns
     -------
@@ -808,7 +810,7 @@ def read_lfp_features(path_project, pid, level="default", scale=0, bin_channels=
         Path to the project folder (parent of ``lfp_aggregates/``).
     pid : str
         Insertion ID; matches the top-level recording key in the merged HDF5 file.
-    level : {"default", "aggressive"}, optional
+    level : {"default", "aggressive", "mild"}, optional
         Compression level to read, matching the file downloaded by
         :func:`download_lfp_features`. Defaults to "default".
     scale : int, optional
