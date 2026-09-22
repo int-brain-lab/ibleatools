@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [2025_W51] (to be updated with actual week number)
 
+### Added
+- Two multi-channel waveform features (#123): `spatial_spread_um`, the amplitude-weighted mean distance of a waveform's neighbour channels from its peak channel, and `slowness_s_per_m`, the signed slowness (inverse apparent velocity, s/m -- reported as slowness rather than velocity since velocity blows up whenever the underlying fit's slope is near zero) of the waveform's propagation along the probe axis, from a weighted linear fit of per-channel cross-correlation pick time vs distance from the peak channel. Both nullable: NaN wherever too few neighbour channels have a usable pick.
+
 ### Modified
 - Modified aggregation pipeline to replace NaN values with median after outlier treatment in `denoise_raw_features_data`
 
