@@ -59,7 +59,7 @@ dart_subtraction_numpy
 spikes
     Spike detection and feature extraction with multiple backend support
 remap_waveform_shape_features
-    Remap ModelSpikeFeatures' 14 raw waveform columns onto a sparser set
+    Remap ModelSpikeFeatures' 18 raw waveform columns onto a sparser set
 remap_waveform_shape_features_volume
     Same remapping, for a brainwide encoding volume instead of a dataframe
 xcor_acor_ratio
@@ -610,8 +610,12 @@ class ModelSpikeSharedFeatures(BaseChannelFeatures):
         repolarisation_slope (Series[float]): Slope during repolarization phase (V/s).
         slowness_s_per_m (Series[float]): Signed axial slowness of the multi-channel
             waveform (s/m).
+        slowness_s_per_m_std (Series[float]): Across-spike standard deviation of
+            `slowness_s_per_m` on the channel (s/m).
         spatial_spread_um (Series[float]): Amplitude-weighted spatial spread of the
             multi-channel waveform (um).
+        spatial_spread_um_std (Series[float]): Across-spike standard deviation of
+            `spatial_spread_um` on the channel (um).
         spike_count (Series[float]): Spike rate, spikes/s (log2 transformed).
         tip_val (Series[float]): Tip amplitude value (V).
 
@@ -625,8 +629,9 @@ class ModelSpikeSharedFeatures(BaseChannelFeatures):
         them, so they stay in DARTsort's native, non-physical units.
         `slowness_s_per_m`/`spatial_spread_um` are also weighted by these
         Volts-scale amplitudes (see `ibldsp.waveforms.compute_slowness`/
-        `compute_spatial_spread`), but the values themselves are geometric
-        (seconds per metre / micrometres), not amplitudes.
+        `compute_spatial_spread`), but the values themselves -- and those of
+        their `_std` counterparts -- are geometric (seconds per metre /
+        micrometres), not amplitudes.
     """
 
     alpha_mean: float = pa.Field(
@@ -671,11 +676,28 @@ class ModelSpikeSharedFeatures(BaseChannelFeatures):
         "slope is near zero (near-simultaneous arrival across the neighbourhood).",
         metadata={"raw_unit": "s/m"},
     )
+    slowness_s_per_m_std: Optional[float] = pa.Field(
+        coerce=True,
+        nullable=True,
+        description="Standard deviation of `slowness_s_per_m` across the spikes detected "
+        "on the channel (sample standard deviation, ddof=1). NaN where fewer than two "
+        "spikes on the channel have a usable slowness.",
+        metadata={"raw_unit": "s/m"},
+    )
     spatial_spread_um: Optional[float] = pa.Field(
         coerce=True,
         nullable=True,
         description="Amplitude-weighted mean distance of the multi-channel waveform's "
         "neighbour channels from the peak channel.",
+        metadata={"raw_unit": "um"},
+    )
+    spatial_spread_um_std: Optional[float] = pa.Field(
+        coerce=True,
+        nullable=True,
+        description="Standard deviation of `spatial_spread_um` across the spikes detected "
+        "on the channel (sample standard deviation, ddof=1): how consistently spread out "
+        "the channel's waveforms are, as opposed to how spread out they are on average. "
+        "NaN where fewer than two spikes on the channel have a usable spread.",
         metadata={"raw_unit": "um"},
     )
     spike_count: float = pa.Field(
@@ -772,9 +794,17 @@ class ModelSpikeShapeFeatures(ModelSpikeSharedFeatures):
 
 
 # Shared ModelSpikeSharedFeatures columns that are nullable and were added after some
-# on-disk feature datasets were computed (#123): remap_waveform_shape_features/_volume
-# treat these as all-NaN when altogether absent from the input, rather than raising.
-_NULLABLE_SHARED_SPIKE_FEATURES = frozenset({"slowness_s_per_m", "spatial_spread_um"})
+# on-disk feature datasets were computed (#123 for the means, #127 for their standard
+# deviations): remap_waveform_shape_features/_volume treat these as all-NaN when
+# altogether absent from the input, rather than raising.
+_NULLABLE_SHARED_SPIKE_FEATURES = frozenset(
+    {
+        "slowness_s_per_m",
+        "slowness_s_per_m_std",
+        "spatial_spread_um",
+        "spatial_spread_um_std",
+    }
+)
 
 
 def _remap_waveform_shape_arrays(get):
@@ -802,7 +832,9 @@ def _remap_waveform_shape_arrays(get):
         "recovery_slope": get("recovery_slope"),
         "repolarisation_slope": get("repolarisation_slope"),
         "slowness_s_per_m": get("slowness_s_per_m"),
+        "slowness_s_per_m_std": get("slowness_s_per_m_std"),
         "spatial_spread_um": get("spatial_spread_um"),
+        "spatial_spread_um_std": get("spatial_spread_um_std"),
         "spike_count": get("spike_count"),
         "tip_val": get("tip_val"),
         "spike_width_secs": get("trough_time_secs") - get("peak_time_secs"),
@@ -813,9 +845,9 @@ def _remap_waveform_shape_arrays(get):
 
 
 def remap_waveform_shape_features(df: pd.DataFrame) -> pd.DataFrame:
-    """Remap `ModelSpikeFeatures`'s 16 raw waveform columns onto the sparser `ModelSpikeShapeFeatures` set.
+    """Remap `ModelSpikeFeatures`'s 18 raw waveform columns onto the sparser `ModelSpikeShapeFeatures` set.
 
-    The 14 raw columns are redundant: PCA needs only ~7-8 components for 95%
+    The 14 columns the PCA was run over are redundant: it needs only ~7-8 components for 95%
     of their variance. Only ``recovery_time_secs`` (exact constant offset of
     ``trough_time_secs``) and ``peak_val``/``trough_val``/``peak_time_secs``/
     ``trough_time_secs``/``tip_time_secs`` (reparametrised into
@@ -826,16 +858,18 @@ def remap_waveform_shape_features(df: pd.DataFrame) -> pd.DataFrame:
     are kept unchanged despite correlating with the amplitude/duration
     columns (r=0.79-0.99) -- handy precomputed quantities in their own right,
     even if not strictly independent information. ``slowness_s_per_m``/
-    ``spatial_spread_um`` (#123) are geometric, not part of that PCA
-    redundancy analysis, and are also kept unchanged.
+    ``spatial_spread_um`` (#123) and their ``_std`` counterparts (#127) are
+    geometric, postdate that PCA redundancy analysis and were not part of it,
+    and are also kept unchanged.
 
     Parameters
     ----------
     df : pandas.DataFrame
         Must contain the columns of `ModelSpikeFeatures` (e.g. the output of
-        `spike`, raw or denoised). `slowness_s_per_m`/`spatial_spread_um` (#123,
-        nullable) are treated as all-NaN if altogether absent, so data saved
-        before they existed can still be remapped.
+        `spike`, raw or denoised). `slowness_s_per_m`/`spatial_spread_um` (#123)
+        and their `_std` counterparts (#127), all nullable, are treated as
+        all-NaN if altogether absent, so data saved before they existed can
+        still be remapped.
 
     Returns
     -------
@@ -868,23 +902,23 @@ def remap_waveform_shape_features_volume(ephys_atlas_vol, feature_names):
         Shape ``(nx, ny, nz, n_features)``.
     feature_names : numpy.ndarray or sequence of str
         Length ``n_features``, naming `ephys_atlas_vol`'s last axis; must
-        include the 16 raw columns of `ModelSpikeFeatures`.
+        include the 18 raw columns of `ModelSpikeFeatures`.
 
     Returns
     -------
     remapped_vol : numpy.ndarray
-        Shape ``(nx, ny, nz, 14)``, dtype float32.
+        Shape ``(nx, ny, nz, 16)``, dtype float32.
     remapped_feature_names : numpy.ndarray
-        Length 14, naming `remapped_vol`'s last axis (`ModelSpikeShapeFeatures`
+        Length 16, naming `remapped_vol`'s last axis (`ModelSpikeShapeFeatures`
         column order).
 
     Raises
     ------
     KeyError
         If a required raw feature name is absent from `feature_names` (except
-        `slowness_s_per_m`/`spatial_spread_um`, #123, nullable: treated as
-        all-NaN if altogether absent, so volumes computed before they existed
-        can still be remapped).
+        `slowness_s_per_m`/`spatial_spread_um`, #123, and their `_std`
+        counterparts, #127, all nullable: treated as all-NaN if altogether
+        absent, so volumes computed before they existed can still be remapped).
     """
     index_of = {name: i for i, name in enumerate(np.asarray(feature_names))}
     assert len(index_of) == len(feature_names), "duplicate names in feature_names"
@@ -1993,7 +2027,11 @@ def spikes(
                 column="invert_sign_peak", aggfunc=lambda x: -x.mean()
             ),
             spatial_spread_um=pd.NamedAgg(column="spatial_spread_um", aggfunc="mean"),
+            spatial_spread_um_std=pd.NamedAgg(
+                column="spatial_spread_um", aggfunc="std"
+            ),
             slowness_s_per_m=pd.NamedAgg(column="slowness_s_per_m", aggfunc="mean"),
+            slowness_s_per_m_std=pd.NamedAgg(column="slowness_s_per_m", aggfunc="std"),
         )
         .reset_index()
     )

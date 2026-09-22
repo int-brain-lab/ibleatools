@@ -5,6 +5,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- `ephysatlas.features.ModelSpikeSharedFeatures` gains `spatial_spread_um_std` and `slowness_s_per_m_std`, the across-spike standard deviations of the two multi-channel waveform features #125 added, aggregated per channel in `features.spikes` next to their existing means. Both are nullable and use the sample standard deviation (ddof=1) over the spikes with a usable value, so a channel with fewer than two of those reports NaN rather than a misleading `0.0`. Being on the shared base class they reach both schemas: `ModelSpikeFeatures` goes from 16 to 18 columns and `ModelSpikeShapeFeatures` from 14 to 16, and both `remap_waveform_shape_features` and its `_volume` counterpart pass them through unchanged, treating them as all-NaN when absent from pre-#127 data (#127)
+
 ## [0.9.0] - 2026-09-20
 
 ### Added

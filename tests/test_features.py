@@ -20,10 +20,11 @@ print(f"Torch number of threads = {torch.get_num_threads()}")
 
 class TestFeatureSets(unittest.TestCase):
     def test_sets(self):
-        # 53/36 + spatial_spread_um/slowness_s_per_m (#123) = 55/38
-        self.assertEqual(len(ephysatlas.features.voltage_features_set("all")), 55)
+        # 53/36 + spatial_spread_um/slowness_s_per_m (#123) and their per-channel
+        # standard deviations (#127) = 57/40
+        self.assertEqual(len(ephysatlas.features.voltage_features_set("all")), 57)
         self.assertEqual(len(ephysatlas.features.voltage_features_set(["raw_ap"])), 3)
-        self.assertEqual(len(ephysatlas.features.voltage_features_set()), 38)
+        self.assertEqual(len(ephysatlas.features.voltage_features_set()), 40)
 
 
 class TestLFPFeatures(unittest.TestCase):
@@ -165,6 +166,15 @@ class TestWaveformFeatures(unittest.TestCase):
         self.assertTrue((df["peak_val"].abs().median() < 100 * rms_scale))
         self.assertTrue((df["trough_val"].abs().median() < 100 * rms_scale))
 
+        # The multi-channel features (#123) come with a per-channel across-spike
+        # standard deviation (#127). Both are nullable (NaN on channels with fewer
+        # than two spikes carrying a usable pick), but a standard deviation is never
+        # negative wherever it is defined.
+        for col in ["spatial_spread_um_std", "slowness_s_per_m_std"]:
+            self.assertIn(col, df.columns)
+            finite = df[col].to_numpy()[np.isfinite(df[col].to_numpy())]
+            self.assertTrue((finite >= 0).all())
+
 
 class TestRemapWaveformShapeFeatures(unittest.TestCase):
     def setUp(self):
@@ -232,11 +242,17 @@ class TestRemapWaveformShapeFeatures(unittest.TestCase):
         raw_cols = list(
             ephysatlas.features.ModelSpikeFeatures.to_schema().columns.keys()
         )
-        # slowness_s_per_m/spatial_spread_um (#123, nullable) postdate this fixture:
-        # add them as NaN rather than re-recording real waveform-derived data for it.
-        # They pass through both the dataframe and volume remap paths unchanged either
-        # way, so also exclude them from the "must have real data" dropna gate below.
-        nullable_cols = {"slowness_s_per_m", "spatial_spread_um"}
+        # slowness_s_per_m/spatial_spread_um (#123) and their per-channel standard
+        # deviations (#127) are nullable and postdate this fixture: add them as NaN
+        # rather than re-recording real waveform-derived data for it. They pass through
+        # both the dataframe and volume remap paths unchanged either way, so also
+        # exclude them from the "must have real data" dropna gate below.
+        nullable_cols = {
+            "slowness_s_per_m",
+            "slowness_s_per_m_std",
+            "spatial_spread_um",
+            "spatial_spread_um_std",
+        }
         df_source = self.df_features.assign(
             **{c: np.nan for c in nullable_cols if c not in self.df_features.columns}
         )
