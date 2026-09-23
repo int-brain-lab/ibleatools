@@ -42,7 +42,11 @@ class RegionalGaussianBaseline:
         out = []
         for idx in np.asarray(indices, int):
             mu, var = self._params(self.region_ids[idx])
-            out.append((mu + rng.normal(size=(n_per_index, len(mu))) * np.sqrt(var)).astype(np.float32))
+            out.append(
+                (mu + rng.normal(size=(n_per_index, len(mu))) * np.sqrt(var)).astype(
+                    np.float32
+                )
+            )
         return out
 
     def sample_for_regions(self, region_ids, n_per_index, rng):
@@ -50,11 +54,17 @@ class RegionalGaussianBaseline:
         out = []
         for rid in np.asarray(region_ids, int):
             mu, var = self._params(rid)
-            out.append((mu + rng.normal(size=(n_per_index, len(mu))) * np.sqrt(var)).astype(np.float32))
+            out.append(
+                (mu + rng.normal(size=(n_per_index, len(mu))) * np.sqrt(var)).astype(
+                    np.float32
+                )
+            )
         return out
 
     def mean_for_regions(self, region_ids):
-        return np.stack([self._params(rid)[0] for rid in np.asarray(region_ids, int)]).astype(np.float32)
+        return np.stack(
+            [self._params(rid)[0] for rid in np.asarray(region_ids, int)]
+        ).astype(np.float32)
 
 
 class SpatialKDEBaseline:
@@ -82,7 +92,7 @@ class SpatialKDEBaseline:
         z_query = np.asarray(z_query, np.float64)
         ind, spatial_w = self._neighbors(xyz_query)
         out = np.empty(len(z_query), np.float64)
-        bw2 = self.latent_bw ** 2
+        bw2 = self.latent_bw**2
         norm = -0.5 * self.dim * np.log(2.0 * np.pi * bw2)
         for i in range(len(z_query)):
             delta = self.z_train[ind[i]] - z_query[i][None, :]
@@ -96,9 +106,15 @@ class SpatialKDEBaseline:
         for i in range(len(ind)):
             chosen = rng.choice(len(ind[i]), size=int(n_per_index), p=spatial_w[i])
             centers = self.z_train[ind[i][chosen]]
-            out.append((centers + rng.normal(size=centers.shape) * self.latent_bw).astype(np.float32))
+            out.append(
+                (centers + rng.normal(size=centers.shape) * self.latent_bw).astype(
+                    np.float32
+                )
+            )
         return out
 
     def mean_for_xyz(self, xyz_query):
         ind, spatial_w = self._neighbors(xyz_query)
-        return np.sum(self.z_train[ind] * spatial_w[:, :, None], axis=1).astype(np.float32)
+        return np.sum(self.z_train[ind] * spatial_w[:, :, None], axis=1).astype(
+            np.float32
+        )

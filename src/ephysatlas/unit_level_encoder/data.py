@@ -34,13 +34,16 @@ class ContextTransform:
     50 AGEA PCs. Applying another PCA here would change the representation
     relative to the channel-level spatial encoder, so we only standardize it.
     """
+
     scaler: StandardScaler
 
     def transform(self, context: np.ndarray) -> np.ndarray:
         return self.scaler.transform(context).astype(np.float32)
 
 
-def infer_training_hemisphere_sign(xyz_m: np.ndarray, split: np.ndarray | None = None) -> float:
+def infer_training_hemisphere_sign(
+    xyz_m: np.ndarray, split: np.ndarray | None = None
+) -> float:
     """Infer the canonical ML sign from recorded units, robust to a few midline points."""
     xyz = np.asarray(xyz_m, np.float64)
     if split is not None:
@@ -71,27 +74,46 @@ def set_seed(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
 
 
-def _download_split(repo_id: str, vintage: str) -> dict:
-    """Download the authoritative PID split from the release revision."""
+def resolve_channel_release_file(
+    channel_model: str | Path, vintage: str, filename: str
+) -> Path:
+    """Locate a file of the published channel-level release the unit model is tied to.
+
+    Args:
+        channel_model: A local release directory, or a Hugging Face repo id (``owner/name``).
+        vintage: Release tag, used as the Hub revision.
+        filename: File path inside the release.
+
+    Returns:
+        Path: Local path to the file (downloaded into the Hub cache when remote).
+    """
+    local = Path(channel_model)
+    if local.is_dir():
+        path = local / filename
+        if not path.exists():
+            raise FileNotFoundError(
+                f"{filename} not found in local channel release {local}"
+            )
+        return path
     from huggingface_hub import hf_hub_download
 
-    path = hf_hub_download(
-        repo_id=repo_id,
-        filename="split.json",
-        revision=vintage,
+    return Path(
+        hf_hub_download(repo_id=str(channel_model), filename=filename, revision=vintage)
     )
 
-    return json.loads(
-        Path(path).read_text(encoding="utf-8")
-    )
+
+def load_channel_split(channel_model: str | Path, vintage: str) -> dict:
+    """The channel model's authoritative probe split for ``vintage`` (``split.json``)."""
+    path = resolve_channel_release_file(channel_model, vintage, "split.json")
+    return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
 def _split_pid_sets(manifest: dict) -> tuple[set[str], set[str], set[str]]:
     """Accept the split.json layouts used by the previous ephys-atlas runs."""
     aliases = {
-        "train": ("train", "train_pids", "training"),
-        "val": ("val", "validation", "val_pids", "validation_pids"),
-        "test": ("test", "test_pids", "testing"),
+        "train": ("train", "train_pids", "training", "p_tr_names"),
+        "val": ("val", "validation", "val_pids", "validation_pids", "p_va_names"),
+        "test": ("test", "test_pids", "testing", "p_te_names"),
     }
 
     def read_one(keys):
@@ -135,11 +157,19 @@ def assert_probe_disjoint(data: UnitData) -> None:
         raise RuntimeError("PID leakage detected across train/validation/test splits")
 
 
-def load_prepared_data(data_dir: Path, cfg, split_manifest: dict | None = None) -> UnitData:
+def load_prepared_data(
+    data_dir: Path, cfg, split_manifest: dict | None = None
+) -> UnitData:
     data_dir = Path(data_dir)
     required = [
-        "waveforms.npy", "ctx.npy", "xyz.npy", "pids.npy", "cosmos.npy",
-        "allen.npy", "waveform_features.npy", "waveform_feature_names.json",
+        "waveforms.npy",
+        "ctx.npy",
+        "xyz.npy",
+        "pids.npy",
+        "cosmos.npy",
+        "allen.npy",
+        "waveform_features.npy",
+        "waveform_feature_names.json",
     ]
     if cfg.use_acg:
         required.append("acgs.npy")
@@ -158,17 +188,21 @@ def load_prepared_data(data_dir: Path, cfg, split_manifest: dict | None = None) 
     cosmos = np.load(data_dir / "cosmos.npy").astype(np.int64)
     allen = np.load(data_dir / "allen.npy").astype(np.int64)
     features = np.load(data_dir / "waveform_features.npy").astype(np.float32)
-    feature_names = json.loads((data_dir / "waveform_feature_names.json").read_text(encoding="utf-8"))
+    feature_names = json.loads(
+        (data_dir / "waveform_feature_names.json").read_text(encoding="utf-8")
+    )
 
     br = BrainRegions()
     beryl = br.remap(allen, source_map="Allen", target_map="Beryl").astype(np.int64)
 
     if split_manifest is None:
-        split_manifest = _download_split(cfg.repo_id, cfg.vintage)
+        split_manifest = load_channel_split(cfg.channel_model, cfg.vintage)
     split = build_split(pids, split_manifest)
 
     if bool(getattr(cfg, "mirror_x_to_single_hemisphere", False)):
-        hemisphere_sign = float(getattr(cfg, "mirror_x_sign", infer_training_hemisphere_sign(xyz, split)))
+        hemisphere_sign = float(
+            getattr(cfg, "mirror_x_sign", infer_training_hemisphere_sign(xyz, split))
+        )
         xyz = mirror_xyz_to_hemisphere(xyz, hemisphere_sign)
         print(
             f"[mirror-x] folded all unit xyz onto canonical training hemisphere "

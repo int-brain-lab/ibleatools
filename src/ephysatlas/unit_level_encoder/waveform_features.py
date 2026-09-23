@@ -94,11 +94,7 @@ def _fallback_one(
 
     trough = int(np.nanargmin(t))
     tip = int(np.nanargmax(t[: trough + 1])) if trough > 0 else 0
-    peak = (
-        trough + int(np.nanargmax(t[trough:]))
-        if trough < len(t) - 1
-        else trough
-    )
+    peak = trough + int(np.nanargmax(t[trough:])) if trough < len(t) - 1 else trough
 
     # A robust recovery landmark.  This is only a fallback for cases where the
     # exact ibldsp routine cannot return a row.
@@ -162,9 +158,7 @@ def _compute_chunk_or_split(
         out[indices[good]] = feat[good]
         bad_idx = indices[~good]
         for idx in bad_idx:
-            out[idx] = _fallback_one(
-                x[idx], fs, trough_offset_samples
-            )
+            out[idx] = _fallback_one(x[idx], fs, trough_offset_samples)
             fallback_mask[idx] = True
         return
 
@@ -174,20 +168,26 @@ def _compute_chunk_or_split(
         # undefined ibldsp feature row and isolate/fallback only that unit.
         if len(indices) == 1:
             idx = int(indices[0])
-            out[idx] = _fallback_one(
-                x[idx], fs, trough_offset_samples
-            )
+            out[idx] = _fallback_one(x[idx], fs, trough_offset_samples)
             fallback_mask[idx] = True
             return
 
         mid = len(indices) // 2
         _compute_chunk_or_split(
-            x, indices[:mid], out, fallback_mask,
-            fs, trough_offset_samples,
+            x,
+            indices[:mid],
+            out,
+            fallback_mask,
+            fs,
+            trough_offset_samples,
         )
         _compute_chunk_or_split(
-            x, indices[mid:], out, fallback_mask,
-            fs, trough_offset_samples,
+            x,
+            indices[mid:],
+            out,
+            fallback_mask,
+            fs,
+            trough_offset_samples,
         )
 
 

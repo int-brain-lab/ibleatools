@@ -36,7 +36,9 @@ def component_log_prob(gmm, z: np.ndarray) -> np.ndarray:
             cov = np.asarray(gmm.covariances_[k], np.float64)
             sign, logdet = np.linalg.slogdet(cov)
             if sign <= 0:
-                raise RuntimeError(f"Non-positive-definite covariance for component {k}")
+                raise RuntimeError(
+                    f"Non-positive-definite covariance for component {k}"
+                )
             delta = z - means[k]
             sol = np.linalg.solve(cov, delta.T).T
             out[:, k] = -0.5 * (d * LOG2PI + logdet + np.sum(delta * sol, axis=1))
@@ -48,7 +50,9 @@ def responsibilities(gmm: GaussianMixture, z: np.ndarray) -> np.ndarray:
     return gmm.predict_proba(np.asarray(z, np.float64)).astype(np.float32)
 
 
-def fit_latent_scaler(z_joint: np.ndarray, train_mask: np.ndarray, path: Path | None = None):
+def fit_latent_scaler(
+    z_joint: np.ndarray, train_mask: np.ndarray, path: Path | None = None
+):
     scaler = StandardScaler().fit(np.asarray(z_joint)[train_mask])
     if path is not None:
         Path(path).parent.mkdir(parents=True, exist_ok=True)
@@ -92,7 +96,9 @@ def fit_global_gmm(z_joint, train_mask, cfg, out_dir: Path, *, scaler=None):
         "rare_component_indices": rare.tolist(),
         "rare_component_threshold": float(cfg.gmm_min_component_fraction),
     }
-    (out_dir / "global_gmm_summary.json").write_text(json.dumps(info, indent=2), encoding="utf-8")
+    (out_dir / "global_gmm_summary.json").write_text(
+        json.dumps(info, indent=2), encoding="utf-8"
+    )
     return gmm, scaler, z, train_resp, info
 
 
@@ -120,7 +126,14 @@ class ContextWeightNet(nn.Module):
         seq = []
         d = input_dim
         for _ in range(max(1, int(layers) - 1)):
-            seq.extend([nn.Linear(d, hidden), nn.LayerNorm(hidden), nn.GELU(), nn.Dropout(dropout)])
+            seq.extend(
+                [
+                    nn.Linear(d, hidden),
+                    nn.LayerNorm(hidden),
+                    nn.GELU(),
+                    nn.Dropout(dropout),
+                ]
+            )
             d = hidden
         seq.append(nn.Linear(d, n_components))
         self.net = nn.Sequential(*seq)
@@ -146,11 +159,17 @@ class ContextWeightModel(WeightModel):
 
     def weights_for_context(self, context_raw):
         if self.transform is None:
-            raise RuntimeError("Context transform unavailable for arbitrary-voxel prediction")
-        return self._weights_from_pc(self.transform.transform(np.asarray(context_raw, np.float32)))
+            raise RuntimeError(
+                "Context transform unavailable for arbitrary-voxel prediction"
+            )
+        return self._weights_from_pc(
+            self.transform.transform(np.asarray(context_raw, np.float32))
+        )
 
 
-def fit_context_weight_model(context_pc, train_mask, val_mask, resp_train, resp_val, component_mass, cfg, out_dir):
+def fit_context_weight_model(
+    context_pc, train_mask, val_mask, resp_train, resp_val, component_mass, cfg, out_dir
+):
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     x_train = torch.from_numpy(np.asarray(context_pc[train_mask], np.float32))
@@ -161,13 +180,28 @@ def fit_context_weight_model(context_pc, train_mask, val_mask, resp_train, resp_
     mass = np.maximum(np.asarray(component_mass, np.float32), 1e-6)
     class_weight = mass ** (-float(cfg.rare_component_power))
     class_weight /= np.average(class_weight, weights=mass)
-    class_weight = np.minimum(class_weight, float(cfg.rare_component_weight_cap)).astype(np.float32)
+    class_weight = np.minimum(
+        class_weight, float(cfg.rare_component_weight_cap)
+    ).astype(np.float32)
     cw = torch.from_numpy(class_weight).to(cfg.device)
 
-    net = ContextWeightNet(x_train.shape[1], cfg.context_hidden_dim, cfg.context_layers,
-                           cfg.context_dropout, y_train.shape[1]).to(cfg.device)
-    opt = torch.optim.AdamW(net.parameters(), lr=cfg.context_weight_lr, weight_decay=cfg.context_weight_decay)
-    loader = DataLoader(TensorDataset(x_train, y_train), batch_size=cfg.context_weight_batch_size, shuffle=True)
+    net = ContextWeightNet(
+        x_train.shape[1],
+        cfg.context_hidden_dim,
+        cfg.context_layers,
+        cfg.context_dropout,
+        y_train.shape[1],
+    ).to(cfg.device)
+    opt = torch.optim.AdamW(
+        net.parameters(),
+        lr=cfg.context_weight_lr,
+        weight_decay=cfg.context_weight_decay,
+    )
+    loader = DataLoader(
+        TensorDataset(x_train, y_train),
+        batch_size=cfg.context_weight_batch_size,
+        shuffle=True,
+    )
 
     def soft_ce(logits, target):
         logp = F.log_softmax(logits, dim=1)
@@ -194,8 +228,14 @@ def fit_context_weight_model(context_pc, train_mask, val_mask, resp_train, resp_
             n += len(xb)
         net.eval()
         with torch.no_grad():
-            val_loss = float(soft_ce(net(x_val.to(cfg.device)), y_val.to(cfg.device)).cpu())
-        row = {"epoch": epoch, "train_balanced_ce": total / max(n, 1), "val_balanced_ce": val_loss}
+            val_loss = float(
+                soft_ce(net(x_val.to(cfg.device)), y_val.to(cfg.device)).cpu()
+            )
+        row = {
+            "epoch": epoch,
+            "train_balanced_ce": total / max(n, 1),
+            "val_balanced_ce": val_loss,
+        }
         history.append(row)
         if val_loss < best - 1e-5:
             best = val_loss
@@ -208,14 +248,19 @@ def fit_context_weight_model(context_pc, train_mask, val_mask, resp_train, resp_
     if best_state is None:
         raise RuntimeError("Context weight model produced no checkpoint")
     net.load_state_dict(best_state)
-    torch.save({"model_state_dict": best_state, "class_weight": class_weight, "history": history},
-               out_dir / "context_weight_model.pt")
+    torch.save(
+        {
+            "model_state_dict": best_state,
+            "class_weight": class_weight,
+            "history": history,
+        },
+        out_dir / "context_weight_model.pt",
+    )
     return ContextWeightModel(net, context_pc, cfg.device), {
         "best_val_balanced_ce": float(best),
         "rare_component_class_weights": class_weight.tolist(),
         "history": history,
     }
-
 
 
 def conditional_log_prob(z_scaled, indices, gmm, weight_model):
@@ -236,12 +281,16 @@ def sample_conditional(indices, n_per_index, gmm, weight_model, rng):
         comp = rng.choice(gmm.n_components, size=int(n_per_index), p=prob)
         means = gmm.means_[comp]
         if gmm.covariance_type == "diag":
-            draw = means + rng.normal(size=means.shape) * np.sqrt(gmm.covariances_[comp])
+            draw = means + rng.normal(size=means.shape) * np.sqrt(
+                gmm.covariances_[comp]
+            )
         elif gmm.covariance_type == "full":
-            draw = np.vstack([
-                rng.multivariate_normal(means[j], gmm.covariances_[k])
-                for j, k in enumerate(comp)
-            ])
+            draw = np.vstack(
+                [
+                    rng.multivariate_normal(means[j], gmm.covariances_[k])
+                    for j, k in enumerate(comp)
+                ]
+            )
         else:
             raise ValueError(gmm.covariance_type)
         outputs.append(draw.astype(np.float32))
@@ -258,12 +307,16 @@ def sample_conditional_for_context(context_raw, n_per_context, gmm, weight_model
         comp = rng.choice(gmm.n_components, size=int(n_per_context), p=prob)
         means = gmm.means_[comp]
         if gmm.covariance_type == "diag":
-            draw = means + rng.normal(size=means.shape) * np.sqrt(gmm.covariances_[comp])
+            draw = means + rng.normal(size=means.shape) * np.sqrt(
+                gmm.covariances_[comp]
+            )
         elif gmm.covariance_type == "full":
-            draw = np.vstack([
-                rng.multivariate_normal(means[j], gmm.covariances_[k])
-                for j, k in enumerate(comp)
-            ])
+            draw = np.vstack(
+                [
+                    rng.multivariate_normal(means[j], gmm.covariances_[k])
+                    for j, k in enumerate(comp)
+                ]
+            )
         else:
             raise ValueError(gmm.covariance_type)
         outputs.append(draw.astype(np.float32))
@@ -283,29 +336,50 @@ def posterior_mean_for_context(gmm, weight_model, context_raw):
 def save_context_weight_bundle(model, transform, out_dir, cfg):
     out_dir = Path(out_dir)
     joblib.dump(transform, out_dir / "context_transform.joblib")
-    torch.save({
-        "model_state_dict": model.net.state_dict(),
-        "input_dim": int(model.context_pc.shape[1]),
-        "hidden": int(cfg.context_hidden_dim),
-        "layers": int(cfg.context_layers),
-        "dropout": float(cfg.context_dropout),
-        "n_components": int(model.net.net[-1].out_features),
-    }, out_dir / "context_weight_model_bundle.pt")
+    torch.save(
+        {
+            "model_state_dict": model.net.state_dict(),
+            "input_dim": int(model.context_pc.shape[1]),
+            "hidden": int(cfg.context_hidden_dim),
+            "layers": int(cfg.context_layers),
+            "dropout": float(cfg.context_dropout),
+            "n_components": int(model.net.net[-1].out_features),
+        },
+        out_dir / "context_weight_model_bundle.pt",
+    )
 
 
 def load_context_weight_bundle(context_raw, out_dir, cfg):
+    """Load the context -> mixture-weight model saved by :func:`save_context_weight_bundle`.
+
+    Args:
+        context_raw: ``[N, 100]`` raw context of a unit dataset, so that ``weights(indices)`` can
+            index it; None when only arbitrary-position prediction (``weights_for_context``) is
+            needed, as for a published model used without its training data.
+        out_dir: Directory holding ``context_transform.joblib`` and
+            ``context_weight_model_bundle.pt``.
+        cfg: Unit-model ``Config`` (only ``device`` is read).
+    """
     out_dir = Path(out_dir)
     transform = joblib.load(out_dir / "context_transform.joblib")
-    context_pc = transform.transform(context_raw)
     payload = torch.load(
         out_dir / "context_weight_model_bundle.pt",
         map_location=cfg.device,
         weights_only=False,
     )
+    if context_raw is None:
+        context_pc = np.zeros((0, int(payload["input_dim"])), np.float32)
+    else:
+        context_pc = transform.transform(context_raw)
     net = ContextWeightNet(
-        payload["input_dim"], payload["hidden"], payload["layers"],
-        payload["dropout"], payload["n_components"],
+        payload["input_dim"],
+        payload["hidden"],
+        payload["layers"],
+        payload["dropout"],
+        payload["n_components"],
     ).to(cfg.device)
     net.load_state_dict(payload["model_state_dict"])
     net.eval()
-    return ContextWeightModel(net, context_pc, cfg.device, transform=transform), transform
+    return ContextWeightModel(
+        net, context_pc, cfg.device, transform=transform
+    ), transform

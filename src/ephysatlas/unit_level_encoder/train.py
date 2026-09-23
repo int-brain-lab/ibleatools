@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import copy
 import json
-from dataclasses import asdict
 from pathlib import Path
 
 import joblib
@@ -38,7 +37,9 @@ class FeatureTargetTransform:
 
 
 class UnitDataset(Dataset):
-    def __init__(self, data, indices, feature_transform: FeatureTargetTransform | None = None):
+    def __init__(
+        self, data, indices, feature_transform: FeatureTargetTransform | None = None
+    ):
         self.data = data
         self.indices = np.asarray(indices, dtype=np.int64)
         self.feature_transform = feature_transform
@@ -65,7 +66,9 @@ class UnitDataset(Dataset):
             item["stpc"] = torch.from_numpy(self.data.stpc[idx])
         if self.feature_transform is not None:
             item["feature_continuous"] = torch.from_numpy(self._feature_cont[i])
-            item["feature_polarity"] = torch.tensor(self._feature_pol[i], dtype=torch.long)
+            item["feature_polarity"] = torch.tensor(
+                self._feature_pol[i], dtype=torch.long
+            )
         return item
 
 
@@ -75,7 +78,9 @@ def fit_feature_target_transform(data) -> FeatureTargetTransform:
     scaler = StandardScaler().fit(train_features[:, :-1])
     polarity_values = np.unique(train_features[:, -1].astype(np.float32))
     if len(polarity_values) < 2:
-        raise RuntimeError(f"Polarity has only one TRAIN category: {polarity_values.tolist()}")
+        raise RuntimeError(
+            f"Polarity has only one TRAIN category: {polarity_values.tolist()}"
+        )
     return FeatureTargetTransform(scaler, polarity_values)
 
 
@@ -100,9 +105,13 @@ def _batch_loss(model, batch, cfg):
         losses["stpc_reconstruction"] = F.mse_loss(rec["stpc"], stpc)
         total = total + losses["stpc_reconstruction"]
 
-    var = torch.stack([variance_penalty(z, cfg.latent_std_target) for z in lat.values()]).mean()
+    var = torch.stack(
+        [variance_penalty(z, cfg.latent_std_target) for z in lat.values()]
+    ).mean()
     cov = torch.stack([covariance_penalty(z) for z in lat.values()]).mean()
-    total = total + cfg.lambda_latent_variance * var + cfg.lambda_latent_covariance * cov
+    total = (
+        total + cfg.lambda_latent_variance * var + cfg.lambda_latent_covariance * cov
+    )
     losses["latent_variance_penalty"] = var
     losses["latent_covariance_penalty"] = cov
 
@@ -144,16 +153,22 @@ def _run_epoch(model, loader, cfg, optimizer=None):
 
 def checkpoint_name(cfg) -> str:
     mods = "wave" + ("_acg" if cfg.use_acg else "") + ("_stpc" if cfg.use_stpc else "")
-    suffix = "_feature_fidelity" if bool(getattr(cfg, "feature_fidelity", False)) else ""
+    suffix = (
+        "_feature_fidelity" if bool(getattr(cfg, "feature_fidelity", False)) else ""
+    )
     return f"ae_{mods}_d{cfg.modality_latent_dim}{suffix}.pt"
 
 
-def train_autoencoder(data, cfg, checkpoint_dir: Path, initialize_from: Path | None = None):
+def train_autoencoder(
+    data, cfg, checkpoint_dir: Path, initialize_from: Path | None = None
+):
     checkpoint_dir = Path(checkpoint_dir)
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
     train_ids, val_ids, _ = split_indices(data)
 
-    feature_transform = fit_feature_target_transform(data) if cfg.feature_fidelity else None
+    feature_transform = (
+        fit_feature_target_transform(data) if cfg.feature_fidelity else None
+    )
     train_loader = DataLoader(
         UnitDataset(data, train_ids, feature_transform),
         batch_size=cfg.ae_batch_size,
@@ -167,17 +182,31 @@ def train_autoencoder(data, cfg, checkpoint_dir: Path, initialize_from: Path | N
         num_workers=cfg.num_workers,
     )
 
-    n_classes = len(feature_transform.polarity_values) if feature_transform is not None else 2
-    model = UnitAutoencoder(cfg, n_continuous_features=10, n_polarity_classes=n_classes).to(cfg.device)
+    n_classes = (
+        len(feature_transform.polarity_values) if feature_transform is not None else 2
+    )
+    model = UnitAutoencoder(
+        cfg, n_continuous_features=10, n_polarity_classes=n_classes
+    ).to(cfg.device)
 
     if initialize_from is not None and Path(initialize_from).exists():
-        source = torch.load(initialize_from, map_location=cfg.device, weights_only=False)
+        source = torch.load(
+            initialize_from, map_location=cfg.device, weights_only=False
+        )
         source_state = source["model_state_dict"]
-        compatible = {k: v for k, v in source_state.items() if k in model.state_dict() and model.state_dict()[k].shape == v.shape}
+        compatible = {
+            k: v
+            for k, v in source_state.items()
+            if k in model.state_dict() and model.state_dict()[k].shape == v.shape
+        }
         missing, unexpected = model.load_state_dict(compatible, strict=False)
-        print(f"[AE] initialized compatible weights from {initialize_from}; new parameters={len(missing)}")
+        print(
+            f"[AE] initialized compatible weights from {initialize_from}; new parameters={len(missing)}"
+        )
 
-    opt = torch.optim.AdamW(model.parameters(), lr=cfg.ae_learning_rate, weight_decay=cfg.ae_weight_decay)
+    opt = torch.optim.AdamW(
+        model.parameters(), lr=cfg.ae_learning_rate, weight_decay=cfg.ae_weight_decay
+    )
     best = np.inf
     best_state = None
     history = []
@@ -202,18 +231,25 @@ def train_autoencoder(data, cfg, checkpoint_dir: Path, initialize_from: Path | N
     model.load_state_dict(best_state)
     payload = {
         "model_state_dict": best_state,
-        "config": {**asdict(cfg), "device": str(cfg.device)},
+        # JSON-safe (paths as strings): a pickled WindowsPath cannot be loaded on Linux/macOS.
+        "config": cfg.to_json_dict(),
         "history": history,
         "best_validation_loss": float(best),
         "active_modalities": list(cfg.active_modalities()),
         "feature_fidelity": bool(cfg.feature_fidelity),
-        "polarity_values": feature_transform.polarity_values.tolist() if feature_transform else None,
+        "polarity_values": feature_transform.polarity_values.tolist()
+        if feature_transform
+        else None,
     }
     path = checkpoint_dir / checkpoint_name(cfg)
     torch.save(payload, path)
     if feature_transform is not None:
-        joblib.dump(feature_transform, checkpoint_dir / f"{path.stem}_feature_transform.joblib")
-    (checkpoint_dir / f"{path.stem}_history.json").write_text(json.dumps(history, indent=2), encoding="utf-8")
+        joblib.dump(
+            feature_transform, checkpoint_dir / f"{path.stem}_feature_transform.joblib"
+        )
+    (checkpoint_dir / f"{path.stem}_history.json").write_text(
+        json.dumps(history, indent=2), encoding="utf-8"
+    )
     return model, payload, path
 
 
@@ -225,7 +261,9 @@ def load_autoencoder_file(path: Path | str, cfg):
     payload = torch.load(path, map_location=cfg.device, weights_only=False)
     polarity_values = payload.get("polarity_values")
     n_classes = len(polarity_values) if polarity_values is not None else 2
-    model = UnitAutoencoder(cfg, n_continuous_features=10, n_polarity_classes=n_classes).to(cfg.device)
+    model = UnitAutoencoder(
+        cfg, n_continuous_features=10, n_polarity_classes=n_classes
+    ).to(cfg.device)
     model.load_state_dict(payload["model_state_dict"], strict=True)
     model.eval()
     return model, payload, path
@@ -238,7 +276,9 @@ def load_autoencoder(cfg, checkpoint_dir: Path):
     payload = torch.load(path, map_location=cfg.device, weights_only=False)
     polarity_values = payload.get("polarity_values")
     n_classes = len(polarity_values) if polarity_values is not None else 2
-    model = UnitAutoencoder(cfg, n_continuous_features=10, n_polarity_classes=n_classes).to(cfg.device)
+    model = UnitAutoencoder(
+        cfg, n_continuous_features=10, n_polarity_classes=n_classes
+    ).to(cfg.device)
     model.load_state_dict(payload["model_state_dict"], strict=True)
     model.eval()
     return model, payload, path
@@ -247,7 +287,12 @@ def load_autoencoder(cfg, checkpoint_dir: Path):
 @torch.no_grad()
 def encode_all(model, data, cfg):
     ids = np.arange(len(data.waveforms))
-    loader = DataLoader(UnitDataset(data, ids), batch_size=cfg.eval_batch_size, shuffle=False, num_workers=cfg.num_workers)
+    loader = DataLoader(
+        UnitDataset(data, ids),
+        batch_size=cfg.eval_batch_size,
+        shuffle=False,
+        num_workers=cfg.num_workers,
+    )
     chunks = {name: [] for name in cfg.active_modalities()}
     model.eval()
     for batch in tqdm(loader, desc="encode units", leave=False):
@@ -259,6 +304,10 @@ def encode_all(model, data, cfg):
         lat = model.encode(waveform, acg, stpc)
         for name, value in lat.items():
             chunks[name].append(value.cpu().numpy())
-    result = {name: np.concatenate(parts).astype(np.float32) for name, parts in chunks.items()}
-    result["joint"] = np.concatenate([result[name] for name in cfg.active_modalities()], axis=1).astype(np.float32)
+    result = {
+        name: np.concatenate(parts).astype(np.float32) for name, parts in chunks.items()
+    }
+    result["joint"] = np.concatenate(
+        [result[name] for name in cfg.active_modalities()], axis=1
+    ).astype(np.float32)
     return result

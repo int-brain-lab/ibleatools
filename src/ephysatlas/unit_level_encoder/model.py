@@ -60,7 +60,13 @@ class ModalityAutoencoder(nn.Module):
 class WaveformFeatureHead(nn.Module):
     """Predict standardized continuous features and categorical polarity from z_wave."""
 
-    def __init__(self, latent_dim: int, hidden_dim: int, n_continuous: int, n_polarity_classes: int):
+    def __init__(
+        self,
+        latent_dim: int,
+        hidden_dim: int,
+        n_continuous: int,
+        n_polarity_classes: int,
+    ):
         super().__init__()
         self.shared = nn.Sequential(
             nn.Linear(latent_dim, hidden_dim),
@@ -79,7 +85,9 @@ class WaveformFeatureHead(nn.Module):
 class UnitAutoencoder(nn.Module):
     """Independent modality AEs, optionally with a waveform-feature auxiliary head."""
 
-    def __init__(self, cfg, n_continuous_features: int = 10, n_polarity_classes: int = 2):
+    def __init__(
+        self, cfg, n_continuous_features: int = 10, n_polarity_classes: int = 2
+    ):
         super().__init__()
         d = int(cfg.modality_latent_dim)
         self.use_acg = bool(cfg.use_acg)
@@ -87,8 +95,12 @@ class UnitAutoencoder(nn.Module):
         self.feature_fidelity = bool(getattr(cfg, "feature_fidelity", False))
 
         self.waveform = ModalityAutoencoder(tuple(cfg.waveform_shape), d)
-        self.acg = ModalityAutoencoder(tuple(cfg.acg_shape), d) if self.use_acg else None
-        self.stpc = ModalityAutoencoder(tuple(cfg.stpc_shape), d) if self.use_stpc else None
+        self.acg = (
+            ModalityAutoencoder(tuple(cfg.acg_shape), d) if self.use_acg else None
+        )
+        self.stpc = (
+            ModalityAutoencoder(tuple(cfg.stpc_shape), d) if self.use_stpc else None
+        )
         self.feature_head = (
             WaveformFeatureHead(
                 d,
@@ -96,7 +108,8 @@ class UnitAutoencoder(nn.Module):
                 int(n_continuous_features),
                 int(n_polarity_classes),
             )
-            if self.feature_fidelity else None
+            if self.feature_fidelity
+            else None
         )
 
     def encode(self, waveform, acg=None, stpc=None):
@@ -117,11 +130,17 @@ class UnitAutoencoder(nn.Module):
 
     def predict_waveform_features(self, waveform_latent):
         if self.feature_head is None:
-            raise RuntimeError("This autoencoder was not configured with feature_fidelity=True")
+            raise RuntimeError(
+                "This autoencoder was not configured with feature_fidelity=True"
+            )
         return self.feature_head(waveform_latent)
 
     def split_joint_latent(self, joint: torch.Tensor, latent_dim: int):
-        order = ["waveform"] + (["acg"] if self.use_acg else []) + (["stpc"] if self.use_stpc else [])
+        order = (
+            ["waveform"]
+            + (["acg"] if self.use_acg else [])
+            + (["stpc"] if self.use_stpc else [])
+        )
         chunks = torch.split(joint, int(latent_dim), dim=1)
         return {name: chunk for name, chunk in zip(order, chunks)}
 

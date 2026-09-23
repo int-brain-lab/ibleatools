@@ -10,7 +10,9 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from .config import Config
+from ephysatlas import model_registry
+
+from .config import UNIT_MODEL_REPO_ID, Config
 from .data import fit_context_transform, load_prepared_data, set_seed
 from .gmm_models import (
     GlobalWeightModel,
@@ -22,7 +24,11 @@ from .gmm_models import (
     responsibilities,
     save_context_weight_bundle,
 )
-from .knn_decoder import EmpiricalKNNDecoder
+from .knn_decoder import (
+    COMPONENT_FEATURE_SEED_OFFSET,
+    EmpiricalKNNDecoder,
+    component_feature_expectations,
+)
 from .prepare_data import prepare_latest_cells_encoder_data
 from .train import checkpoint_name, encode_all, load_autoencoder_file, train_autoencoder
 from .waveform_features import extract_generated_waveform_features
@@ -40,22 +46,45 @@ class UnitModelBundle:
     latents: dict[str, np.ndarray] | None = None
     z_scaled: np.ndarray | None = None
     model_root: Path | None = None
+    # [n_components, n_features] E[kNN phenotype feature | component]; see compute_component_features.
+    component_features: np.ndarray | None = None
 
 
-def prepare_unit_data(cfg: Config):
-    """Create/load the prepared unit arrays required by training and evaluation."""
+def prepare_unit_data(cfg: Config, split_manifest: dict | None = None):
+    """Create/load the prepared unit arrays required by training and evaluation.
+
+    Raw IBL cell aggregates are downloaded under ``cfg.data_dir`` (needs ONE/S3 access) and the
+    prepared arrays are cached in ``cfg.prepared_data_dir``.
+
+    Args:
+        cfg: Unit-model configuration.
+        split_manifest: Probe split to use. Defaults to the channel release's ``split.json`` for
+            ``cfg.vintage``; pass a released unit model's own split to reproduce it exactly.
+    """
     data_dir = Path(cfg.prepared_data_dir)
     expected_ctx_dim = int(cfg.n_cell_pcs) + int(cfg.n_gene_pcs)
     required = [
-        "waveforms.npy", "acgs.npy", "stpc.npy", "ctx.npy", "xyz.npy",
-        "pids.npy", "cosmos.npy", "allen.npy", "waveform_features.npy",
-        "waveform_feature_names.json", "latest_cells_encoder_manifest.json",
+        "waveforms.npy",
+        "acgs.npy",
+        "stpc.npy",
+        "ctx.npy",
+        "xyz.npy",
+        "pids.npy",
+        "cosmos.npy",
+        "allen.npy",
+        "waveform_features.npy",
+        "waveform_feature_names.json",
+        "latest_cells_encoder_manifest.json",
     ]
     have_all = all((data_dir / name).exists() for name in required)
     current = False
     if have_all:
         try:
-            manifest = json.loads((data_dir / "latest_cells_encoder_manifest.json").read_text(encoding="utf-8"))
+            manifest = json.loads(
+                (data_dir / "latest_cells_encoder_manifest.json").read_text(
+                    encoding="utf-8"
+                )
+            )
             ctx_shape = np.load(data_dir / "ctx.npy", mmap_mode="r").shape
             current = (
                 len(ctx_shape) == 2
@@ -72,7 +101,7 @@ def prepare_unit_data(cfg: Config):
         if not cfg.prepare_data_if_missing and not have_all:
             raise FileNotFoundError(f"Missing prepared arrays in {data_dir}")
         prepare_latest_cells_encoder_data(
-            root_path=Path.cwd(),
+            root_path=Path(cfg.data_dir),
             out_dir=data_dir,
             project=cfg.project,
             download=True,
@@ -82,7 +111,7 @@ def prepare_unit_data(cfg: Config):
             use_stpc=True,
             stpc_window_ms=80.0,
             allow_peak_fallback=False,
-            context_repo_id=cfg.repo_id,
+            channel_model=cfg.channel_model,
             context_vintage=cfg.vintage,
             n_cell_pcs=cfg.n_cell_pcs,
             n_gene_pcs=cfg.n_gene_pcs,
@@ -90,7 +119,7 @@ def prepare_unit_data(cfg: Config):
             mirror_x_sign=cfg.mirror_x_sign,
         )
 
-    data = load_prepared_data(data_dir, cfg)
+    data = load_prepared_data(data_dir, cfg, split_manifest=split_manifest)
     cfg.waveform_shape = tuple(data.waveforms.shape[1:])
     cfg.acg_shape = tuple(data.acgs.shape[1:])
     cfg.stpc_shape = tuple(data.stpc.shape[1:])
@@ -106,6 +135,7 @@ def _model_paths(cfg: Config) -> dict[str, Path]:
         "gmm_dir": root / "gmm_k25_full",
         "context_dir": root / "context_weights_k25",
         "knn": root / "knn_bank_k20.npz",
+        "component_features": root / model_registry.UNIT_COMPONENT_FEATURES_FILE,
     }
 
 
@@ -120,7 +150,9 @@ def _model_space_waveform_features(data, cfg) -> np.ndarray:
         data.waveforms, sampling_rate_hz=cfg.waveform_sampling_rate_hz
     )
     if tuple(names) != tuple(data.waveform_feature_names):
-        raise RuntimeError("Waveform feature order mismatch between prepared data and model-space extractor")
+        raise RuntimeError(
+            "Waveform feature order mismatch between prepared data and model-space extractor"
+        )
     path.parent.mkdir(parents=True, exist_ok=True)
     np.save(path, features.astype(np.float32), allow_pickle=False)
     return features.astype(np.float32, copy=False)
@@ -135,6 +167,43 @@ def _build_knn(data, z_scaled, cfg) -> EmpiricalKNNDecoder:
         k=int(cfg.knn_decoder_k),
         feature_names=data.waveform_feature_names,
     )
+
+
+def compute_component_features(
+    gmm, knn: EmpiricalKNNDecoder, cfg: Config
+) -> np.ndarray:
+    """E[kNN phenotype feature | GMM component], with the settings the published figures use."""
+    return component_feature_expectations(
+        gmm,
+        knn,
+        n_samples=int(cfg.feature_slice_component_mc_samples),
+        seed=int(cfg.feature_slice_seed) + COMPONENT_FEATURE_SEED_OFFSET,
+    )
+
+
+def save_component_features(
+    path: Path, features: np.ndarray, feature_names, cfg: Config
+) -> Path:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        path,
+        features=np.asarray(features, np.float32),
+        feature_names=np.asarray(list(feature_names), dtype="U"),
+        n_samples=np.asarray(int(cfg.feature_slice_component_mc_samples), np.int64),
+        seed=np.asarray(
+            int(cfg.feature_slice_seed) + COMPONENT_FEATURE_SEED_OFFSET, np.int64
+        ),
+    )
+    return path
+
+
+def load_component_features(path: Path) -> tuple[np.ndarray, list[str]]:
+    with np.load(Path(path), allow_pickle=False) as payload:
+        return (
+            payload["features"].astype(np.float32),
+            payload["feature_names"].astype(str).tolist(),
+        )
 
 
 def train_unit_model(cfg: Config, data=None) -> UnitModelBundle:
@@ -155,11 +224,9 @@ def train_unit_model(cfg: Config, data=None) -> UnitModelBundle:
     val_mask = data.split == 1
     scaler = fit_latent_scaler(latents["joint"], train_mask, paths["scaler"])
 
-    gcfg = copy.deepcopy(cfg)
-    gcfg.gmm_components = 25
-    gcfg.gmm_covariance_type = "full"
+    # The released model: K=cfg.gmm_components (25) full-covariance components.
     gmm, _, z_scaled, resp_train, _ = fit_global_gmm(
-        latents["joint"], train_mask, gcfg, paths["gmm_dir"], scaler=scaler
+        latents["joint"], train_mask, cfg, paths["gmm_dir"], scaler=scaler
     )
 
     context_transform = fit_context_transform(data, cfg)
@@ -177,7 +244,9 @@ def train_unit_model(cfg: Config, data=None) -> UnitModelBundle:
         paths["context_dir"],
     )
     context_model.transform = context_transform
-    save_context_weight_bundle(context_model, context_transform, paths["context_dir"], cfg)
+    save_context_weight_bundle(
+        context_model, context_transform, paths["context_dir"], cfg
+    )
     (paths["context_dir"] / "conditioning_summary.json").write_text(
         json.dumps(
             {
@@ -194,6 +263,10 @@ def train_unit_model(cfg: Config, data=None) -> UnitModelBundle:
 
     knn = _build_knn(data, z_scaled, cfg)
     knn.save_bank(paths["knn"])
+    component_features = compute_component_features(gmm, knn, cfg)
+    save_component_features(
+        paths["component_features"], component_features, knn.feature_names, cfg
+    )
 
     return UnitModelBundle(
         cfg=cfg,
@@ -206,6 +279,7 @@ def train_unit_model(cfg: Config, data=None) -> UnitModelBundle:
         latents=latents,
         z_scaled=z_scaled,
         model_root=paths["root"],
+        component_features=component_features,
     )
 
 
@@ -214,31 +288,53 @@ def load_unit_model(
     *,
     source: str = "hub",
     data=None,
-    token: str | None = None,
-    revision: str = "main",
+    revision: str | None = None,
+    repo_id: str = UNIT_MODEL_REPO_ID,
+    release_dir: Path | str | None = None,
+    cache_dir: Path | str | None = None,
 ) -> UnitModelBundle:
-    """Load the final pretrained unit model from the Hub or a local model directory."""
+    """Load the unit model together with its dataset, latents and standardized latents.
+
+    Args:
+        cfg: Runtime configuration. Its paths (``data_dir``, ``prepared_data_dir``, ...) and
+            ``device`` are kept; for a published model every scientific setting is replaced by
+            the release's own ``config.json``.
+        source: ``"hub"`` downloads ``repo_id`` at ``revision`` from the Hugging Face Hub;
+            ``"release"`` reads a local published release directory (``release_dir``);
+            ``"local"`` reads the training layout written by :func:`train_unit_model` under
+            ``cfg.model_dir``.
+        data: Prepared :class:`UnitData`. Prepared (downloaded from IBL S3 when missing) if None.
+        revision: Hub tag to pin; defaults to ``cfg.vintage``.
+        repo_id: Hugging Face repository of the unit model.
+        release_dir: Local release directory, for ``source="release"``.
+        cache_dir: Hub download cache.
+    """
     set_seed(cfg.seed)
-    if source not in {"hub", "local"}:
-        raise ValueError("source must be 'hub' or 'local'")
+    if source not in {"hub", "release", "local"}:
+        raise ValueError("source must be 'hub', 'release' or 'local'")
 
-    if source == "hub":
-        from .release import download_unit_release
-        requested_data_dir = Path(cfg.prepared_data_dir)
-        requested_output_dir = Path(cfg.output_dir)
-        requested_model_dir = Path(cfg.model_dir)
-        device = cfg.device
-        release_root = download_unit_release(cfg.repo_id, revision=revision, token=token)
-        model_dir = release_root / "models" / "unit"
-        cfg = Config.from_json(model_dir / "config.json", device=device)
-        cfg.prepared_data_dir = requested_data_dir
-        cfg.output_dir = requested_output_dir
-        cfg.model_dir = requested_model_dir
-    else:
-        paths = _model_paths(cfg)
-        model_dir = paths["root"]
-        release_root = None
+    if source in {"hub", "release"}:
+        from ephysatlas.models.unit_encoder import UnitEncoder
 
+        if source == "hub":
+            model_dir = model_registry.resolve_model(
+                repo_id, revision=revision or cfg.vintage, cache_dir=cache_dir
+            )
+        else:
+            if release_dir is None:
+                raise ValueError("source='release' requires release_dir")
+            model_dir = Path(release_dir)
+            model_registry.verify_checksums(model_dir, missing_ok=True)
+        encoder = UnitEncoder(model_dir, device=cfg.device)
+        released = encoder.cfg
+        # Keep the caller's runtime locations; everything scientific comes from the release.
+        for key in ("data_dir", "prepared_data_dir", "model_dir", "output_dir"):
+            setattr(released, key, getattr(cfg, key))
+        if data is None:
+            data = prepare_unit_data(released, split_manifest=encoder.split())
+        return encoder.bundle(data)
+
+    paths = _model_paths(cfg)
     if data is None:
         data = prepare_unit_data(cfg)
     else:
@@ -246,25 +342,17 @@ def load_unit_model(
         cfg.acg_shape = tuple(data.acgs.shape[1:])
         cfg.stpc_shape = tuple(data.stpc.shape[1:])
 
-    if source == "hub":
-        ae_path = model_dir / "autoencoder.pt"
-        scaler_path = model_dir / "shared_latent_scaler.joblib"
-        gmm_path = model_dir / "global_gmm.joblib"
-        context_dir = model_dir
-        knn_path = model_dir / "knn_bank.npz"
+    ae, _, _ = load_autoencoder_file(paths["ae_dir"] / checkpoint_name(cfg), cfg)
+    scaler = joblib.load(paths["scaler"])
+    gmm = joblib.load(paths["gmm_dir"] / "global_gmm.joblib")
+    context_model, _ = load_context_weight_bundle(
+        data.context, paths["context_dir"], cfg
+    )
+    knn = EmpiricalKNNDecoder.load_bank(paths["knn"], k=cfg.knn_decoder_k)
+    if paths["component_features"].exists():
+        component_features, _ = load_component_features(paths["component_features"])
     else:
-        paths = _model_paths(cfg)
-        ae_path = paths["ae_dir"] / checkpoint_name(cfg)
-        scaler_path = paths["scaler"]
-        gmm_path = paths["gmm_dir"] / "global_gmm.joblib"
-        context_dir = paths["context_dir"]
-        knn_path = paths["knn"]
-
-    ae, _, _ = load_autoencoder_file(ae_path, cfg)
-    scaler = joblib.load(scaler_path)
-    gmm = joblib.load(gmm_path)
-    context_model, _ = load_context_weight_bundle(data.context, context_dir, cfg)
-    knn = EmpiricalKNNDecoder.load_bank(knn_path, k=cfg.knn_decoder_k)
+        component_features = compute_component_features(gmm, knn, cfg)
     latents = encode_all(ae, data, cfg)
     z_scaled = scaler.transform(latents["joint"]).astype(np.float32)
 
@@ -278,7 +366,8 @@ def load_unit_model(
         data=data,
         latents=latents,
         z_scaled=z_scaled,
-        model_root=model_dir,
+        model_root=paths["root"],
+        component_features=component_features,
     )
 
 
@@ -310,9 +399,13 @@ def basic_test(bundle: UnitModelBundle) -> dict:
         "n_test_units": int(len(ids)),
     }
 
-    conditional_nll = float(-np.mean(conditional_log_prob(z, test, bundle.gmm, bundle.context_model)))
+    conditional_nll = float(
+        -np.mean(conditional_log_prob(z, test, bundle.gmm, bundle.context_model))
+    )
     global_model = GlobalWeightModel(bundle.gmm.weights_, len(data.waveforms))
-    unconditional_nll = float(-np.mean(conditional_log_prob(z, test, bundle.gmm, global_model)))
+    unconditional_nll = float(
+        -np.mean(conditional_log_prob(z, test, bundle.gmm, global_model))
+    )
     knn_summary = bundle.knn_decoder.distance_summary(z[ids])
 
     return {
@@ -333,6 +426,8 @@ def basic_test(bundle: UnitModelBundle) -> dict:
                 and np.isfinite(unconditional_nll)
                 and np.isfinite(knn_summary["nearest_distance_median"])
             ),
-            "conditional_beats_unconditional": bool(conditional_nll < unconditional_nll),
+            "conditional_beats_unconditional": bool(
+                conditional_nll < unconditional_nll
+            ),
         },
     }

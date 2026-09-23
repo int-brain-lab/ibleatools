@@ -36,8 +36,13 @@ class EmpiricalKNNDecoder:
         train_mask = np.asarray(train_mask, bool)
         self.train_indices = np.flatnonzero(train_mask).astype(np.int64)
         self.z_train = z_scaled[self.train_indices]
-        self.feature_train = np.asarray(waveform_features, np.float32)[self.train_indices]
-        self.feature_names = tuple(feature_names or [f"feature_{i}" for i in range(self.feature_train.shape[1])])
+        self.feature_train = np.asarray(waveform_features, np.float32)[
+            self.train_indices
+        ]
+        self.feature_names = tuple(
+            feature_names
+            or [f"feature_{i}" for i in range(self.feature_train.shape[1])]
+        )
         self.k = min(int(k), len(self.train_indices))
         self._fit_index()
 
@@ -59,7 +64,9 @@ class EmpiricalKNNDecoder:
             if train_indices is None
             else np.asarray(train_indices, np.int64)
         )
-        obj.feature_names = tuple(feature_names or [f"feature_{i}" for i in range(obj.feature_train.shape[1])])
+        obj.feature_names = tuple(
+            feature_names or [f"feature_{i}" for i in range(obj.feature_train.shape[1])]
+        )
         obj.k = min(int(k), len(obj.z_train))
         obj._fit_index()
         return obj
@@ -68,7 +75,9 @@ class EmpiricalKNNDecoder:
         if self.k < 1:
             raise ValueError("EmpiricalKNNDecoder requires at least one TRAIN unit")
         if len(self.z_train) != len(self.feature_train):
-            raise ValueError("z_train and feature_train must have the same number of rows")
+            raise ValueError(
+                "z_train and feature_train must have the same number of rows"
+            )
         self.nn = NearestNeighbors(n_neighbors=self.k, algorithm="auto", n_jobs=-1)
         self.nn.fit(self.z_train)
 
@@ -86,15 +95,23 @@ class EmpiricalKNNDecoder:
         return path
 
     @classmethod
-    def load_bank(cls, path: Path | str, *, k: int | None = None) -> "EmpiricalKNNDecoder":
+    def load_bank(
+        cls, path: Path | str, *, k: int | None = None
+    ) -> "EmpiricalKNNDecoder":
         with np.load(Path(path), allow_pickle=False) as bank:
             saved_k = int(np.asarray(bank["k"]).item()) if "k" in bank else 20
-            names = bank["feature_names"].astype(str).tolist() if "feature_names" in bank else None
+            names = (
+                bank["feature_names"].astype(str).tolist()
+                if "feature_names" in bank
+                else None
+            )
             return cls.from_bank(
                 bank["z_train"],
                 bank["feature_train"],
                 k=saved_k if k is None else int(k),
-                train_indices=bank["train_indices"] if "train_indices" in bank else None,
+                train_indices=bank["train_indices"]
+                if "train_indices" in bank
+                else None,
                 feature_names=names,
             )
 
@@ -119,14 +136,26 @@ class EmpiricalKNNDecoder:
         values = self.feature_train[q.indices]
         return np.sum(values * q.weights[:, :, None], axis=1).astype(np.float32)
 
-    def sample_features(self, z_query: np.ndarray, rng: np.random.Generator) -> np.ndarray:
+    def sample_features(
+        self, z_query: np.ndarray, rng: np.random.Generator
+    ) -> np.ndarray:
         q = self.query(z_query)
-        chosen = np.asarray([rng.choice(self.k, p=q.weights[i]) for i in range(len(q.indices))], dtype=np.int64)
-        return self.feature_train[q.indices[np.arange(len(q.indices)), chosen]].astype(np.float32)
+        chosen = np.asarray(
+            [rng.choice(self.k, p=q.weights[i]) for i in range(len(q.indices))],
+            dtype=np.int64,
+        )
+        return self.feature_train[q.indices[np.arange(len(q.indices)), chosen]].astype(
+            np.float32
+        )
 
-    def sample_training_indices(self, z_query: np.ndarray, rng: np.random.Generator) -> np.ndarray:
+    def sample_training_indices(
+        self, z_query: np.ndarray, rng: np.random.Generator
+    ) -> np.ndarray:
         q = self.query(z_query)
-        chosen = np.asarray([rng.choice(self.k, p=q.weights[i]) for i in range(len(q.indices))], dtype=np.int64)
+        chosen = np.asarray(
+            [rng.choice(self.k, p=q.weights[i]) for i in range(len(q.indices))],
+            dtype=np.int64,
+        )
         local = q.indices[np.arange(len(q.indices)), chosen]
         return self.train_indices[local]
 
@@ -134,7 +163,7 @@ class EmpiricalKNNDecoder:
         q = self.query(z_query)
         d1 = q.distances[:, 0]
         dk = q.distances[:, -1]
-        effective_n = 1.0 / np.maximum(np.sum(q.weights ** 2, axis=1), 1e-12)
+        effective_n = 1.0 / np.maximum(np.sum(q.weights**2, axis=1), 1e-12)
         return {
             "k": int(self.k),
             "nearest_distance_mean": float(np.mean(d1)),
@@ -144,3 +173,45 @@ class EmpiricalKNNDecoder:
             "effective_neighbors_mean": float(np.mean(effective_n)),
             "effective_neighbors_median": float(np.median(effective_n)),
         }
+
+
+# Seed offset (added to ``Config.feature_slice_seed``) used for the component feature
+# expectations. The published atlas figures and ``UnitEncoder.predict`` share it, so a released
+# ``component_feature_expectations.npz`` reproduces the figure maps exactly.
+COMPONENT_FEATURE_SEED_OFFSET = 3200
+
+
+def component_feature_expectations(
+    gmm, decoder: EmpiricalKNNDecoder, *, n_samples: int = 128, seed: int = 0
+):
+    """Stable E[TRAIN phenotype feature | GMM component] under the kNN projection.
+
+    Each component is sampled once with a fixed Monte Carlo bank of ``n_samples`` standardized
+    latents, every draw is projected onto its kNN-weighted TRAIN exemplars, and the projections are
+    averaged. A location's expected phenotype is then ``weights(x) @ expectations``: smooth in
+    space and deterministic, unlike independent per-location sampling.
+
+    Args:
+        gmm: Fitted sklearn ``GaussianMixture`` (``full`` or ``diag`` covariance).
+        decoder: The released :class:`EmpiricalKNNDecoder`.
+        n_samples: Monte Carlo draws per component.
+        seed: Seed of the draws.
+
+    Returns:
+        np.ndarray: ``[n_components, n_features]`` float32.
+    """
+    n = max(1, int(n_samples))
+    rng = np.random.default_rng(int(seed))
+    draws = []
+    for k in range(gmm.n_components):
+        if gmm.covariance_type == "full":
+            z = rng.multivariate_normal(gmm.means_[k], gmm.covariances_[k], size=n)
+        elif gmm.covariance_type == "diag":
+            eps = rng.normal(size=(n, gmm.means_.shape[1]))
+            z = gmm.means_[k][None, :] + eps * np.sqrt(gmm.covariances_[k])[None, :]
+        else:
+            raise ValueError(gmm.covariance_type)
+        draws.append(np.asarray(z, np.float32))
+    z = np.concatenate(draws, axis=0)
+    feat = decoder.expected_features(z)
+    return feat.reshape(gmm.n_components, n, -1).mean(axis=1).astype(np.float32)

@@ -3,7 +3,26 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 import json
+import os
 import torch
+
+
+def _default_dir(env_var: str, name: str) -> Path:
+    """A working directory outside any source checkout, overridable by an environment variable."""
+    return Path(os.environ.get(env_var, Path.home().joinpath("ephys-atlas", name)))
+
+
+# Downloaded / prepared data and training outputs live outside the repository by default.
+DEFAULT_DATA_DIR = _default_dir("EPHYS_ATLAS_DATA_DIR", "data")
+DEFAULT_RESULTS_DIR = _default_dir("EPHYS_ATLAS_RESULTS_DIR", "results")
+
+# Where the published models live on the Hugging Face Hub. The unit model reuses the channel
+# model's frozen context volumes and probe split for the same vintage.
+UNIT_MODEL_REPO_ID = "int-brain-lab/ea-encoder-unit"
+CHANNEL_MODEL_REPO_ID = "int-brain-lab/ea-encoder-channel"
+
+# Paths are runtime settings, not part of the scientific configuration saved with a release.
+PATH_FIELDS = ("data_dir", "prepared_data_dir", "model_dir", "output_dir")
 
 
 @dataclass
@@ -12,13 +31,19 @@ class Config:
 
     seed: int = 0
     project: str = "ibl_neuropixel_brainwide_01"
-    repo_id: str = "AlonSaguy/ephys-atlas-models"
-    vintage: str = "2026_W26"
+    vintage: str = "2026_W39"
+    # Published channel-level model (repo id or local release directory) that provides the frozen
+    # MERFISH/AGEA context volumes and the authoritative probe split for ``vintage``.
+    channel_model: str = CHANNEL_MODEL_REPO_ID
 
-    prepared_data_dir: Path = Path("unit_level_model_data/prepared_data")
-    model_dir: Path = Path("unit_level_model_checkpoints")
-    output_dir: Path = Path("unit_level_model_results")
-    release_staging_dir: Path = Path("unit_level_release_staging")
+    # Raw IBL downloads (cells aggregates) go under data_dir; the prepared unit arrays under
+    # prepared_data_dir; training checkpoints under model_dir; diagnostics under output_dir.
+    data_dir: Path = DEFAULT_DATA_DIR
+    prepared_data_dir: Path = (
+        DEFAULT_DATA_DIR / "unit_level_model_data" / "prepared_data"
+    )
+    model_dir: Path = DEFAULT_RESULTS_DIR / "unit_level_model_checkpoints"
+    output_dir: Path = DEFAULT_RESULTS_DIR / "unit_level_model_results"
 
     force_reprepare_data: bool = False
     prepare_data_if_missing: bool = True
@@ -120,7 +145,9 @@ class Config:
     merfish_correlation_vmin: float = 0.0
     merfish_correlation_vmax: float = 0.5
 
-    device: str = field(default_factory=lambda: "cuda" if torch.cuda.is_available() else "cpu")
+    device: str = field(
+        default_factory=lambda: "cuda" if torch.cuda.is_available() else "cpu"
+    )
 
     def active_modalities(self) -> tuple[str, ...]:
         names = ["waveform"]
@@ -141,17 +168,31 @@ class Config:
         out["device"] = str(self.device)
         return out
 
+    def to_release_dict(self) -> dict:
+        """The scientific configuration only: no local paths, no device."""
+        out = self.to_json_dict()
+        for key in (*PATH_FIELDS, "device"):
+            out.pop(key, None)
+        return out
+
     @classmethod
-    def from_json(cls, path: Path | str, *, device: str | None = None) -> "Config":
-        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    def from_dict(cls, payload: dict, *, device: str | None = None) -> "Config":
         valid = {f.name for f in fields(cls)}
         kwargs = {k: v for k, v in payload.items() if k in valid}
-        for key in ("prepared_data_dir", "model_dir", "output_dir", "release_staging_dir"):
+        for key in PATH_FIELDS:
             if key in kwargs:
                 kwargs[key] = Path(kwargs[key])
         for key in ("waveform_shape", "acg_shape", "stpc_shape"):
             if key in kwargs:
                 kwargs[key] = tuple(kwargs[key])
+        for key, value in list(kwargs.items()):
+            if isinstance(value, list):
+                kwargs[key] = tuple(value)
         if device is not None:
             kwargs["device"] = device
         return cls(**kwargs)
+
+    @classmethod
+    def from_json(cls, path: Path | str, *, device: str | None = None) -> "Config":
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        return cls.from_dict(payload, device=device)

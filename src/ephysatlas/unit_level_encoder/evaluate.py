@@ -41,9 +41,17 @@ def fit_or_load_baselines(data, z_scaled, cfg, model_path: Path, *, fit: bool):
 def evaluate_baselines(data, z_scaled, baselines, out_path: Path):
     test = np.flatnonzero(data.split == 2)
     metrics = {
-        "kde": {"test_nll": nll_from_log_prob(baselines["kde"].log_prob(z_scaled[test], data.xyz_m[test]))},
-        "cosmos_gaussian": {"test_nll": nll_from_log_prob(baselines["cosmos_gaussian"].log_prob(test))},
-        "beryl_gaussian": {"test_nll": nll_from_log_prob(baselines["beryl_gaussian"].log_prob(test))},
+        "kde": {
+            "test_nll": nll_from_log_prob(
+                baselines["kde"].log_prob(z_scaled[test], data.xyz_m[test])
+            )
+        },
+        "cosmos_gaussian": {
+            "test_nll": nll_from_log_prob(baselines["cosmos_gaussian"].log_prob(test))
+        },
+        "beryl_gaussian": {
+            "test_nll": nll_from_log_prob(baselines["beryl_gaussian"].log_prob(test))
+        },
     }
     Path(out_path).write_text(json.dumps(metrics, indent=2), encoding="utf-8")
     return metrics
@@ -51,7 +59,9 @@ def evaluate_baselines(data, z_scaled, baselines, out_path: Path):
 
 def evaluate_experiment(data, z_scaled, gmm, conditional_model, out_path: Path):
     test = np.flatnonzero(data.split == 2)
-    nll = nll_from_log_prob(conditional_log_prob(z_scaled, test, gmm, conditional_model))
+    nll = nll_from_log_prob(
+        conditional_log_prob(z_scaled, test, gmm, conditional_model)
+    )
     dist = pairwise_distances(gmm.means_)
     np.fill_diagonal(dist, np.nan)
     metrics = {
@@ -67,7 +77,9 @@ def evaluate_experiment(data, z_scaled, gmm, conditional_model, out_path: Path):
     return metrics
 
 
-def evaluate_latent_fidelity(data, z_scaled, gmm, conditional_model, cfg, out_path: Path):
+def evaluate_latent_fidelity(
+    data, z_scaled, gmm, conditional_model, cfg, out_path: Path
+):
     """Compare generated latent distribution with held-out encoded TEST latents.
 
     This deliberately stays in the frozen 60-D standardized latent space, so it
@@ -96,18 +108,21 @@ def evaluate_latent_fidelity(data, z_scaled, gmm, conditional_model, cfg, out_pa
     obs_var = np.maximum(np.diag(obs_cov), 1e-12)
     gen_var = np.maximum(np.diag(gen_cov), 1e-12)
 
-    marginal_w = np.asarray([
-        wasserstein_distance(observed[:, j], generated[:, j])
-        for j in range(observed.shape[1])
-    ], dtype=float)
+    marginal_w = np.asarray(
+        [
+            wasserstein_distance(observed[:, j], generated[:, j])
+            for j in range(observed.shape[1])
+        ],
+        dtype=float,
+    )
 
     n_proj = int(cfg.latent_fidelity_sliced_wasserstein_projections)
     directions = rng.normal(size=(n_proj, observed.shape[1]))
     directions /= np.maximum(np.linalg.norm(directions, axis=1, keepdims=True), 1e-12)
-    sliced = np.asarray([
-        wasserstein_distance(observed @ v, generated @ v)
-        for v in directions
-    ], dtype=float)
+    sliced = np.asarray(
+        [wasserstein_distance(observed @ v, generated @ v) for v in directions],
+        dtype=float,
+    )
 
     nn = NearestNeighbors(n_neighbors=1, n_jobs=-1).fit(observed.astype(np.float32))
     support_dist, _ = nn.kneighbors(generated.astype(np.float32), return_distance=True)
@@ -121,9 +136,15 @@ def evaluate_latent_fidelity(data, z_scaled, gmm, conditional_model, cfg, out_pa
             np.linalg.norm(gen_cov - obs_cov, ord="fro")
             / max(np.linalg.norm(obs_cov, ord="fro"), 1e-12)
         ),
-        "variance_ratio_generated_over_test_median": float(np.median(gen_var / obs_var)),
-        "variance_ratio_generated_over_test_p10": float(np.quantile(gen_var / obs_var, 0.10)),
-        "variance_ratio_generated_over_test_p90": float(np.quantile(gen_var / obs_var, 0.90)),
+        "variance_ratio_generated_over_test_median": float(
+            np.median(gen_var / obs_var)
+        ),
+        "variance_ratio_generated_over_test_p10": float(
+            np.quantile(gen_var / obs_var, 0.10)
+        ),
+        "variance_ratio_generated_over_test_p90": float(
+            np.quantile(gen_var / obs_var, 0.90)
+        ),
         "mean_marginal_wasserstein": float(np.mean(marginal_w)),
         "median_marginal_wasserstein": float(np.median(marginal_w)),
         "mean_sliced_wasserstein": float(np.mean(sliced)),

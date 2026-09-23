@@ -1,67 +1,76 @@
 """The serving wrapper for the unit-level encoder family.
 
-The unit-level encoder is a two-stage model over spike-sorted units, not channels:
+The unit-level model describes the spike-sorted units (neurons) found at a brain location:
 
-1. a :class:`MultimodalAutoencoder` embeds a unit's multi-channel waveform and its
-   autocorrelogram into a shared 32-d latent -- the unit's phenotype;
-2. a :class:`PointTransformerGMM` is a Gaussian mixture over those latents, whose components read
-   as *putative cell types*.
+1. a multimodal autoencoder (:class:`UnitAutoencoder`) embeds a unit's multi-channel waveform,
+   3D autocorrelogram and spike-triggered population coupling into a joint latent -- the unit's
+   phenotype -- which a train-only scaler standardizes;
+2. a full-covariance Gaussian mixture over the standardized latents, whose components read as
+   *putative cell types*, has global component geometry and mixture weights conditioned on the
+   molecular context (MERFISH + AGEA PCA) at the unit's position;
+3. a distance-weighted k-nearest-neighbour projection onto train-split exemplars maps latents
+   back to interpretable waveform features.
 
-This wrapper serves, from published files, the four operations the family supports: encode units
-to their latent, reconstruct waveform/ACG, expose the GMM components, and assign each unit to its
-nearest component.
+So, like the spatial encoder, this family's ``predict`` takes positions and returns the phenotype
+expected there: the local component weights mixed with each component's expected features.
 
 ``import torch`` stays inside the methods: the region classifier imports xgboost at module scope
 and the two segfault together on macOS arm64, so nothing here may pull torch at import time.
 """
 
+import json
 import logging
-from dataclasses import fields
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 
 from ephysatlas import model_registry
 
 logger = logging.getLogger(__name__)
 
 ROLE_AUTOENCODER = "autoencoder"
-ROLE_PT_GMM = "pt_gmm"
+ROLE_CONFIG = "config"
 ROLE_SCALER = "scaler"
+ROLE_GMM = "gmm"
+ROLE_CONTEXT_TRANSFORM = "context_transform"
+ROLE_CONTEXT_WEIGHTS = "context_weights"
+ROLE_KNN_BANK = "knn_bank"
+ROLE_COMPONENT_FEATURES = "component_features"
+ROLE_CONTEXT = "context"
+ROLE_SPLIT = "split"
+ROLE_STATS = "stats"
 
-# The canonical checkpoint filenames, used when the manifest omits a role.
+# The canonical release filenames, used when the manifest omits a role.
 DEFAULT_ARTIFACTS = {
-    ROLE_AUTOENCODER: "autoencoder.pt",
-    ROLE_PT_GMM: "point_transformer_gmm.pt",
-    ROLE_SCALER: "shared_latent_scaler.joblib",
+    ROLE_AUTOENCODER: model_registry.UNIT_AE_FILE,
+    ROLE_CONFIG: model_registry.UNIT_CONFIG_FILE,
+    ROLE_SCALER: model_registry.UNIT_SCALER_FILE,
+    ROLE_GMM: model_registry.UNIT_GMM_FILE,
+    ROLE_CONTEXT_TRANSFORM: model_registry.UNIT_CONTEXT_TRANSFORM_FILE,
+    ROLE_CONTEXT_WEIGHTS: model_registry.UNIT_CONTEXT_WEIGHTS_FILE,
+    ROLE_KNN_BANK: model_registry.UNIT_KNN_BANK_FILE,
+    ROLE_COMPONENT_FEATURES: model_registry.UNIT_COMPONENT_FEATURES_FILE,
+    ROLE_CONTEXT: list(model_registry.ENCODER_CONTEXT_FILES),
+    ROLE_SPLIT: "split.json",
 }
 
-
-def _config_from_payload(payload: dict):
-    """Rebuild a training ``Config`` from a checkpoint's saved ``config`` dict.
-
-    The checkpoint is self-describing -- ``train_autoencoder`` saves ``asdict(cfg)`` -- so the
-    architecture is restored from the weights file itself, not guessed. Runtime-only fields
-    (``device``/``output_dir``) are left at their defaults.
-    """
-    from ephysatlas.unit_level_encoder.config import Config
-
-    cfg = Config()
-    valid = {f.name for f in fields(Config)}
-    tuple_fields = {"waveform_shape", "acg_shape", "cosmos_region_names"}
-    for key, value in (payload or {}).items():
-        if key in valid and key not in {"device", "output_dir"}:
-            setattr(cfg, key, tuple(value) if key in tuple_fields else value)
-    return cfg
+# Golden files written at publication and re-checked by selftest().
+EXAMPLE_POSITIONS = "example/positions_sample.parquet"
+EXAMPLE_PREDICTIONS = "example/expected_predictions.parquet"
+EXAMPLE_UNITS = "example/units_sample.npz"
+EXAMPLE_LATENTS = "example/expected_latents.npy"
 
 
 class UnitEncoder:
-    """A published unit-level encoder, ready to encode, reconstruct and cluster units.
+    """A published unit-level model, ready to predict unit phenotypes at brain positions.
 
     Attributes:
         path_model (Path): Local model directory.
         index (dict): The publication manifest.
-        artifacts (dict): Manifest ``artifacts`` block -- the two checkpoints and the scaler.
+        artifacts (dict): Manifest ``artifacts`` block, completed with the canonical names.
+        inputs (dict): Manifest ``inputs`` block.
+        outputs (dict): Manifest ``outputs`` block -- the ordered phenotype features predicted.
     """
 
     def __init__(self, path_model, index: dict = None, device=None):
@@ -74,17 +83,22 @@ class UnitEncoder:
         if self.index is None:
             raise FileNotFoundError(
                 f"{self.path_model} has no {model_registry.MODEL_MANIFEST_FILE}; the unit encoder "
-                f"needs its manifest to locate the autoencoder, the GMM and the latent scaler."
+                f"needs its manifest to locate its checkpoints."
             )
         self.artifacts = {**DEFAULT_ARTIFACTS, **(self.index.get("artifacts") or {})}
+        self.inputs = self.index.get("inputs") or {}
+        self.outputs = self.index.get("outputs") or {}
         self._device = device
         self._cfg = None
-        self._model_ae = None
-        self._model_gmm = None
+        self._ae = None
         self._scaler = None
-        self._atlas = None
+        self._gmm = None
+        self._context_model = None
+        self._knn = None
+        self._component_features = None
+        self._ctx_manager = None
 
-    # -- lazily built pieces ---------------------------------------------------------------
+    # -- lazily loaded pieces --------------------------------------------------------------
 
     def _artifact_path(self, role: str) -> Path:
         name = self.artifacts.get(role)
@@ -94,262 +108,412 @@ class UnitEncoder:
             )
         return self.path_model.joinpath(name)
 
-    def _load(self):
-        """Load the autoencoder, the PT-GMM and the scaler on first use."""
-        if self._model_ae is not None:
-            return
-        import joblib
-        import torch
-
-        from ephysatlas.unit_level_encoder.gmm_models import PointTransformerGMM
-        from ephysatlas.unit_level_encoder.model import MultimodalAutoencoder
-
-        device = self._device or "cpu"
-
-        ae_payload = torch.load(
-            self._artifact_path(ROLE_AUTOENCODER),
-            map_location=device,
-            weights_only=False,
-        )
-        self._cfg = _config_from_payload(ae_payload.get("config"))
-        self._cfg.device = device
-        model_ae = MultimodalAutoencoder(self._cfg).to(device)
-        model_ae.load_state_dict(ae_payload["model_state_dict"], strict=True)
-        model_ae.eval()
-        self._model_ae = model_ae
-
-        gmm_payload = torch.load(
-            self._artifact_path(ROLE_PT_GMM), map_location=device, weights_only=False
-        )
-        model_gmm = PointTransformerGMM(
-            int(gmm_payload["latent_dim"]),
-            int(gmm_payload["context_dim"]),
-            int(gmm_payload["n_components"]),
-            self._cfg,
-        ).to(device)
-        model_gmm.load_state_dict(gmm_payload["model_state_dict"], strict=True)
-        model_gmm.eval()
-        self._model_gmm = model_gmm
-
-        self._scaler = joblib.load(self._artifact_path(ROLE_SCALER))
-        logger.info(
-            f"loaded unit encoder from {self.path_model.name}: latent_dim={gmm_payload['latent_dim']} "
-            f"components={gmm_payload['n_components']}"
-        )
-
-    def _normalise(self, waveform, acg):
-        """Apply the training-time preprocessing so inputs match the encoder's distribution."""
-        from ephysatlas.unit_level_encoder.data import (
-            normalize_acgs,
-            normalize_waveforms,
-        )
-
-        w = normalize_waveforms(np.asarray(waveform, dtype=np.float32))
-        a = normalize_acgs(np.asarray(acg, dtype=np.float32))
-        return w, a
-
-    # -- read-only accessors, for callers that need the loaded pieces directly --------------
-
     @property
     def cfg(self):
-        """The training ``Config`` restored from the checkpoint (loads on first use)."""
-        self._load()
+        """The released ``Config``, rebuilt from ``config.json`` (paths are runtime defaults)."""
+        if self._cfg is None:
+            from ephysatlas.unit_level_encoder.config import Config
+
+            device = self._device
+            if device is None:
+                import torch
+
+                device = "cuda" if torch.cuda.is_available() else "cpu"
+            self._cfg = Config.from_json(
+                self._artifact_path(ROLE_CONFIG), device=str(device)
+            )
         return self._cfg
 
-    @property
-    def model_ae(self):
-        """The loaded :class:`MultimodalAutoencoder`."""
-        self._load()
-        return self._model_ae
+    def _load(self):
+        """Load every fitted stage on first use."""
+        if self._ae is not None:
+            return
+        import joblib
+
+        from ephysatlas.unit_level_encoder.gmm_models import load_context_weight_bundle
+        from ephysatlas.unit_level_encoder.knn_decoder import EmpiricalKNNDecoder
+        from ephysatlas.unit_level_encoder.train import load_autoencoder_file
+
+        cfg = self.cfg
+        self._ae, _, _ = load_autoencoder_file(
+            self._artifact_path(ROLE_AUTOENCODER), cfg
+        )
+        self._scaler = joblib.load(self._artifact_path(ROLE_SCALER))
+        self._gmm = joblib.load(self._artifact_path(ROLE_GMM))
+        # The context bundle is read from its directory under its canonical filenames.
+        context_dir = self._artifact_path(ROLE_CONTEXT_WEIGHTS).parent
+        self._context_model, _ = load_context_weight_bundle(None, context_dir, cfg)
+        self._knn = EmpiricalKNNDecoder.load_bank(
+            self._artifact_path(ROLE_KNN_BANK), k=cfg.knn_decoder_k
+        )
+        self._component_features = self._load_component_features()
+        logger.info(
+            f"loaded unit encoder from {self.path_model.name}: latent_dim={cfg.latent_dim()} "
+            f"components={self._gmm.n_components} knn_k={self._knn.k}"
+        )
+
+    def _load_component_features(self) -> np.ndarray:
+        """The released E[feature | component], or recomputed exactly as published when absent."""
+        path = self._artifact_path(ROLE_COMPONENT_FEATURES)
+        if path.exists():
+            with np.load(path, allow_pickle=False) as payload:
+                names = payload["feature_names"].astype(str).tolist()
+                if names != list(self._knn.feature_names):
+                    raise ValueError(
+                        f"{path.name} lists features {names}, but the kNN bank projects "
+                        f"{list(self._knn.feature_names)}"
+                    )
+                return payload["features"].astype(np.float32)
+        from ephysatlas.unit_level_encoder.pipeline import compute_component_features
+
+        logger.info(
+            f"{path.name} not shipped; recomputing the component feature expectations"
+        )
+        return compute_component_features(self._gmm, self._knn, self.cfg)
+
+    # -- read-only accessors ---------------------------------------------------------------
 
     @property
-    def model_gmm(self):
-        """The loaded :class:`PointTransformerGMM`."""
+    def autoencoder(self):
         self._load()
-        return self._model_gmm
+        return self._ae
 
     @property
-    def scaler(self):
-        """The loaded latent ``StandardScaler``."""
+    def latent_scaler(self):
         self._load()
         return self._scaler
 
-    def atlas_arrays(self, cache_dir=None):
-        """Public accessor for the cached atlas arrays. See :meth:`_atlas_arrays`."""
-        return self._atlas_arrays(cache_dir)
+    @property
+    def gmm(self):
+        self._load()
+        return self._gmm
 
-    # -- the operations this family supports -----------------------------------------------
+    @property
+    def context_model(self):
+        self._load()
+        return self._context_model
 
-    def encode(self, waveform, acg, standardize: bool = False, batch_size: int = 4096):
-        """Embed each unit's waveform + ACG into its 32-d latent phenotype.
+    @property
+    def knn_decoder(self):
+        self._load()
+        return self._knn
+
+    @property
+    def component_features(self) -> np.ndarray:
+        """``[n_components, n_features]`` expected phenotype features of each component."""
+        self._load()
+        return self._component_features
+
+    @property
+    def features(self) -> list:
+        """Ordered names of the phenotype features ``predict`` returns."""
+        columns = self.outputs.get("columns")
+        if columns:
+            return list(columns)
+        return list(self.knn_decoder.feature_names)
+
+    @property
+    def context_dir(self) -> Path:
+        """Directory holding the released context volumes (``agea_vol_pca.npy`` etc.)."""
+        names = self.artifacts.get(ROLE_CONTEXT) or []
+        if not names:
+            return self.path_model
+        return (self.path_model / names[0]).parent
+
+    def split(self) -> dict:
+        """The probe split the model was trained with (``train``/``validation``/``test`` pids)."""
+        path = self._artifact_path(ROLE_SPLIT)
+        if not path.exists():
+            raise FileNotFoundError(f"{self.path_model.name} publishes no {path.name}")
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def preprocessing_stats(self) -> dict:
+        """The training-data statistics released with the model (``preprocessing/unit_stats.npz``)."""
+        name = self.artifacts.get(ROLE_STATS, model_registry.UNIT_STATS_FILE)
+        path = self.path_model.joinpath(name)
+        if not path.exists():
+            raise FileNotFoundError(f"{self.path_model.name} publishes no {name}")
+        with np.load(path, allow_pickle=False) as payload:
+            return {key: payload[key] for key in payload.files}
+
+    # -- positions -> phenotype -------------------------------------------------------------
+
+    def _context_manager(self):
+        """Context sampler over the released PCA volumes (first use downloads the Allen atlas)."""
+        if self._ctx_manager is None:
+            from ephysatlas.spatial_encoder.utils import (
+                AtlasPCAConfig,
+                ContextAtlasManager,
+            )
+
+            cfg = self.cfg
+            self._ctx_manager = ContextAtlasManager(
+                AtlasPCAConfig(
+                    n_cell_pcs=int(cfg.n_cell_pcs), n_gene_pcs=int(cfg.n_gene_pcs)
+                ),
+                regenerate_context=False,
+                output_dir=self.context_dir,
+            )
+        return self._ctx_manager
+
+    def _raw_context(self, xyz_m: np.ndarray) -> np.ndarray:
+        """``[N, n_cell_pcs + n_gene_pcs]`` molecular context, MERFISH PCs first, as in training."""
+        from ephysatlas.unit_level_encoder.data import mirror_xyz_to_hemisphere
+
+        cfg = self.cfg
+        xyz = np.asarray(xyz_m, np.float32)
+        if bool(cfg.mirror_x_to_single_hemisphere):
+            xyz = mirror_xyz_to_hemisphere(xyz, float(cfg.mirror_x_sign))
+        pack = self._context_manager().sample_context_numpy_m(xyz, mode="clip")
+        cell = np.asarray(pack["cell_pc"], np.float32)[:, : int(cfg.n_cell_pcs)]
+        gene = np.asarray(pack["gene_pc"], np.float32)[:, : int(cfg.n_gene_pcs)]
+        return np.concatenate([cell, gene], axis=1).astype(np.float32)
+
+    def _coordinates(self, df) -> np.ndarray:
+        columns = list(self.inputs.get("columns") or ["x", "y", "z"])
+        missing = [c for c in columns if c not in df.columns]
+        if missing:
+            raise KeyError(
+                f"{len(missing)} coordinate column(s) required by this model are missing from the "
+                f"input DataFrame: {missing}. The unit model predicts phenotypes *from* position, "
+                f"so it needs {columns} (Allen/IBL frame, metres)."
+            )
+        return df.loc[:, columns].to_numpy(dtype=np.float32)
+
+    def mixture_weights(self, df, batch_size: int = 65536) -> pd.DataFrame:
+        """Putative cell-type composition at each position.
 
         Args:
-            waveform (np.ndarray): ``[N, C, T]`` multi-channel waveforms.
-            acg (np.ndarray): ``[N, n_bins, n_lags]`` autocorrelograms.
-            standardize (bool, optional): If True, apply the published latent scaler, giving the
-                standardised latent the GMM operates on (what :meth:`assign` expects).
+            df (pd.DataFrame): Carries ``x, y, z`` in metres; any index.
+            batch_size (int, optional): Positions per forward pass.
+
+        Returns:
+            pd.DataFrame: Indexed like ``df``, one ``component_<k>`` column per GMM component; each
+            row sums to one.
+        """
+        self._load()
+        xyz = self._coordinates(df)
+        chunks = [
+            self._context_model.weights_for_context(
+                self._raw_context(xyz[i : i + batch_size])
+            )
+            for i in range(0, len(xyz), batch_size)
+        ]
+        weights = (
+            np.concatenate(chunks, axis=0)
+            if chunks
+            else np.zeros((0, self._gmm.n_components), np.float32)
+        )
+        columns = [f"component_{k:02d}" for k in range(weights.shape[1])]
+        return pd.DataFrame(weights, index=df.index, columns=columns)
+
+    def predict(self, df, batch_size: int = 65536) -> pd.DataFrame:
+        """Predict the expected unit phenotype at each position.
+
+        The expected phenotype is the local mixture weights times each component's expected kNN
+        phenotype features -- deterministic and smooth in space, and exactly what the published
+        unit-level atlas figures map.
+
+        Args:
+            df (pd.DataFrame): Carries the coordinate columns the manifest names in
+                ``inputs.columns`` (``x, y, z``, metres). Any index; it is preserved.
+            batch_size (int, optional): Positions per forward pass.
+
+        Returns:
+            pd.DataFrame: Indexed exactly like ``df``, one ``pred_<feature>`` column per phenotype
+            feature. The prefix keeps ``df.join(out)`` from colliding with observed features.
+
+        Raises:
+            KeyError: If a coordinate column is absent, naming it.
+            ValueError: If the manifest's feature list no longer matches its recorded digest.
+        """
+        features = self.features
+        model_registry.validate_feature_order(
+            features, self.outputs.get("feature_order_sha256")
+        )
+        weights = self.mixture_weights(df, batch_size=batch_size).to_numpy(np.float64)
+        predictions = (weights @ self.component_features.astype(np.float64)).astype(
+            np.float32
+        )
+        return pd.DataFrame(
+            predictions, index=df.index, columns=[f"pred_{f}" for f in features]
+        )
+
+    # -- units -> latent phenotype ----------------------------------------------------------
+
+    def encode(
+        self,
+        waveform,
+        acg=None,
+        stpc=None,
+        standardize: bool = True,
+        batch_size: int = 4096,
+    ):
+        """Embed units into the joint latent phenotype.
+
+        Args:
+            waveform (np.ndarray): ``[N, C, T]`` max-abs normalized multi-channel waveforms, as
+                prepared for training (``waveform_shape`` in the config).
+            acg (np.ndarray, optional): ``[N, n_bins, n_lags]`` 3D autocorrelograms; required
+                when the model uses the ACG modality.
+            stpc (np.ndarray, optional): ``[N, n_lags]`` spike-triggered population coupling;
+                required when the model uses the stPC modality.
+            standardize (bool, optional): Apply the released latent scaler (the space the GMM
+                and the kNN bank live in). Defaults to True.
             batch_size (int, optional): Units per forward pass.
 
         Returns:
-            np.ndarray: ``[N, latent_dim]`` latents, one per unit.
+            np.ndarray: ``[N, latent_dim]`` latents.
         """
         import torch
 
         self._load()
-        w, a = self._normalise(waveform, acg)
-        device = torch.device(self._cfg.device)
+        cfg = self.cfg
+        device = torch.device(cfg.device)
+
+        def _tensor(x, name):
+            if x is None:
+                raise ValueError(
+                    f"this model uses the {name} modality; pass {name}=..."
+                )
+            return torch.from_numpy(np.ascontiguousarray(x, dtype=np.float32))
+
+        w = _tensor(waveform, "waveform")
+        a = _tensor(acg, "acg") if cfg.use_acg else None
+        s = _tensor(stpc, "stpc") if cfg.use_stpc else None
         chunks = []
         with torch.no_grad():
-            for start in range(0, w.shape[0], batch_size):
+            for start in range(0, len(w), batch_size):
                 stop = start + batch_size
-                enc = self._model_ae.encode(
-                    torch.from_numpy(w[start:stop]).to(device),
-                    torch.from_numpy(a[start:stop]).to(device),
+                lat = self._ae.encode(
+                    w[start:stop].to(device),
+                    None if a is None else a[start:stop].to(device),
+                    None if s is None else s[start:stop].to(device),
                 )
-                chunks.append(enc["z_unit_shared"].cpu().numpy())
-        z = np.concatenate(chunks, axis=0)
+                chunks.append(
+                    torch.cat([lat[name] for name in cfg.active_modalities()], dim=1)
+                    .cpu()
+                    .numpy()
+                )
+        z = np.concatenate(chunks, axis=0).astype(np.float32)
         if standardize:
             z = self._scaler.transform(z).astype(np.float32)
         return z
 
-    def reconstruct(self, waveform, acg):
-        """Reconstruct each unit's waveform and ACG through the autoencoder.
-
-        Returns:
-            dict: ``{"waveform": [N, C, T], "acg": [N, n_bins, n_lags]}`` reconstructions.
-        """
-        import torch
-
+    def components(self) -> dict:
+        """The putative cell types: global GMM ``weights``, ``means`` and ``covariances``."""
         self._load()
-        w, a = self._normalise(waveform, acg)
-        device = torch.device(self._cfg.device)
-        with torch.no_grad():
-            enc = self._model_ae.encode(
-                torch.from_numpy(w).to(device), torch.from_numpy(a).to(device)
-            )
-            rec = self._model_ae.reconstruct(enc)
         return {
-            "waveform": rec["waveform_reconstruction"].cpu().numpy(),
-            "acg": rec["acg_reconstruction"].cpu().numpy(),
+            "weights": np.asarray(self._gmm.weights_, np.float32),
+            "means": np.asarray(self._gmm.means_, np.float32),
+            "covariances": np.asarray(self._gmm.covariances_, np.float32),
         }
 
-    def components(self):
-        """Return the GMM's putative-cell-type components.
-
-        Returns:
-            tuple: ``(means, log_var)``, each ``[n_components, latent_dim]``.
-        """
+    def assign(self, standardized_latents) -> np.ndarray:
+        """Hard-assign each standardized latent to its most likely GMM component."""
         self._load()
-        return (
-            self._model_gmm.means.detach().cpu().numpy(),
-            self._model_gmm.log_var.detach().cpu().numpy(),
-        )
+        return self._gmm.predict(np.asarray(standardized_latents, np.float64))
 
-    def assign(self, standardized_latents):
-        """Hard-assign each standardised latent to its nearest GMM component.
+    def expected_features(self, standardized_latents) -> np.ndarray:
+        """kNN-projected phenotype features of standardized latents, ``[N, n_features]``."""
+        self._load()
+        return self._knn.expected_features(np.asarray(standardized_latents, np.float32))
+
+    # -- the dataset-level view used by training diagnostics and figures --------------------
+
+    def bundle(self, data):
+        """A :class:`~ephysatlas.unit_level_encoder.pipeline.UnitModelBundle` over a unit dataset.
 
         Args:
-            standardized_latents (np.ndarray): ``[N, latent_dim]`` latents, as returned by
-                :meth:`encode` with ``standardize=True``.
-
-        Returns:
-            np.ndarray: ``[N]`` component index per unit.
+            data: Prepared unit dataset (``UnitData``), e.g. from ``prepare_unit_data``.
         """
-        import torch
-
-        from ephysatlas.unit_level_encoder.gmm_models import diag_log_prob
+        from ephysatlas.unit_level_encoder.gmm_models import ContextWeightModel
+        from ephysatlas.unit_level_encoder.pipeline import UnitModelBundle
+        from ephysatlas.unit_level_encoder.train import encode_all
 
         self._load()
-        z = torch.from_numpy(np.asarray(standardized_latents, dtype=np.float32))
-        log_prob = diag_log_prob(
-            z,
-            self._model_gmm.means.detach().cpu(),
-            self._model_gmm.log_var.detach().cpu(),
+        cfg = self.cfg
+        for name, shape in (
+            ("waveforms", cfg.waveform_shape),
+            ("acgs", cfg.acg_shape),
+            ("stpc", cfg.stpc_shape),
+        ):
+            array = getattr(data, name)
+            if array is not None and tuple(array.shape[1:]) != tuple(shape):
+                raise ValueError(
+                    f"prepared {name} have shape {tuple(array.shape[1:])}, the released model "
+                    f"expects {tuple(shape)}"
+                )
+        context_model = ContextWeightModel(
+            self._context_model.net,
+            self._context_model.transform.transform(data.context),
+            cfg.device,
+            transform=self._context_model.transform,
         )
-        return log_prob.argmax(dim=1).cpu().numpy()
+        latents = encode_all(self._ae, data, cfg)
+        z_scaled = self._scaler.transform(latents["joint"]).astype(np.float32)
+        return UnitModelBundle(
+            cfg=cfg,
+            autoencoder=self._ae,
+            latent_scaler=self._scaler,
+            gmm=self._gmm,
+            context_model=context_model,
+            knn_decoder=self._knn,
+            data=data,
+            latents=latents,
+            z_scaled=z_scaled,
+            model_root=self.path_model,
+            component_features=self._component_features,
+        )
 
-    # -- the atlas dataset, read from a local cache (never republished on the Hub) ----------
+    # -- integrity --------------------------------------------------------------------------
 
-    _ATLAS_ARRAYS = ("waveforms", "acgs", "ctx", "xyz", "pids")
+    def selftest(self, rtol: float = 1e-4, atol: float = 1e-5) -> bool:
+        """Reproduce the shipped golden outputs.
 
-    def _atlas_arrays(self, cache_dir=None):
-        """Load the published atlas's per-unit arrays from a local cache.
-
-        Unlike the classifier and spatial encoder, this family's recorded dataset is **not**
-        shipped on the Hub -- it stays under IBL's existing S3 access controls, so the model
-        download carries only weights. *Preparing* those arrays is training machinery that lives
-        outside this package; here the prepared cache is only read, never written or fetched.
-
-        Only the atlas-wide operations (:meth:`latents`) need this. ``encode``/``reconstruct``/
-        ``components``/``assign`` run on the caller's own units and never trigger it.
+        Checks both halves of the model: phenotype predictions at a sample of positions (context
+        sampling, mixture weights and the component expectations), and the latents of a small
+        sample of synthetic units (the autoencoder and the scaler). Neither needs IBL data access.
+        Tolerances allow the ~1e-4 relative float32 drift between BLAS/library versions; real
+        corruption or the wrong model differ by orders of magnitude more.
 
         Args:
-            cache_dir (Path, optional): Where the prepared arrays live. Defaults to
-                ``~/.ephysatlas/unit_data``.
+            rtol (float, optional): Relative tolerance.
+            atol (float, optional): Absolute tolerance, for near-zero outputs.
 
         Returns:
-            dict: ``{name: np.ndarray}`` for each of ``waveforms, acgs, ctx, xyz, pids``.
+            bool: True when every shipped golden output is reproduced.
 
         Raises:
-            FileNotFoundError: If the arrays are not cached, with the command that builds them.
+            FileNotFoundError: If the model ships no golden example.
         """
-        if self._atlas is not None:
-            return self._atlas
-        cache = (
-            Path(cache_dir)
-            if cache_dir
-            else Path.home().joinpath(".ephysatlas", "unit_data")
-        )
-        arrays_dir = cache.joinpath("arrays")
-        if not arrays_dir.joinpath("waveforms.npy").exists():
+        positions = self.path_model.joinpath(EXAMPLE_POSITIONS)
+        expected = self.path_model.joinpath(EXAMPLE_PREDICTIONS)
+        if not (positions.exists() and expected.exists()):
             raise FileNotFoundError(
-                f"{self.path_model.name}: atlas dataset not cached under {arrays_dir}. Prepare it "
-                f"from paper-ephys-atlas with `python -m "
-                f"ephys_atlas.unit_level_encoder.prepare_latest_cells_encoder_data "
-                f"--out-dir {arrays_dir}` (needs ONE/S3, multi-GB)."
+                f"no example/golden files under {self.path_model / 'example'}"
             )
-        self._atlas = {
-            name: np.load(
-                arrays_dir.joinpath(f"{name}.npy"), allow_pickle=(name == "pids")
-            )
-            for name in self._ATLAS_ARRAYS
-        }
-        return self._atlas
-
-    def latents(self, cache_dir=None):
-        """Encode every atlas unit to its standardised latent.
-
-        Reads the cached atlas dataset via :meth:`_atlas_arrays`, then applies the same
-        encode + scaler as :meth:`encode`.
-
-        Returns:
-            np.ndarray: ``[n_units, latent_dim]`` standardised latents for the published units.
-        """
-        atlas = self._atlas_arrays(cache_dir)
-        return self.encode(atlas["waveforms"], atlas["acgs"], standardize=True)
-
-    def selftest(self, rtol: float = 1e-4) -> bool:
-        """Reproduce the shipped golden latents, if the model ships an example.
-
-        Encode-based, deliberately: encoding is the family's primary operation and, unlike the
-        atlas-wide ``latents``, needs only the weights -- so the self-test needs no cached atlas.
-
-        Args:
-            rtol (float, optional): Relative tolerance on the comparison.
-
-        Returns:
-            bool: True when the recomputed latents match the shipped ones.
-
-        Raises:
-            FileNotFoundError: If the model does not ship ``example/`` files.
-        """
-        example = self.path_model.joinpath("example")
-        sample_file = example.joinpath("units_sample.npz")
-        expected_file = example.joinpath("expected_latents.npy")
-        if not (sample_file.exists() and expected_file.exists()):
-            raise FileNotFoundError(f"no example/golden files under {example}")
-        sample = np.load(sample_file)
-        got = self.encode(sample["waveform"], sample["acg"])
-        np.testing.assert_allclose(got, np.load(expected_file), rtol=rtol)
-        logger.info(f"selftest passed on {got.shape[0]} units")
+        got = self.predict(pd.read_parquet(positions))
+        golden = pd.read_parquet(expected).loc[:, got.columns].to_numpy(np.float64)
+        # Features span many orders of magnitude (seconds vs slopes), so compare each one in
+        # units of its own scale: atol then means "a fraction of that feature's range".
+        scale = np.maximum(
+            np.abs(golden).max(axis=0, keepdims=True), np.finfo(np.float32).tiny
+        )
+        np.testing.assert_allclose(
+            got.to_numpy(np.float64) / scale, golden / scale, rtol=rtol, atol=atol
+        )
+        units = self.path_model.joinpath(EXAMPLE_UNITS)
+        latents = self.path_model.joinpath(EXAMPLE_LATENTS)
+        n_units = 0
+        if units.exists() and latents.exists():
+            with np.load(units, allow_pickle=False) as sample:
+                z = self.encode(
+                    sample["waveform"],
+                    sample["acg"] if "acg" in sample.files else None,
+                    sample["stpc"] if "stpc" in sample.files else None,
+                )
+            np.testing.assert_allclose(z, np.load(latents), rtol=rtol, atol=atol)
+            n_units = len(z)
+        logger.info(f"selftest passed on {len(got)} positions and {n_units} units")
         return True

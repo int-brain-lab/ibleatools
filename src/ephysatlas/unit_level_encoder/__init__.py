@@ -7,7 +7,12 @@ projection for phenotype features.
 """
 
 from .config import Config
-from .pipeline import UnitModelBundle, load_unit_model, prepare_unit_data, train_unit_model
+from .pipeline import (
+    UnitModelBundle,
+    load_unit_model,
+    prepare_unit_data,
+    train_unit_model,
+)
 
 __all__ = [
     "Config",
