@@ -51,7 +51,7 @@ lite = []
 full = [
     # 0.5.24+: do_enforce_decrease is a Literal, not a bool. DARTsort installs
     # dredge-ephys itself.
-    "dartsort>=0.5.24",
+    "dartsort==0.5.24",
     # >=0.104.0 is incompatible with dartsort 0.5.24: private API renames
     # (recording._recording_segments -> _segments,
     # get_chunk_with_margin(channel_indices=...) -> last_dimension_indices) land
