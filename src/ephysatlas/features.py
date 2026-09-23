@@ -1068,6 +1068,28 @@ class ModelRawFeatures(
     pass
 
 
+class ModelDenoisedFeatures(
+    ModelSpikeShapeFeatures,
+    ModelCsdFeatures,
+    ModelApFeatures,
+    ModelLfFeatures,
+    ModelChannelLayout,
+):
+    """Combined schema for denoised features, after the waveform-shape remap.
+
+    Identical to `ModelRawFeatures` apart from the spike block: `denoise_raw_features_data`
+    applies `remap_waveform_shape_features`, which drops `ModelSpikeFeatures`' 6 raw
+    timing/amplitude columns in favour of `ModelSpikeShapeFeatures`' 4 reparametrised ones.
+
+    Note:
+        Denoised tables written before that remap still match `ModelRawFeatures`, so
+        `ephysatlas.data.read_features_from_disk` chooses between the two schemas on the
+        columns actually present rather than on which file it loaded.
+    """
+
+    pass
+
+
 class ModelProbeDetails(pa.DataFrameModel):
     """Schema for probe insertion metadata (df_probe_details.pqt). One row per probe insertion."""
 

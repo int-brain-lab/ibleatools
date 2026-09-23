@@ -310,3 +310,63 @@ class TestProjectDataIO(unittest.TestCase):
         args, kwargs = mock_reader_cls.call_args
         self.assertTrue(str(args[0]).endswith("lf_compressed_all.h5"))
         self.assertEqual(kwargs["recording"], "pid123")
+
+
+class TestReadFeaturesDenoisedRemap(unittest.TestCase):
+    """``read_features_from_disk`` must validate a denoised table that went through
+    ``remap_waveform_shape_features`` (#126).
+
+    That remap replaces ModelSpikeFeatures' 6 raw timing/amplitude columns with
+    ModelSpikeShapeFeatures' 4 reparametrised ones, so a denoised file written after
+    #126 no longer matches ModelRawFeatures. Denoised files written before it (every
+    release up to 2026_W38, and the fixtures here) still do, so the schema has to be
+    chosen from the columns actually present rather than from ``load_denoised``.
+    """
+
+    def setUp(self):
+        import shutil
+
+        self.mock_brain_atlas = MagicMock()
+        self.mock_brain_atlas.get_labels.return_value = 0
+        self.mock_brain_atlas.regions = MagicMock()
+        self.mock_brain_atlas.regions.remap.return_value = 0
+
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.path_features = Path(self._tmpdir.name) / "2025_W28"
+        shutil.copytree(
+            FIXTURE_PATH.joinpath("features", "2025_W28"), self.path_features
+        )
+
+    def tearDown(self):
+        self._tmpdir.cleanup()
+
+    def _remap_denoised_in_place(self):
+        """Rewrite the copied denoised table the way ``denoise_raw_features_data`` now does."""
+        import ephysatlas.features
+
+        path = self.path_features / "raw_ephys_features_denoised.pqt"
+        df = pd.read_parquet(path)
+        df_shape = ephysatlas.features.remap_waveform_shape_features(df)
+        spike_cols = list(
+            ephysatlas.features.ModelSpikeFeatures.to_schema().columns.keys()
+        )
+        df = df.drop(columns=[c for c in spike_cols if c in df.columns])
+        pd.concat([df, df_shape], axis=1).to_parquet(path)
+
+    def _read(self):
+        return ephysatlas.data.read_features_from_disk(
+            self.path_features,
+            brain_atlas=self.mock_brain_atlas,
+            strict=True,
+            mappings=[],
+        )
+
+    def test_remapped_denoised_table_validates(self):
+        self._remap_denoised_in_place()
+        df = self._read()
+        self.assertIn("spike_width_secs", df.columns)
+        self.assertNotIn("peak_time_secs", df.columns)
+
+    def test_pre_remap_denoised_table_still_validates(self):
+        df = self._read()
+        self.assertIn("peak_time_secs", df.columns)

@@ -498,7 +498,9 @@ def read_features_from_disk(
             Must be provided to enable region mapping.
         mappings (list, optional): List of brain region mapping ontologies to include.
             Default is ['Cosmos', 'Beryl'].
-        strict (bool, optional): Whether to raise an error on panderas validation. Default is True.
+        strict (bool, optional): Whether to raise an error on panderas validation. The schema is
+            picked from the columns present: `ModelDenoisedFeatures` for a table that has been
+            through `remap_waveform_shape_features`, `ModelRawFeatures` otherwise. Default is True.
         load_denoised (bool, optional): Whether to return the denoised or raw features. Default is True.
 
     Returns:
@@ -556,7 +558,18 @@ def read_features_from_disk(
 
     # this will make sure that the features dataframe is compatible and healthy
     if strict:
-        df_features = pd.DataFrame(ephysatlas.features.ModelRawFeatures(df_features))
+        # The denoised table goes through remap_waveform_shape_features (#126), which
+        # swaps ModelSpikeFeatures' raw timing/amplitude columns for
+        # ModelSpikeShapeFeatures' reparametrised ones. Denoised files written before
+        # that change -- and the raw table either way -- still carry the old columns,
+        # so pick the schema from what is actually present rather than from
+        # ``load_denoised``.
+        schema = (
+            ephysatlas.features.ModelDenoisedFeatures
+            if "spike_width_secs" in df_features.columns
+            else ephysatlas.features.ModelRawFeatures
+        )
+        df_features = pd.DataFrame(schema(df_features))
 
     # Do the outlier treatment for the alpha features.
     df_features = outlier_treatment(df_features, columns=["alpha_mean", "alpha_std"])
