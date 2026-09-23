@@ -2498,4 +2498,158 @@ def main():
     print("all done")
 
 if __name__ == "__main__":
+    import numpy as np
+    import pandas as pd
+    import matplotlib.pyplot as plt
+
+    from one.api import ONE
+    from brainwidemap import bwm_query
+
+    # ------------------------------------------------------------
+    # Configuration
+    # ------------------------------------------------------------
+
+    one = ONE()
+
+    # Use the same BWM freeze/vintage that you regard as the
+    # "final Brain-Wide Map" dataset.
+    BWM_FREEZE = "2023_12_bwm_release"  # <-- change to your actual BWM freeze
+
+    # ------------------------------------------------------------
+    # 1. Get BWM probe insertions
+    # ------------------------------------------------------------
+
+    bwm_df = bwm_query(one=one, freeze=BWM_FREEZE)
+
+    # bwm_query versions differ slightly in column naming
+    if "pid" in bwm_df.columns:
+        pids = bwm_df["pid"].astype(str).unique()
+    else:
+        raise ValueError(
+            f"Cannot find PID column. Columns are: {bwm_df.columns.tolist()}"
+        )
+
+    print(f"BWM probes: {len(pids)}")
+
+
+    # ------------------------------------------------------------
+    # 2. Lightweight function: load only channel XYZ
+    # ------------------------------------------------------------
+
+    def load_channel_xyz(one, pid, revision=None):
+        """
+        Load only channel XYZ for a probe insertion.
+
+        revision=None -> latest/current data
+        revision=<BWM revision> -> frozen BWM data
+
+        Returns
+        -------
+        xyz : (n_channels, 3) ndarray, metres
+        """
+
+        eid, probe = one.pid2eid(pid)
+
+        channels = one.load_object(
+            eid,
+            "channels",
+            collection=f"alf/{probe}",
+            attribute=["mlapdv"],
+            revision=revision,
+        )
+
+        return np.asarray(channels["mlapdv"])
+
+
+    # ------------------------------------------------------------
+    # 3. Compare BWM versus latest
+    # ------------------------------------------------------------
+
+    rows = []
+
+    for i, pid in enumerate(pids):
+
+        print(f"[{i + 1:3d}/{len(pids)}] {pid}")
+
+        try:
+            # Positions frozen with the BWM release
+            xyz_bwm = load_channel_xyz(
+                one,
+                pid,
+                revision=BWM_FREEZE,
+            )
+
+            # Current/latest positions
+            xyz_latest = load_channel_xyz(
+                one,
+                pid,
+                revision=None,
+            )
+
+            if xyz_bwm.shape != xyz_latest.shape:
+                print(
+                    f"  skipping: shapes differ "
+                    f"{xyz_bwm.shape} vs {xyz_latest.shape}"
+                )
+                continue
+
+            # ONE channel coordinates are in metres
+            displacement_um = (
+                    np.linalg.norm(xyz_latest - xyz_bwm, axis=1) * 1e6
+            )
+
+            rows.append(
+                {
+                    "pid": pid,
+                    "median_displacement_um": np.nanmedian(displacement_um),
+                    "mean_displacement_um": np.nanmean(displacement_um),
+                    "max_displacement_um": np.nanmax(displacement_um),
+                }
+            )
+
+        except Exception as exc:
+            print(f"  FAILED: {exc}")
+
+    df = pd.DataFrame(rows)
+
+    print()
+    print(f"Successfully compared {len(df)}/{len(pids)} probes")
+    print(df["median_displacement_um"].describe())
+
+    # ------------------------------------------------------------
+    # 4. Scatter plot
+    # ------------------------------------------------------------
+
+    df = df.sort_values("median_displacement_um").reset_index(drop=True)
+
+    fig, ax = plt.subplots(figsize=(7, 4))
+
+    ax.scatter(
+        np.arange(len(df)),
+        df["median_displacement_um"],
+        s=30,
+        alpha=0.8,
+    )
+
+    ax.axhline(
+        500,
+        linestyle="--",
+        linewidth=1,
+        label="500 µm",
+    )
+
+    ax.axhline(
+        1000,
+        linestyle="--",
+        linewidth=1,
+        label="1 mm",
+    )
+
+    ax.set_xlabel("BWM probe")
+    ax.set_ylabel("BWM → latest alignment displacement (µm)")
+    ax.set_title("Changes in BWM probe localization")
+    ax.legend(frameon=False)
+
+    fig.tight_layout()
+    plt.show()
     main()

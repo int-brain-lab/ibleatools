@@ -40,7 +40,6 @@ class ContextTransform:
         return self.scaler.transform(context).astype(np.float32)
 
 
-
 def infer_training_hemisphere_sign(xyz_m: np.ndarray, split: np.ndarray | None = None) -> float:
     """Infer the canonical ML sign from recorded units, robust to a few midline points."""
     xyz = np.asarray(xyz_m, np.float64)
@@ -59,6 +58,7 @@ def mirror_xyz_to_hemisphere(xyz_m: np.ndarray, hemisphere_sign: float) -> np.nd
     sign = 1.0 if float(hemisphere_sign) >= 0 else -1.0
     out[:, 0] = sign * np.abs(out[:, 0])
     return out
+
 
 def set_seed(seed: int) -> None:
     import random

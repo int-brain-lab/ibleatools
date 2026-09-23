@@ -56,6 +56,9 @@ class FigureConfig:
 
     panel_d_regions: tuple[str, ...] = ("Isocortex", "TH", "MB", "HB", "CB")
     panel_d_samples_per_unit: int = 4
+    # TEMPORARY diagnostics; the peak-time quantization issue is now understood.
+    run_diagnostics: bool = False
+    diagnostics_dir: Path = Path("unit_level_model_results/figure3_diagnostics")
 
 
 def cosmos_ids_for_xyz(ba, xyz_m):
@@ -846,7 +849,10 @@ def draw_panel_c(fig, ax, seed=0):
     shown_points = {}
 
     for k, center_uv in enumerate(centers_uv):
-        uv = center_uv[None, :] + rng.normal(scale=[0.22, 0.16], size=(48, 2))
+        # Slightly broaden only the purple cloud so non-kNN purple points remain
+        # visibly distinct from the red-outlined nearest neighbours.
+        cluster_scale = [0.30, 0.22] if k == 2 else [0.22, 0.16]
+        uv = center_uv[None, :] + rng.normal(scale=cluster_scale, size=(48, 2))
         x = uv[:, 0]
         y = uv[:, 1]
         z = manifold_z(x, y)
@@ -997,6 +1003,53 @@ def _feature_index(feature_names, name):
     return names.index(name)
 
 
+def _temporary_time_feature_diagnostics(bundle, fig_cfg):
+    """TEMP: diagnose whether peak/tip time features are quantized to waveform samples."""
+    if not fig_cfg.run_diagnostics:
+        return
+    data = bundle.data
+    features = get_model_space_waveform_features(data, bundle.cfg)
+    fs = float(bundle.cfg.waveform_sampling_rate_hz)
+    dt_us = 1e6 / fs
+    outdir = Path(fig_cfg.diagnostics_dir)
+    outdir.mkdir(parents=True, exist_ok=True)
+    test = np.flatnonzero(np.asarray(data.split) == 2)
+
+    aliases = {
+        "peak_time_secs": ("peak_time_secs",),
+        "tip_time_secs": ("tip_time_secs", "tip_time_sec"),
+    }
+    fig, axes = plt.subplots(2, 2, figsize=(8, 5.5))
+    rows=[]
+    for r,(label,names) in enumerate(aliases.items()):
+        idx=_feature_index(data.waveform_feature_names, names)
+        sec=np.asarray(features[test,idx],float)
+        sec=sec[np.isfinite(sec)]
+        sample_pos=sec*fs
+        residual=sample_pos-np.rint(sample_pos)
+        rounded=np.round(sec,12)
+        uniq,cnt=np.unique(rounded,return_counts=True)
+        order=np.argsort(cnt)[::-1]
+        frac_integer=float(np.mean(np.abs(residual)<1e-5)) if len(sec) else np.nan
+        min_step=np.min(np.diff(np.sort(uniq))) if len(uniq)>1 else np.nan
+        rows.append((label,len(sec),len(uniq),frac_integer,min_step,dt_us))
+        print(f"[Figure 3 panel d TEMP] {label}: n={len(sec):,}, unique={len(uniq):,}, "
+              f"fraction exactly on sample grid={frac_integer:.3f}, smallest unique step={min_step*1e6:.3f} us, "
+              f"waveform dt={dt_us:.3f} us")
+        print("  most common values (ms,count): "+", ".join(
+            f"{uniq[i]*1e3:.5g}:{cnt[i]}" for i in order[:10]))
+        axes[r,0].hist(sec*1e3,bins=100)
+        axes[r,0].set_title(f"{label}: raw values")
+        axes[r,0].set_xlabel("ms"); axes[r,0].set_ylabel("count")
+        axes[r,1].hist(residual,bins=np.linspace(-.5,.5,51))
+        axes[r,1].set_title("position relative to nearest waveform sample")
+        axes[r,1].set_xlabel("fractional sample residual")
+    fig.tight_layout(); fig.savefig(outdir/"peak_tip_time_quantization.pdf",dpi=250); plt.close(fig)
+    with (outdir/"peak_tip_time_quantization.csv").open("w",encoding="utf8") as f:
+        f.write("feature,n,unique_values,fraction_on_integer_sample_grid,min_unique_step_sec,waveform_dt_us\n")
+        for row in rows: f.write(",".join(map(str,row))+"\n")
+    print(f"[Figure 3 TEMP] time-feature diagnostics written to {outdir}")
+
 def _panel_d_distributions(bundle, fig_cfg):
     """Compute observed vs final-model feature distributions for panel d."""
     data = bundle.data
@@ -1006,7 +1059,6 @@ def _panel_d_distributions(bundle, fig_cfg):
 
     requested_features = [
         (("trough_val", "trough_value"), "Trough value", 1.0),
-        ("peak_time_secs", "Peak time (ms)", 1e3),
         (("tip_time_secs", "tip_time_sec"), "Tip time (ms)", 1e3),
         (("depolarisation_slope", "depolarization_slope"), "Depolarization slope", 1.0),
     ]
@@ -1098,7 +1150,7 @@ def _panel_d_distributions(bundle, fig_cfg):
     return out
 
 
-PANEL_D_CACHE_VERSION = 6
+PANEL_D_CACHE_VERSION = 7
 
 
 def _cached_panel_d_distributions(bundle, fig_cfg):
@@ -1236,11 +1288,11 @@ def draw_panel_d(fig, spec, bundle, fig_cfg):
     feature_titles = list(
         distributions.get(
             "_feature_titles",
-            ["Trough value", "Peak time (ms)", "Tip time (ms)", "Depolarization slope"],
+            ["Trough value", "Tip time (ms)", "Depolarization slope"],
         )
     )
     feature_scales = list(
-        distributions.get("_feature_scales", [1.0, 1e3, 1e3, 1.0])
+        distributions.get("_feature_scales", [1.0, 1e3, 1.0])
     )
     n_rows = len(feature_titles)
 
@@ -1366,7 +1418,8 @@ def draw_panel_d(fig, spec, bundle, fig_cfg):
             bbox_to_anchor=(0.5, float(panel_bbox.y1) + 0.022),
         )
 
-    _panel_label_left(fig, min(0.985, panel_bbox.y1 + 0.024), "d")
+    # Keep the panel letter clearly above panel d (and slightly above its legend).
+    _panel_label_left(fig, min(0.985, panel_bbox.y1 + 0.052), "d")
 
 
 
@@ -1539,6 +1592,7 @@ def make_figure3(fig_cfg=FigureConfig()):
 
     ax_c = fig.add_subplot(outer[1])
     draw_panel_c(fig, ax_c, seed=fig_cfg.seed)
+    _temporary_time_feature_diagnostics(bundle, fig_cfg)
     draw_panel_d(fig, outer[2], bundle, fig_cfg)
 
     fig.subplots_adjust(left=0.062, right=0.988, top=0.989, bottom=0.055)
