@@ -1,3 +1,5 @@
+import os
+
 import numpy as np
 
 from pathlib import Path
@@ -21,50 +23,77 @@ from one.api import ONE
 from tqdm import tqdm
 import scipy.interpolate
 
-FEATURE_LIST = [
+# Downloaded feature tables and derived context volumes default to a data directory outside any
+# source checkout (the unit-level model reads the same environment variable).
+DEFAULT_DATA_DIR = Path(
+    os.environ.get("EPHYS_ATLAS_DATA_DIR", Path.home().joinpath("ephys-atlas", "data"))
+)
+
+# Channel-level features predicted by the spatial encoder, from the denoised feature table
+# (``raw_ephys_features_denoised.pqt``, vintage 2026_W39 onwards, whose spike-waveform block is the
+# remapped ``ModelSpikeShapeFeatures`` set). The model consumes and predicts them positionally, so
+# this order is part of a published model's contract: it is recorded in the release manifest with a
+# digest, and changing it requires retraining.
+#
+# Ordered by group -- LF | AP | waveform. Inside the LF group: RMS, band powers from the lowest to
+# the highest frequency band (broadband ``lfp`` last), their CSD counterparts in the same order, the
+# aperiodic-corrected residual powers, then the aperiodic fit parameters and the remaining LF
+# descriptors. The AP group holds the AP-band RMS and the spike-detection statistics.
+LF_FEATURES = [
     "rms_lf",
-    "psd_lfp",
+    "psd_delta",
+    "psd_theta",
     "psd_alpha",
     "psd_beta",
     "psd_gamma",
-    "psd_delta",
-    "psd_theta",
-    "psd_lfp_csd_diff1",
+    "psd_lfp",
+    "rms_lf_csd_diff1",
+    "psd_delta_csd_diff1",
+    "psd_theta_csd_diff1",
     "psd_alpha_csd_diff1",
     "psd_beta_csd_diff1",
     "psd_gamma_csd_diff1",
-    "psd_delta_csd_diff1",
-    "psd_theta_csd_diff1",
-    "rms_lf_csd_diff1",
-    "psd_residual_lfp",
+    "psd_lfp_csd_diff1",
+    "psd_residual_delta",
+    "psd_residual_theta",
     "psd_residual_alpha",
     "psd_residual_beta",
     "psd_residual_gamma",
-    "psd_residual_delta",
-    "psd_residual_theta",
+    "psd_residual_lfp",
+    "aperiodic_offset",
+    "aperiodic_exponent",
     "decay_fit_error",
     "decay_fit_r_squared",
     "decay_n_peaks",
-    "aperiodic_exponent",
-    "aperiodic_offset",
     "cor_ratio",
+]
+AP_FEATURES = [
     "rms_ap",
     "alpha_mean",
     "alpha_std",
     "spike_count",
-    "tip_time_secs",
-    "recovery_time_secs",
-    "peak_time_secs",
-    "trough_time_secs",
-    "trough_val",
-    "tip_val",
-    "peak_val",
-    "recovery_slope",
-    "depolarisation_slope",
-    "repolarisation_slope",
-    "polarity",
-    #'channel_labels'
 ]
+WAVEFORM_FEATURES = [
+    "depolarisation_slope",
+    "polarity",
+    "recovery_slope",
+    "repolarisation_slope",
+    "slowness_s_per_m",
+    "slowness_s_per_m_std",
+    "spatial_spread_um",
+    "spatial_spread_um_std",
+    "tip_val",
+    "spike_width_secs",
+    "predepolarisation_width_secs",
+    "spike_amplitude",
+    "peak_to_trough_ratio_log",
+]
+FEATURE_GROUPS = {
+    "lf": LF_FEATURES,
+    "ap": AP_FEATURES,
+    "waveform": WAVEFORM_FEATURES,
+}
+FEATURE_LIST = LF_FEATURES + AP_FEATURES + WAVEFORM_FEATURES
 
 
 def get_device():
@@ -93,7 +122,7 @@ class ContextAtlasManager:
         self,
         cfg: AtlasPCAConfig,
         regenerate_context: bool = False,
-        output_dir: Path = Path("."),
+        output_dir: Path = DEFAULT_DATA_DIR / "context_volumes",
     ):
         brain_atlas = AllenAtlas()
         self.bc = brain_atlas.bc
@@ -148,11 +177,13 @@ class ContextAtlasManager:
             cell_type_vol[:, zero_ind[0], zero_ind[1], zero_ind[2]] = 0
             gene_exp_vol[:, zero_ind[0], zero_ind[1], zero_ind[2]] = 0
 
+            output_dir = Path(output_dir)
+            output_dir.mkdir(parents=True, exist_ok=True)
             np.save(output_dir / "agea_vol_pca", gene_exp_vol)
             np.save(output_dir / "merfish_vol_pca", cell_type_vol)
         else:
-            gene_exp_vol = np.load(output_dir / "agea_vol_pca.npy")
-            cell_type_vol = np.load(output_dir / "merfish_vol_pca.npy")
+            gene_exp_vol = np.load(Path(output_dir) / "agea_vol_pca.npy")
+            cell_type_vol = np.load(Path(output_dir) / "merfish_vol_pca.npy")
 
         self.cell_pca = cell_type_vol  # [P_cell, Xh, Zh, Yh]
         self.gene_pca = gene_exp_vol  # [P_gene, Xh, Zh, Yh]
@@ -207,7 +238,7 @@ def LoadInsertionData(
     project: str = "ea_active",
     agg: str = "agg_full",
     VINTAGE: str = "",
-    path_data: Path = Path("."),
+    path_data: Path = DEFAULT_DATA_DIR,
 ):
     """
     Loads table-based ephys features and concatenates per-channel averaged waveform latents
@@ -388,9 +419,7 @@ def _coerce_preprocessing_stats(preprocessing_stats: dict | None):
         "rec_ephys_high_pctl": torch.as_tensor(
             preprocessing_stats["rec_ephys_high_pctl"], dtype=torch.float32
         ),
-        "e_mean": torch.as_tensor(
-            preprocessing_stats["e_mean"], dtype=torch.float32
-        ),
+        "e_mean": torch.as_tensor(preprocessing_stats["e_mean"], dtype=torch.float32),
         "e_std": torch.as_tensor(
             preprocessing_stats["e_std"], dtype=torch.float32
         ).clamp_min(1e-6),
@@ -432,8 +461,8 @@ def _resolve_probe_split(
         n_va_p = int(np.clip(n_va_p, 0, nP - n_tr_p))
 
         p_tr_ids = set(shuffled[:n_tr_p].astype(int).tolist())
-        p_va_ids = set(shuffled[n_tr_p:n_tr_p + n_va_p].astype(int).tolist())
-        p_te_ids = set(shuffled[n_tr_p + n_va_p:].astype(int).tolist())
+        p_va_ids = set(shuffled[n_tr_p : n_tr_p + n_va_p].astype(int).tolist())
+        p_te_ids = set(shuffled[n_tr_p + n_va_p :].astype(int).tolist())
         source = "generated"
     else:
         train_names = {str(x) for x in split_manifest.get("train_pids", [])}
@@ -460,7 +489,9 @@ def _resolve_probe_split(
                     f"[warn] {split_name}: {len(missing)} PIDs from the saved split "
                     f"are absent from the currently loaded data. First few: {missing[:5]}"
                 )
-            return {pid_to_probe_idx[name] for name in names if name in pid_to_probe_idx}
+            return {
+                pid_to_probe_idx[name] for name in names if name in pid_to_probe_idx
+            }
 
         p_tr_ids = _to_ids(train_names, "train")
         p_va_ids = _to_ids(val_names, "validation")
@@ -469,8 +500,7 @@ def _resolve_probe_split(
 
         assigned_names = train_names | val_names | test_names
         loaded_unassigned = [
-            str(pid_names[i]) for i in uniq_p
-            if str(pid_names[i]) not in assigned_names
+            str(pid_names[i]) for i in uniq_p if str(pid_names[i]) not in assigned_names
         ]
         if loaded_unassigned:
             print(
@@ -600,10 +630,7 @@ def build_channels_plus_emptyvoxels_with_neighbors(
         xyz_p = probe_positions[p].astype(np.float32)
         eph_p = ephys[p].astype(np.float32)
 
-        valid = (
-            np.isfinite(xyz_p).all(axis=1)
-            & ~np.all(xyz_p == 0.0, axis=1)
-        )
+        valid = np.isfinite(xyz_p).all(axis=1) & ~np.all(xyz_p == 0.0, axis=1)
         if not valid.any():
             continue
 
@@ -854,10 +881,7 @@ def build_training_neighbor_bank_from_release(
 
         xyz_p = np.asarray(probe_positions[p], dtype=np.float32)
         eph_p = np.asarray(ephys[p], dtype=np.float32)
-        valid = (
-            np.isfinite(xyz_p).all(axis=1)
-            & ~np.all(xyz_p == 0.0, axis=1)
-        )
+        valid = np.isfinite(xyz_p).all(axis=1) & ~np.all(xyz_p == 0.0, axis=1)
         if not valid.any():
             continue
 
@@ -881,14 +905,20 @@ def build_training_neighbor_bank_from_release(
         f"{len(bank_xyz):,} valid training channels; validation/test leakage=0"
     )
 
-    return {
-        "bank_xyz": bank_xyz,
-        "bank_feat": bank_feat,
-        "bank_pid": bank_pid,
-        "nn_bank": ChannelNN(bank_xyz),
-        "radius_um": int(radius_um),
-        "m_max": int(m_max),
-    }, stats["e_mean"], stats["e_std"], stats["ctx_mean"], stats["ctx_std"]
+    return (
+        {
+            "bank_xyz": bank_xyz,
+            "bank_feat": bank_feat,
+            "bank_pid": bank_pid,
+            "nn_bank": ChannelNN(bank_xyz),
+            "radius_um": int(radius_um),
+            "m_max": int(m_max),
+        },
+        stats["e_mean"],
+        stats["e_std"],
+        stats["ctx_mean"],
+        stats["ctx_std"],
+    )
 
 
 class RecDS(Dataset):
