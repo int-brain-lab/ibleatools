@@ -414,12 +414,12 @@ def train_hybrid(
                         },
                         checkpoint_path,
                     )
-                print(f"✓ Improvement on {monitor}: {best_val:.6f} (epoch {ep})")
+                print(f"Improvement on {monitor}: {best_val:.6f} (epoch {ep})")
             else:
                 num_bad_epochs += 1
                 if num_bad_epochs >= patience:
                     print(
-                        f"⏹ Early stopping at epoch {ep} (no improvement in {patience} epochs)."
+                        f"Early stopping at epoch {ep} (no improvement in {patience} epochs)."
                     )
                     break
 
