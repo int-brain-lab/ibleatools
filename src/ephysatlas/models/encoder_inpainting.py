@@ -28,6 +28,8 @@ ROLE_WEIGHTS = "weights"
 ROLE_CONTEXT = "context"
 ROLE_BANK = "neighbor_bank"
 ROLE_CONFIDENCE = "confidence"
+ROLE_SPLIT = "split"
+ROLE_STATS = "stats"
 
 
 def _architecture(path_model: Path, manifest: dict, state: dict) -> dict:
@@ -230,22 +232,73 @@ class SpatialEncoder:
             self._model = _load_inpainting_encoder(self.path_model, self.index)
         return self._model
 
-    def preprocessing_stats(self) -> dict:
-        """Return the standardisation statistics baked into the checkpoint.
+    @property
+    def features(self) -> list:
+        """Ordered names of the features this model predicts (``outputs.columns``)."""
+        return list(self.outputs.get("columns") or [])
 
-        These are the registered buffers the model ships with -- the feature and context means
-        and stds -- exposed so a caller can standardise its own data the way the weights expect.
+    def preprocessing_stats(self) -> dict:
+        """Return the training-data statistics the model was fitted with.
+
+        Always holds the standardisation the weights expect -- the feature and context means and
+        stds, i.e. the registered buffers the checkpoint ships with. When the release publishes
+        ``preprocessing/channel_stats.npz`` it also holds what the buffers cannot carry: the
+        per-feature clipping percentiles (``rec_ephys_low_pctl``/``rec_ephys_high_pctl``) applied
+        to the recorded features before standardisation.
 
         Returns:
-            dict: ``{"e_mean", "e_std", "ctx_mean", "ctx_std"}`` as numpy arrays.
+            dict: ``{"e_mean", "e_std", "ctx_mean", "ctx_std", ...}`` as numpy arrays.
         """
         model = self.model
-        return {
+        stats = {
             "e_mean": model.e_mean.detach().cpu().numpy(),
             "e_std": model.e_std.detach().cpu().numpy(),
             "ctx_mean": model.ctx_mean.detach().cpu().numpy(),
             "ctx_std": model.ctx_std.detach().cpu().numpy(),
         }
+        name = (self.index.get("artifacts") or {}).get(ROLE_STATS)
+        if name and self.path_model.joinpath(name).exists():
+            with np.load(self.path_model.joinpath(name), allow_pickle=False) as payload:
+                released = {key: payload[key] for key in payload.files}
+            # The buffers are what the weights actually use: a published stats file that
+            # disagrees with them would silently mis-standardise every caller's data.
+            for key, value in stats.items():
+                if key in released and not np.allclose(
+                    released[key], value, rtol=1e-5, atol=1e-7
+                ):
+                    raise ValueError(
+                        f"{self.path_model.name}: {name} {key} disagrees with the checkpoint buffer"
+                    )
+            stats = {**released, **stats}
+        return stats
+
+    def split(self) -> dict:
+        """The probe split the model was trained with.
+
+        Returns:
+            dict: ``{"train_pids", "validation_pids", "test_pids"}`` (lists of insertion ids),
+            plus whatever else the published ``split.json`` records.
+
+        Raises:
+            FileNotFoundError: If the release publishes no split.
+        """
+        import json
+
+        name = (self.index.get("artifacts") or {}).get(ROLE_SPLIT, "split.json")
+        path = self.path_model.joinpath(name)
+        if not path.exists():
+            raise FileNotFoundError(f"{self.path_model.name} publishes no {name}")
+        split = json.loads(path.read_text(encoding="utf-8"))
+        # Releases written before the split contract was settled record the training loader's own
+        # keys (e.g. ea-encoder-channel@2026_W32); expose them under the published names.
+        for published, legacy in (
+            ("train_pids", "p_tr_names"),
+            ("validation_pids", "p_va_names"),
+            ("test_pids", "p_te_names"),
+        ):
+            if published not in split and legacy in split:
+                split[published] = [str(pid) for pid in split[legacy]]
+        return split
 
     @property
     def context_dir(self) -> Path:
@@ -277,6 +330,47 @@ class SpatialEncoder:
         return torch.load(
             self.path_model.joinpath(name), map_location="cpu", weights_only=False
         )
+
+    def load_confidence_model(self):
+        """Instantiate the probe-confidence model published alongside, in ``eval()`` mode.
+
+        The confidence model scores, channel by channel, how consistent a probe's recorded
+        features are with this encoder's predictions at its reported positions (used to flag
+        misaligned insertions). Its constructor arguments are read from the checkpoint's
+        ``architecture`` record, falling back to the manifest's ``config.confidence``.
+
+        Returns:
+            ProbeSequenceConfidenceTransformer | None: None when the release ships no confidence
+            model.
+
+        Raises:
+            ValueError: If the checkpoint does not record its architecture.
+        """
+        from ephysatlas.spatial_encoder.model import ProbeSequenceConfidenceTransformer
+
+        checkpoint = self.confidence_model()
+        if checkpoint is None:
+            return None
+        arch = dict((self.config.get("confidence") or {}).get("architecture") or {})
+        arch.update(checkpoint.get("architecture") or {})
+        required = ("f_ctx", "f_e", "d_model", "nhead", "depth", "mlp_ratio", "drop")
+        missing = [key for key in required if key not in arch]
+        if missing:
+            raise ValueError(
+                f"{self.path_model.name}: the confidence model does not record {missing}; it "
+                f"cannot be rebuilt without its architecture."
+            )
+        model = ProbeSequenceConfidenceTransformer(
+            f_ctx=int(arch["f_ctx"]),
+            f_e=int(arch["f_e"]),
+            d_model=int(arch["d_model"]),
+            nhead=int(arch["nhead"]),
+            depth=int(arch["depth"]),
+            mlp_ratio=float(arch["mlp_ratio"]),
+            drop=float(arch["drop"]),
+        )
+        model.load_state_dict(checkpoint["model_state"], strict=True)
+        return model.eval()
 
     def _context_manager(self):
         """Build the atlas context manager over the *published* PCA volumes.
@@ -323,6 +417,16 @@ class SpatialEncoder:
             with np.load(self.path_model.joinpath(name), allow_pickle=False) as data:
                 self._bank = {k: data[k].copy() for k in ("xyz", "feat", "pid")}
         return self._bank
+
+    def neighbor_bank(self) -> dict:
+        """The published training-channel bank the model draws neighbours from.
+
+        Returns:
+            dict: ``xyz`` (``[n, 3]`` positions, metres, mirrored to the left hemisphere), ``feat``
+            (``[n, n_features]`` clipped and standardised features) and ``pid`` (insertion id per
+            channel), exactly as the model saw them during training.
+        """
+        return {key: value.copy() for key, value in self._neighbor_bank().items()}
 
     # -- the pipeline ----------------------------------------------------------------------
 
