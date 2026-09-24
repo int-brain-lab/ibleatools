@@ -29,7 +29,7 @@ from .knn_decoder import (
     EmpiricalKNNDecoder,
     component_feature_expectations,
 )
-from .prepare_data import prepare_latest_cells_encoder_data
+from .prepare_data import channel_context_sha1, prepare_latest_cells_encoder_data
 from .train import checkpoint_name, encode_all, load_autoencoder_file, train_autoencoder
 from .waveform_features import extract_generated_waveform_features
 
@@ -93,6 +93,9 @@ def prepare_unit_data(cfg: Config, split_manifest: dict | None = None):
                 and int(manifest.get("n_cell_pcs", -1)) == int(cfg.n_cell_pcs)
                 and int(manifest.get("n_gene_pcs", -1)) == int(cfg.n_gene_pcs)
                 and str(manifest.get("context_vintage")) == str(cfg.vintage)
+                # The contexts must come from exactly the volumes of cfg.channel_model.
+                and manifest.get("context_volumes_sha1")
+                == channel_context_sha1(cfg.channel_model, cfg.vintage)
             )
         except Exception:
             current = False
@@ -330,6 +333,9 @@ def load_unit_model(
         # Keep the caller's runtime locations; everything scientific comes from the release.
         for key in ("data_dir", "prepared_data_dir", "model_dir", "output_dir"):
             setattr(released, key, getattr(cfg, key))
+        # Sample the unit contexts from the volumes this release ships -- the ones it was trained
+        # with -- rather than from whatever the channel repository holds today.
+        released.channel_model = str(encoder.context_dir)
         if data is None:
             data = prepare_unit_data(released, split_manifest=encoder.split())
         return encoder.bundle(data)

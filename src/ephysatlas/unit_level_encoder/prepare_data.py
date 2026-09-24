@@ -361,36 +361,71 @@ def _align_good_cluster_array(
     return np.asarray(values_good[rows], dtype=np.float32)
 
 
+def _sha1(path: Path) -> str:
+    from iblutil.io import hashfile
+
+    return hashfile.sha1(Path(path))
+
+
+def channel_context_files(channel_model: str | Path, vintage: str) -> dict[str, Path]:
+    """The frozen molecular-context volumes of a channel-level release, as local files.
+
+    Published releases keep them at the release root; older staged releases kept them under
+    ``context/``, which is accepted as a fallback. A remote release is downloaded to the Hub cache.
+    """
+    from ephysatlas.model_registry import ENCODER_CONTEXT_FILES
+
+    files = {}
+    for name in ENCODER_CONTEXT_FILES:
+        try:
+            files[name] = resolve_channel_release_file(channel_model, vintage, name)
+        except Exception:  # noqa: BLE001 - older layout keeps the volumes under context/
+            files[name] = resolve_channel_release_file(
+                channel_model, vintage, f"context/{name}"
+            )
+    return files
+
+
+def channel_context_sha1(channel_model: str | Path, vintage: str) -> dict[str, str]:
+    """sha1 of each frozen context volume of a channel-level release."""
+    return {
+        name: _sha1(path)
+        for name, path in channel_context_files(channel_model, vintage).items()
+    }
+
+
 def _ensure_frozen_context_atlas(
     *,
     out_dir: Path,
     channel_model: str | Path,
     vintage: str,
-) -> Path:
+) -> tuple[Path, dict[str, str]]:
     """Copy the exact frozen molecular-context volumes of the channel-level release.
 
     Reusing the channel model's PCA volumes guarantees that the unit model and the channel model
-    share the same PCA basis and sign convention. Published releases keep them at the release
-    root; older staged releases kept them under ``context/``, which is accepted as a fallback.
-    """
-    from ephysatlas.model_registry import ENCODER_CONTEXT_FILES
+    share the same PCA basis and sign convention. A copy already in ``out_dir`` is kept only when
+    its bytes match the release's: volumes left over from another release or vintage would
+    otherwise silently put the unit contexts in a different PCA basis.
 
+    Returns:
+        tuple: The context directory, and ``{volume name: sha1}`` of the volumes it now holds.
+    """
     context_dir = Path(out_dir) / "context_atlas"
     context_dir.mkdir(parents=True, exist_ok=True)
 
-    for name in ENCODER_CONTEXT_FILES:
+    hashes = {}
+    for name, src in channel_context_files(channel_model, vintage).items():
         dst = context_dir / name
-        if dst.exists():
-            continue
-        try:
-            src = resolve_channel_release_file(channel_model, vintage, name)
-        except Exception:  # noqa: BLE001 - older layout keeps the volumes under context/
-            src = resolve_channel_release_file(
-                channel_model, vintage, f"context/{name}"
-            )
-        shutil.copy2(src, dst)
+        expected = _sha1(src)
+        if not dst.exists() or _sha1(dst) != expected:
+            if dst.exists():
+                print(
+                    f"[context] replacing {dst}: it is not the {vintage} release's {name}"
+                )
+            shutil.copy2(src, dst)
+        hashes[name] = expected
 
-    return context_dir
+    return context_dir, hashes
 
 
 def _build_context(
@@ -918,7 +953,7 @@ def prepare_latest_cells_encoder_data(
     cosmos_ids = cosmos_ids[valid]
     atlas_ids = atlas_ids[valid]
 
-    context_dir = _ensure_frozen_context_atlas(
+    context_dir, context_sha1 = _ensure_frozen_context_atlas(
         out_dir=out_dir,
         channel_model=channel_model,
         vintage=context_vintage,
@@ -1067,6 +1102,8 @@ def prepare_latest_cells_encoder_data(
         "channel_model": str(channel_model),
         "context_vintage": str(context_vintage),
         "context_atlas_dir": str(context_dir),
+        # Identity of the volumes the contexts were sampled from; checked before reuse.
+        "context_volumes_sha1": context_sha1,
         "xyz_shape": list(xyz_m.shape),
         "xyz_columns": [x_col, y_col, z_col],
         "xyz_in_meters_detected": bool(xyz_in_meters),
