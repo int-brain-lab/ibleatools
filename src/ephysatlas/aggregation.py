@@ -5,7 +5,7 @@ import pandas as pd
 from functools import reduce
 from joblib import Parallel, delayed
 from ephysatlas.utils import get_aggregated_snippets_df
-from ephysatlas.data import outlier_treatment, replace_nan
+from ephysatlas.data import alpha_outlier_columns, outlier_treatment, replace_nan
 from ephysatlas.features import (
     ChannelDataFrameSchema,
     ModelRawFeatures,
@@ -338,7 +338,7 @@ def get_aggregated_features_per_pid(snippet_df_per_pid: pd.DataFrame):
     agg_df_per_pid = agg_df_per_pid.reset_index()
 
     agg_df_per_pid = outlier_treatment(
-        agg_df_per_pid, columns=["alpha_mean", "alpha_std"], replace_with_nan=True
+        agg_df_per_pid, columns=alpha_outlier_columns(agg_df_per_pid), replace_with_nan=True
     )
 
     # then we join with the channel information to get coordinates and anatomical information
@@ -365,9 +365,16 @@ def get_aggregated_features_per_pid(snippet_df_per_pid: pd.DataFrame):
     chan_cols = ["channel", "axial_um", "lateral_um"]
     if "distance_to_tip_um" in df_channels.columns:
         chan_cols.append("distance_to_tip_um")
+    # channels.pqt stores per-channel QC labels as 'labels'; denoise_raw_features_data
+    # expects them as 'channel_labels' (the package-wide name, see data.py). Also
+    # presence-filtered: a no-op until channels.pqt carries the column.
+    if "labels" in df_channels.columns:
+        chan_cols.append("labels")
     agg_df_per_pid = agg_df_per_pid.merge(
         df_channels[chan_cols], on="channel", how="left"
     )
+    if "labels" in agg_df_per_pid.columns:
+        agg_df_per_pid = agg_df_per_pid.rename(columns={"labels": "channel_labels"})
 
     return agg_df_per_pid
 
@@ -550,7 +557,7 @@ def denoise_raw_features_data(
     df_features_denoise = pd.concat(df_pids)
 
     df_features_denoise = outlier_treatment(
-        df_features_denoise, columns=["alpha_mean", "alpha_std"]
+        df_features_denoise, columns=alpha_outlier_columns(df_features_denoise)
     )
 
     df_features_denoise = replace_nan(
