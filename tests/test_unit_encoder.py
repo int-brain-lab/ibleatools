@@ -85,6 +85,20 @@ class TestUnitEncoderWrapper(unittest.TestCase):
             encoder.predict(self.positions).to_numpy(), expected, rtol=1e-5
         )
 
+    def test_bundle_refuses_data_described_by_other_features(self):
+        from types import SimpleNamespace
+
+        encoder = self._encoder()
+        waveform, acg, stpc = synthetic_units(encoder.cfg, n=4)
+        data = SimpleNamespace(
+            waveforms=waveform,
+            acgs=acg,
+            stpc=stpc,
+            waveform_feature_names=["peak_val", "polarity"],
+        )
+        with self.assertRaisesRegex(ValueError, "peak_val"):
+            encoder.bundle(data)
+
     def test_predict_varies_with_position_and_is_deterministic(self):
         encoder = self._encoder()
         first = encoder.predict(self.positions).to_numpy()

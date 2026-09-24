@@ -19,8 +19,8 @@ from .model import UnitAutoencoder, covariance_penalty, variance_penalty
 class FeatureTargetTransform:
     """TRAIN-only feature transform used by the feature-fidelity AE.
 
-    The first 10 waveform features are standardized. Polarity is encoded as a
-    categorical variable using the exact unique TRAIN values.
+    The continuous waveform features (all but the last) are standardized. Polarity, the last
+    feature, is encoded as a categorical variable using the exact unique TRAIN values.
     """
 
     def __init__(self, scaler: StandardScaler, polarity_values: np.ndarray):

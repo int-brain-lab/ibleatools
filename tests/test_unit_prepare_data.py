@@ -108,6 +108,7 @@ class TestPreparedDataFreshness(unittest.TestCase):
     def setUp(self):
         from ephysatlas.unit_level_encoder import Config
         from ephysatlas.unit_level_encoder.prepare_data import channel_context_sha1
+        from ephysatlas.unit_level_encoder.waveform_features import FEATURE_NAMES
 
         self.tmp = Path(tempfile.mkdtemp())
         self.release = self.tmp / "channel_release"
@@ -124,6 +125,9 @@ class TestPreparedDataFreshness(unittest.TestCase):
         for name in self.REQUIRED:
             np.save(prepared / name, np.zeros(1, np.float32))
         np.save(prepared / "ctx.npy", np.zeros((4, 100), np.float32))
+        np.save(
+            prepared / "waveform_channel_xy_um.npy", np.zeros((4, 20, 2), np.float32)
+        )
         (prepared / "waveform_feature_names.json").write_text("[]")
         self.manifest = {
             "context_type": "merfish_agea_pca",
@@ -131,6 +135,7 @@ class TestPreparedDataFreshness(unittest.TestCase):
             "n_gene_pcs": 50,
             "context_vintage": "2026_W39",
             "context_volumes_sha1": channel_context_sha1(self.release, "2026_W39"),
+            "waveform_feature_names": list(FEATURE_NAMES),
         }
 
     def tearDown(self):
@@ -162,6 +167,10 @@ class TestPreparedDataFreshness(unittest.TestCase):
         stale = {**self.manifest, "context_volumes_sha1": {"agea_vol_pca.npy": "0"}}
         self.assertTrue(self._rebuilt(stale))
 
+    def test_data_with_other_waveform_features_is_rebuilt(self):
+        old = {**self.manifest, "waveform_feature_names": ["peak_val", "polarity"]}
+        self.assertTrue(self._rebuilt(old))
+
     def test_data_without_a_volume_record_is_rebuilt(self):
         # Prepared before the volumes were recorded: their identity is unknown.
         legacy = {k: v for k, v in self.manifest.items() if k != "context_volumes_sha1"}
@@ -170,3 +179,48 @@ class TestPreparedDataFreshness(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestModelSpaceFeatureCache(unittest.TestCase):
+    """The model-space feature cache is reused only for the same units and feature names."""
+
+    def setUp(self):
+        from ephysatlas.unit_level_encoder import Config
+
+        self.tmp = Path(tempfile.mkdtemp())
+        self.cfg = Config(device="cpu", prepared_data_dir=self.tmp)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _data(self, names, channel_xy_um=None):
+        return SimpleNamespace(
+            waveforms=np.zeros((3, 4, 128), np.float32),
+            waveform_feature_names=list(names),
+            channel_xy_um=channel_xy_um,
+        )
+
+    def test_cache_with_the_same_names_is_reused(self):
+        from ephysatlas.unit_level_encoder.pipeline import (
+            model_space_waveform_features,
+            save_model_space_waveform_features,
+        )
+
+        cached = np.arange(6, dtype=np.float32).reshape(3, 2)
+        save_model_space_waveform_features(self.cfg, cached, ["a", "b"])
+        np.testing.assert_array_equal(
+            model_space_waveform_features(self._data(["a", "b"]), self.cfg), cached
+        )
+
+    def test_cache_of_other_features_is_not_reused(self):
+        from ephysatlas.unit_level_encoder.pipeline import (
+            model_space_waveform_features,
+            save_model_space_waveform_features,
+        )
+
+        save_model_space_waveform_features(
+            self.cfg, np.zeros((3, 2)), ["peak_val", "polarity"]
+        )
+        # Recomputing needs the channel positions, which this data lacks.
+        with self.assertRaisesRegex(RuntimeError, "channel positions"):
+            model_space_waveform_features(self._data(["a", "b"]), self.cfg)

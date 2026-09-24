@@ -444,6 +444,13 @@ class UnitEncoder:
                     f"prepared {name} have shape {tuple(array.shape[1:])}, the released model "
                     f"expects {tuple(shape)}"
                 )
+        # Figures index the model's features and the data's by the same positions.
+        if list(data.waveform_feature_names) != list(self._knn.feature_names):
+            raise ValueError(
+                f"the prepared unit data describes units by {list(data.waveform_feature_names)}, "
+                f"the released model predicts {list(self._knn.feature_names)}; use a model "
+                "trained with the current unit waveform features"
+            )
         context_model = ContextWeightModel(
             self._context_model.net,
             self._context_model.transform.transform(data.context),

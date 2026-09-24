@@ -31,7 +31,9 @@ from .knn_decoder import (
 )
 from .prepare_data import channel_context_sha1, prepare_latest_cells_encoder_data
 from .train import checkpoint_name, encode_all, load_autoencoder_file, train_autoencoder
-from .waveform_features import extract_generated_waveform_features
+from .waveform_features import FEATURE_NAMES, extract_generated_waveform_features
+
+MODEL_SPACE_FEATURES_FILE = "waveform_features_model_space.npy"
 
 
 @dataclass
@@ -74,6 +76,7 @@ def prepare_unit_data(cfg: Config, split_manifest: dict | None = None):
         "allen.npy",
         "waveform_features.npy",
         "waveform_feature_names.json",
+        "waveform_channel_xy_um.npy",
         "latest_cells_encoder_manifest.json",
     ]
     have_all = all((data_dir / name).exists() for name in required)
@@ -96,6 +99,9 @@ def prepare_unit_data(cfg: Config, split_manifest: dict | None = None):
                 # The contexts must come from exactly the volumes of cfg.channel_model.
                 and manifest.get("context_volumes_sha1")
                 == channel_context_sha1(cfg.channel_model, cfg.vintage)
+                # Prepared with the current unit waveform features.
+                and list(manifest.get("waveform_feature_names", []))
+                == list(FEATURE_NAMES)
             )
         except Exception:
             current = False
@@ -142,27 +148,68 @@ def _model_paths(cfg: Config) -> dict[str, Path]:
     }
 
 
-def _model_space_waveform_features(data, cfg) -> np.ndarray:
-    """Features in the same normalized-waveform convention as the AE/kNN model."""
-    path = Path(cfg.prepared_data_dir) / "waveform_features_model_space.npy"
-    if path.exists():
-        cached = np.load(path, allow_pickle=False)
-        if cached.shape == (len(data.waveforms), len(data.waveform_feature_names)):
-            return cached.astype(np.float32, copy=False)
-    features, names = extract_generated_waveform_features(
-        data.waveforms, sampling_rate_hz=cfg.waveform_sampling_rate_hz
-    )
-    if tuple(names) != tuple(data.waveform_feature_names):
-        raise RuntimeError(
-            "Waveform feature order mismatch between prepared data and model-space extractor"
-        )
+def save_model_space_waveform_features(
+    cfg: Config, features, feature_names, **info
+) -> Path:
+    """Cache model-space waveform features under ``cfg.prepared_data_dir``, with their names."""
+    path = Path(cfg.prepared_data_dir) / MODEL_SPACE_FEATURES_FILE
     path.parent.mkdir(parents=True, exist_ok=True)
-    np.save(path, features.astype(np.float32), allow_pickle=False)
+    np.save(path, np.asarray(features, np.float32), allow_pickle=False)
+    path.with_suffix(".json").write_text(
+        json.dumps({"feature_names": list(feature_names), **info}, indent=2),
+        encoding="utf-8",
+    )
+    return path
+
+
+def model_space_waveform_features(data, cfg: Config) -> np.ndarray:
+    """Waveform features of the exact max-abs normalized waveforms the autoencoder sees.
+
+    The prepared ``data.waveform_features`` come mostly from the IBL cluster table, in the
+    original amplitude convention; the autoencoder, the kNN bank and every decoded waveform live
+    in the normalized convention, so the model and the figures use these instead. Extracted once
+    and cached in ``cfg.prepared_data_dir``; the cache is used only for the same units and the same
+    feature names (data preparation removes it whenever it rewrites the waveforms).
+    """
+    path = Path(cfg.prepared_data_dir) / MODEL_SPACE_FEATURES_FILE
+    names = list(data.waveform_feature_names)
+    if path.exists() and path.with_suffix(".json").exists():
+        cached = np.load(path, allow_pickle=False)
+        info = json.loads(path.with_suffix(".json").read_text(encoding="utf-8"))
+        if (
+            cached.shape == (len(data.waveforms), len(names))
+            and info.get("feature_names") == names
+        ):
+            return cached.astype(np.float32, copy=False)
+    if data.channel_xy_um is None:
+        raise RuntimeError(
+            "The prepared unit data has no channel positions (waveform_channel_xy_um.npy); "
+            "re-prepare it with prepare_unit_data."
+        )
+    print("[features] extracting model-space waveform features once ...")
+    features, extracted, report = extract_generated_waveform_features(
+        data.waveforms,
+        data.channel_xy_um,
+        sampling_rate_hz=cfg.waveform_sampling_rate_hz,
+        return_report=True,
+    )
+    if list(extracted) != names:
+        raise RuntimeError(
+            f"Waveform feature order mismatch between prepared data ({names}) and the "
+            f"model-space extractor ({list(extracted)}); re-prepare the unit data."
+        )
+    save_model_space_waveform_features(
+        cfg,
+        features,
+        extracted,
+        definition="features of the max-abs normalized waveforms.npy, extracted like decoded waveforms",
+        extractor_report=report,
+    )
     return features.astype(np.float32, copy=False)
 
 
 def _build_knn(data, z_scaled, cfg) -> EmpiricalKNNDecoder:
-    model_space_features = _model_space_waveform_features(data, cfg)
+    model_space_features = model_space_waveform_features(data, cfg)
     return EmpiricalKNNDecoder(
         z_scaled,
         data.split == 0,
@@ -355,12 +402,26 @@ def load_unit_model(
         data.context, paths["context_dir"], cfg
     )
     knn = EmpiricalKNNDecoder.load_bank(paths["knn"], k=cfg.knn_decoder_k)
-    if paths["component_features"].exists():
+    latents = encode_all(ae, data, cfg)
+    z_scaled = scaler.transform(latents["joint"]).astype(np.float32)
+    if list(knn.feature_names) != list(data.waveform_feature_names):
+        # The phenotype projection is the only stage that depends on the feature set: rebuild
+        # the kNN bank and the component expectations on the current features and keep the
+        # autoencoder, latent scaler, GMM and context weights as trained.
+        print(
+            f"[kNN] the saved bank projects onto {list(knn.feature_names)}; rebuilding it for "
+            f"{list(data.waveform_feature_names)}"
+        )
+        knn = _build_knn(data, z_scaled, cfg)
+        knn.save_bank(paths["knn"])
+        component_features = compute_component_features(gmm, knn, cfg)
+        save_component_features(
+            paths["component_features"], component_features, knn.feature_names, cfg
+        )
+    elif paths["component_features"].exists():
         component_features, _ = load_component_features(paths["component_features"])
     else:
         component_features = compute_component_features(gmm, knn, cfg)
-    latents = encode_all(ae, data, cfg)
-    z_scaled = scaler.transform(latents["joint"]).astype(np.float32)
 
     return UnitModelBundle(
         cfg=cfg,

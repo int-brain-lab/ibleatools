@@ -4,6 +4,7 @@ import shutil
 from pathlib import Path
 from typing import Iterable
 
+import neuropixel
 import numpy as np
 import pandas as pd
 from iblatlas.regions import BrainRegions
@@ -12,6 +13,7 @@ from tqdm.auto import tqdm
 from .config import CHANNEL_MODEL_REPO_ID, DEFAULT_DATA_DIR
 from .data import resolve_channel_release_file
 from .waveform_features import (
+    FEATURE_NAMES,
     extract_generated_waveform_features,
 )
 
@@ -479,102 +481,85 @@ def _build_context(
     return ctx, ctx_names
 
 
-WAVEFORM_FEATURE_NAMES = (
-    "depolarisation_slope",
-    "recovery_slope",
-    "recovery_time_secs",
-    "repolarisation_slope",
-    "tip_time_secs",
-    "tip_val",
-    "through_time_secs",
-    "trough_val",
-    "peak_time_secs",
-    "peak_val",
-    "polarity",
-)
+WAVEFORM_FEATURE_NAMES = FEATURE_NAMES
 
 
 def _extract_reference_waveform_features(
     df_units: pd.DataFrame,
     *,
     sampling_rate_hz: float = 30_000.0,
-) -> tuple[np.ndarray, list[str], dict]:
-    """Extract the requested waveform features from the IBL cluster table.
+) -> tuple[np.ndarray, list[str], dict, dict]:
+    """The unit waveform features (:data:`WAVEFORM_FEATURE_NAMES`) from the IBL cluster table.
 
-    Values already computed by the IBL/eatools preprocessing are preferred.
-    Time fields are converted from *_time_idx to seconds only when the table
-    does not already expose a *_time_secs column.
-
-    `through_time_secs` is kept exactly as requested by the user; it maps to
-    the conventional `trough_time_*` field.
+    The table carries ibldsp's landmarks of each unit's mean waveform, from which the features
+    are derived with the definitions of :mod:`.waveform_features`. ``spatial_spread_um`` needs the
+    multi-channel waveform and is left NaN here, as is any feature whose table values are missing:
+    the caller fills those cells from the unit's waveform.
     """
     n = len(df_units)
-    out = np.full((n, len(WAVEFORM_FEATURE_NAMES)), np.nan, dtype=np.float32)
-    source = {}
+    fs = float(sampling_rate_hz)
 
-    aliases = {
-        "depolarisation_slope": ("depolarisation_slope",),
-        "recovery_slope": ("recovery_slope",),
-        "recovery_time_secs": ("recovery_time_secs", "recovery_time_s"),
-        "repolarisation_slope": ("repolarisation_slope",),
-        "tip_time_secs": ("tip_time_secs", "tip_time_s"),
-        "tip_val": ("tip_val",),
-        "through_time_secs": (
-            "through_time_secs",
-            "trough_time_secs",
-            "through_time_s",
-            "trough_time_s",
+    def col(*names):
+        name = next((c for c in names if c in df_units.columns), None)
+        if name is None:
+            raise KeyError(
+                f"The cluster table has none of {names}. "
+                f"Available cluster columns include: {list(df_units.columns)[:100]}"
+            )
+        return pd.to_numeric(df_units[name], errors="coerce").to_numpy(np.float64), name
+
+    def secs(name):
+        """A landmark time in seconds: the table's ``*_time_secs`` or ``*_time_idx`` / fs."""
+        values, source = col(f"{name}_time_secs", f"{name}_time_idx")
+        return (values if source.endswith("_secs") else values / fs), source
+
+    dep, dep_src = col("depolarisation_slope")
+    rec, rec_src = col("recovery_slope")
+    rep, rep_src = col("repolarisation_slope")
+    tip_val, tip_val_src = col("tip_val")
+    peak_val, peak_val_src = col("peak_val")
+    trough_val, trough_val_src = col("trough_val")
+    t_peak, t_peak_src = secs("peak")
+    t_trough, t_trough_src = secs("trough")
+    t_tip, t_tip_src = secs("tip")
+    if "polarity" in df_units.columns:
+        polarity, polarity_src = col("polarity")
+    else:
+        # Current IBL tables expose invert_sign_peak (minus the sign of peak_val) instead.
+        invert, _ = col("invert_sign_peak")
+        polarity, polarity_src = -invert, "-invert_sign_peak"
+    with np.errstate(divide="ignore", invalid="ignore"):
+        ratio_log = np.log(np.abs(peak_val / trough_val))
+
+    columns = {
+        "depolarisation_slope": (dep, dep_src),
+        "recovery_slope": (rec, rec_src),
+        "repolarisation_slope": (rep, rep_src),
+        "spatial_spread_um": (np.full(n, np.nan), "multichannel waveform"),
+        "tip_val": (tip_val, tip_val_src),
+        "spike_width_secs": (t_trough - t_peak, f"{t_trough_src} - {t_peak_src}"),
+        "predepolarisation_width_secs": (t_peak - t_tip, f"{t_peak_src} - {t_tip_src}"),
+        "spike_amplitude": (
+            trough_val - peak_val,
+            f"{trough_val_src} - {peak_val_src}",
         ),
-        "trough_val": ("trough_val",),
-        "peak_time_secs": ("peak_time_secs", "peak_time_s"),
-        "peak_val": ("peak_val",),
-        "polarity": ("polarity",),
+        "peak_to_trough_ratio_log": (
+            ratio_log,
+            f"log|{peak_val_src} / {trough_val_src}|",
+        ),
+        "polarity": (polarity, polarity_src),
     }
-    idx_fallback = {
-        "recovery_time_secs": ("recovery_time_idx",),
-        "tip_time_secs": ("tip_time_idx",),
-        "through_time_secs": ("trough_time_idx", "through_time_idx"),
-        "peak_time_secs": ("peak_time_idx",),
-    }
-
-    for j, name in enumerate(WAVEFORM_FEATURE_NAMES):
-        chosen = next((c for c in aliases[name] if c in df_units.columns), None)
-        if chosen is not None:
-            out[:, j] = pd.to_numeric(df_units[chosen], errors="coerce").to_numpy(
-                np.float32
-            )
-            source[name] = chosen
-            continue
-
-        idx_col = next(
-            (c for c in idx_fallback.get(name, ()) if c in df_units.columns), None
+    if tuple(columns) != tuple(WAVEFORM_FEATURE_NAMES):
+        raise RuntimeError(
+            "Reference features are out of step with WAVEFORM_FEATURE_NAMES"
         )
-        if idx_col is not None:
-            out[:, j] = pd.to_numeric(df_units[idx_col], errors="coerce").to_numpy(
-                np.float32
-            ) / float(sampling_rate_hz)
-            source[name] = f"{idx_col}/{sampling_rate_hz:g}"
-            continue
+    out = np.column_stack([values for values, _ in columns.values()])
+    out[~np.isfinite(out)] = np.nan
+    source = {name: src for name, (_, src) in columns.items()}
 
-        # Current IBL tables expose invert_sign_peak even when no explicit
-        # polarity column exists. Convert this boolean indicator to {-1,+1}.
-        if name == "polarity" and "invert_sign_peak" in df_units.columns:
-            inv = pd.to_numeric(df_units["invert_sign_peak"], errors="coerce").to_numpy(
-                np.float32
-            )
-            out[:, j] = np.where(np.isfinite(inv), -inv, np.nan)
-            source[name] = "-invert_sign_peak"
-            continue
-
-        raise KeyError(
-            f"Could not obtain requested waveform feature '{name}'. "
-            f"Available cluster columns include: {list(df_units.columns)[:100]}"
-        )
-
-    # Do not fail here. A tiny number of units in the aggregate tables may have
-    # an undefined precomputed waveform statistic (for example recovery_slope).
-    # The caller fills ONLY those missing cells from the unit's multichannel
-    # waveform and records the fallback count in the manifest.
+    # Do not fail here. spatial_spread_um, and a tiny number of cells with an undefined table
+    # value (for example recovery_slope), are filled by the caller from the unit's multichannel
+    # waveform; the fallback count goes into the manifest.
     bad_by_feature = {
         WAVEFORM_FEATURE_NAMES[j]: int((~np.isfinite(out[:, j])).sum())
         for j in range(out.shape[1])
@@ -582,8 +567,8 @@ def _extract_reference_waveform_features(
     }
     if bad_by_feature:
         print(
-            "[waveform features] source table contains non-finite values; "
-            f"will use waveform-derived fallback only for those cells: {bad_by_feature}"
+            "[waveform features] cells without a source-table value, to be computed from the "
+            f"unit's waveform: {bad_by_feature}"
         )
 
     return (
@@ -592,6 +577,118 @@ def _extract_reference_waveform_features(
         source,
         bad_by_feature,
     )
+
+
+def probe_channel_xy_um(
+    df_clusters: pd.DataFrame, pid_col: str
+) -> dict[str, np.ndarray]:
+    """Probe layout, ``[384, 2]`` (x, y) in micrometres, of each insertion in a cluster table.
+
+    The table gives each cluster's peak channel (``channels``) and its position (``lateral_um``,
+    ``axial_um``). An insertion's layout is the Neuropixels channel map (1.0 or 2.0) that reproduces
+    all of those positions up to one constant offset; offsets do not matter, since only distances
+    between channels are used. An exact match wins when both maps fit.
+    """
+    channel_col = _first_existing_column(df_clusters, ["channels", "peak_channel"])
+    pids = df_clusters[pid_col].astype(str).to_numpy()
+    channels = pd.to_numeric(df_clusters[channel_col]).to_numpy(np.int64)
+    lateral = pd.to_numeric(df_clusters["lateral_um"]).to_numpy(np.float64)
+    axial = pd.to_numeric(df_clusters["axial_um"]).to_numpy(np.float64)
+
+    maps, fit, exact = {}, {}, {}
+    for version in (1, 2):
+        header = neuropixel.trace_header(version=version)
+        maps[version] = np.c_[header["x"], header["y"]].astype(np.float64)
+        offsets = pd.DataFrame(
+            {
+                "dx": lateral - maps[version][channels, 0],
+                "dy": axial - maps[version][channels, 1],
+            }
+        ).groupby(pids)
+        fit[version] = (offsets.max() - offsets.min()).max(axis=1) < 1e-3
+        exact[version] = offsets.agg(lambda v: np.abs(v).max()).max(axis=1) < 1e-3
+
+    layouts, unmatched = {}, []
+    for pid in fit[1].index:
+        candidates = [v for v in (1, 2) if fit[v][pid]]
+        exact_candidates = [v for v in candidates if exact[v][pid]]
+        if not candidates:
+            unmatched.append(pid)
+            continue
+        layouts[str(pid)] = maps[(exact_candidates or candidates)[0]]
+    if unmatched:
+        raise RuntimeError(
+            f"{len(unmatched)} insertions match neither the Neuropixels 1.0 nor 2.0 channel map "
+            f"(peak-channel positions in the cluster table); first few: {unmatched[:5]}"
+        )
+    return layouts
+
+
+def _multichannel_channel_xy(
+    *,
+    waveforms_table_path: Path,
+    df_units: pd.DataFrame,
+    pid_col: str,
+    target_channels: int,
+    layouts: dict[str, np.ndarray],
+) -> np.ndarray:
+    """Probe position of every channel of the cached multichannel waveforms, ``[N, C, 2]``.
+
+    Replays the selection of :func:`_build_multichannel_waveform_cache` -- the unit's rows of
+    ``waveforms.table.pqt`` sorted by ``abs_channel``, centre-cropped or centre-padded to
+    ``target_channels`` -- on the channel positions. Padding channels are NaN.
+    """
+    import pyarrow.parquet as pq
+
+    # The table has a row per (unit, channel), tens of millions of them: read the pid column
+    # dictionary-encoded and key units by integers, not by per-row strings.
+    columns = pd.DataFrame(columns=pq.read_schema(waveforms_table_path).names)
+    w_pid_col = _first_existing_column(
+        columns, ["pid", "probe_insertion", "probe_insertion_id", "insertion_id"]
+    )
+    w_cluster_col = _first_existing_column(columns, ["cluster_id", "cluster", "id"])
+    abs_channel_col = _first_existing_column(
+        columns, ["abs_channel", "channel", "channel_id", "ch"]
+    )
+    df_w = pq.read_table(
+        waveforms_table_path,
+        columns=[w_pid_col, w_cluster_col, abs_channel_col],
+        read_dictionary=[w_pid_col],
+    ).to_pandas()
+
+    pid_code = {str(pid): i for i, pid in enumerate(df_w[w_pid_col].cat.categories)}
+    keys = (df_w[w_pid_col].cat.codes.to_numpy(np.int64) << 32) + pd.to_numeric(
+        df_w[w_cluster_col]
+    ).to_numpy(np.int64)
+    abs_channels = df_w[abs_channel_col].to_numpy(np.int64)
+    del df_w
+    order = np.lexsort((abs_channels, keys))
+    keys, abs_channels = keys[order], abs_channels[order]
+    unique_keys, starts = np.unique(keys, return_index=True)
+    ends = np.r_[starts[1:], len(keys)]
+
+    unit_pids = df_units[pid_col].astype(str).to_numpy()
+    unit_clusters = pd.to_numeric(pd.Series(_cluster_ids_from_df(df_units))).to_numpy(
+        np.int64
+    )
+    unit_keys = (
+        np.asarray([pid_code.get(pid, -1) for pid in unit_pids], np.int64) << 32
+    ) + (unit_clusters)
+    rows = np.searchsorted(unique_keys, unit_keys).clip(max=len(unique_keys) - 1)
+    missing = unique_keys[rows] != unit_keys
+    if missing.any():
+        raise RuntimeError(
+            f"{int(missing.sum())} units have no rows in {waveforms_table_path}; first few: "
+            f"{list(zip(unit_pids[missing][:3], unit_clusters[missing][:3]))}"
+        )
+
+    out = np.full((len(df_units), int(target_channels), 2), np.nan, np.float32)
+    for i, (pid, row) in enumerate(zip(unit_pids, rows)):
+        xy = layouts[pid][abs_channels[starts[row] : ends[row]]]
+        out[i] = _center_crop_or_pad_channels(
+            xy, int(target_channels), pad_value=np.nan
+        )
+    return out
 
 
 def prepare_latest_cells_encoder_data(
@@ -731,6 +828,30 @@ def prepare_latest_cells_encoder_data(
                     f"Cached waveform count ({len(waveforms)}) does not match current good-unit count ({len(df_good)}). "
                     "Delete the cache or rerun with --overwrite-multichannel-cache."
                 )
+
+        # Probe position of every waveform channel, for spatial_spread_um.
+        layouts = probe_channel_xy_um(df_clusters, pid_col)
+        channel_xy = _multichannel_channel_xy(
+            waveforms_table_path=Path(waveforms_table_path)
+            if waveforms_table_path is not None
+            else cells_agg_path / "waveforms.table.pqt",
+            df_units=df_good,
+            pid_col=pid_col,
+            target_channels=target_channels,
+            layouts=layouts,
+        )
+        padding = ~np.isfinite(channel_xy).all(axis=-1)
+        if np.any(waveforms[padding] != 0):
+            raise RuntimeError(
+                "Channel positions are out of step with the cached multichannel waveforms: "
+                "some padding channels carry signal. Delete the waveform cache and re-prepare."
+            )
+        np1_x = neuropixel.trace_header(version=1)["x"]
+        n_np1 = sum(int(np.array_equal(xy[:, 0], np1_x)) for xy in layouts.values())
+        wf_cache_info["probe_layouts"] = {
+            "neuropixels_1": n_np1,
+            "neuropixels_2": len(layouts) - n_np1,
+        }
     except FileNotFoundError as exc:
         if not allow_peak_fallback:
             raise
@@ -761,6 +882,7 @@ def prepare_latest_cells_encoder_data(
             "waveforms_shape": list(waveforms.shape),
         }
         waveform_source = "single_channel_peak_fallback"
+        channel_xy = np.zeros((len(waveforms), 1, 2), np.float32)
 
     stpc = None
     stpc_source = None
@@ -945,6 +1067,7 @@ def prepare_latest_cells_encoder_data(
 
     df_good = df_good.iloc[np.flatnonzero(valid)].copy()
     waveforms = waveforms[valid]
+    channel_xy = channel_xy[valid]
     acgs = acgs[valid]
     if use_stpc:
         stpc = stpc[valid]
@@ -990,6 +1113,17 @@ def prepare_latest_cells_encoder_data(
     )
 
     np.save(out_dir / "waveforms.npy", waveforms.astype(np.float32), allow_pickle=False)
+    # Features extracted from the previous waveforms.npy are no longer valid.
+    for stale in (
+        "waveform_features_model_space.npy",
+        "waveform_features_model_space.json",
+    ):
+        (out_dir / stale).unlink(missing_ok=True)
+    np.save(
+        out_dir / "waveform_channel_xy_um.npy",
+        channel_xy.astype(np.float32),
+        allow_pickle=False,
+    )
     np.save(out_dir / "acgs.npy", acgs.astype(np.float32), allow_pickle=False)
     if use_stpc:
         np.save(out_dir / "stpc.npy", stpc.astype(np.float32), allow_pickle=False)
@@ -1027,6 +1161,7 @@ def prepare_latest_cells_encoder_data(
     if missing_mask.any():
         fallback, fallback_names = extract_generated_waveform_features(
             waveforms,
+            channel_xy,
             sampling_rate_hz=30_000.0,
         )
         if tuple(fallback_names) != tuple(waveform_feature_names):
@@ -1119,6 +1254,7 @@ def prepare_latest_cells_encoder_data(
         "waveform_feature_fallback_policy": "use source-table value when finite; replace only individual "
         "non-finite cells from that unit's multichannel waveform",
         "waveform_features_path": str(out_dir / "waveform_features.npy"),
+        "waveform_channel_xy_path": str(out_dir / "waveform_channel_xy_um.npy"),
         "ctx_names": ctx_names,
         "waveform_source": waveform_source,
         "normalize_waveforms_max_abs": bool(normalize_waveforms_max_abs),

@@ -24,6 +24,8 @@ class UnitData:
     waveform_features: np.ndarray
     waveform_feature_names: list[str]
     split: np.ndarray  # 0 train, 1 validation, 2 test
+    # Probe position (x, y, um) of each waveform channel, [N, C, 2]; NaN for padding channels.
+    channel_xy_um: Optional[np.ndarray] = None
 
 
 @dataclass
@@ -170,6 +172,7 @@ def load_prepared_data(
         "allen.npy",
         "waveform_features.npy",
         "waveform_feature_names.json",
+        "waveform_channel_xy_um.npy",
     ]
     if cfg.use_acg:
         required.append("acgs.npy")
@@ -188,6 +191,7 @@ def load_prepared_data(
     cosmos = np.load(data_dir / "cosmos.npy").astype(np.int64)
     allen = np.load(data_dir / "allen.npy").astype(np.int64)
     features = np.load(data_dir / "waveform_features.npy").astype(np.float32)
+    channel_xy = np.load(data_dir / "waveform_channel_xy_um.npy").astype(np.float32)
     feature_names = json.loads(
         (data_dir / "waveform_feature_names.json").read_text(encoding="utf-8")
     )
@@ -222,6 +226,7 @@ def load_prepared_data(
         waveform_features=features,
         waveform_feature_names=feature_names,
         split=split,
+        channel_xy_um=channel_xy,
     )
     assert_probe_disjoint(data)
     return data

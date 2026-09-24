@@ -188,17 +188,18 @@ def make_model_dir(
 
 # The phenotype features the released unit model's kNN stage projects (the order of
 # ``waveform_feature_names.json`` in the prepared unit data).
+# Spelled out rather than imported: the unit package pulls in torch, which this module must not
+# (see test_unit_encoder). test_unit_waveform_features checks it against FEATURE_NAMES.
 UNIT_FEATURES = [
     "depolarisation_slope",
     "recovery_slope",
-    "recovery_time_secs",
     "repolarisation_slope",
-    "tip_time_secs",
+    "spatial_spread_um",
     "tip_val",
-    "through_time_secs",
-    "trough_val",
-    "peak_time_secs",
-    "peak_val",
+    "spike_width_secs",
+    "predepolarisation_width_secs",
+    "spike_amplitude",
+    "peak_to_trough_ratio_log",
     "polarity",
 ]
 
