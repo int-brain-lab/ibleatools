@@ -110,6 +110,13 @@ class AtlasPCAConfig:
     n_cell_pcs: int = 50  # 338
     n_gene_pcs: int = 50  # 4345
     no_pca: bool = False
+    # MERFISH cell-type densities: the taxonomy level, and whether the raw volume is denoised with
+    # iblatlas.genomics.merfish.denoise_volume (NaNs filled, Gaussian-smoothed with sigma voxels,
+    # renormalised within the brain) keeping all but the last n_drop_non_neuronal types.
+    merfish_level: str = "subclass"
+    merfish_denoise: bool = True
+    merfish_n_drop_non_neuronal: int = 0
+    merfish_sigma: float = 0.5
 
 
 class ContextAtlasManager:
@@ -152,12 +159,19 @@ class ContextAtlasManager:
             )  # [P_gene, Xc, Zc, Yc]
 
             # -------- MERFISH → PCA --------
-            merfish.load()
-            LEVEL = "subclass"
-            path = AllenAtlas._get_cache_dir().joinpath("merfish")
-            cell_type_vol = torch.tensor(np.load(path.joinpath(f"merfish_{LEVEL}.npy")))
-            zero_ind = torch.where(cell_type_vol.sum(dim=0) == 0)
-            cell_type_vol = cell_type_vol.numpy()
+            cell_type_vol, _, atlas_agea = merfish.load_volume(
+                level=cfg.merfish_level, label=""
+            )
+            if cfg.merfish_denoise:
+                cell_type_vol = merfish.denoise_volume(
+                    cell_type_vol,
+                    atlas_agea.label != 0,
+                    n_drop_non_neuronal=cfg.merfish_n_drop_non_neuronal,
+                    sigma=cfg.merfish_sigma,
+                )
+            cell_type_vol = np.asarray(cell_type_vol, dtype=np.float32)
+            # Voxels without any cell-type density (outside the brain once denoised).
+            zero_ind = np.where(cell_type_vol.sum(axis=0) == 0)
             size_x, size_z, size_y = cell_type_vol.shape[1:]
 
             xcells = cell_type_vol.reshape(cell_type_vol.shape[0], -1).T.astype(
