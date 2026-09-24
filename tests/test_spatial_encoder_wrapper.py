@@ -41,8 +41,13 @@ def setUpModule():
         )
 
 
-def make_spatial_model_dir(path_models: Path, *, stats_offset: float = 0.0) -> Path:
-    """A tiny spatial-encoder release: weights, confidence model, stats, split, bank, manifest."""
+def make_spatial_model_dir(
+    path_models: Path, *, stats_offset: float = 0.0, bank: dict = None
+) -> Path:
+    """A tiny spatial-encoder release: weights, confidence model, stats, split, bank, manifest.
+
+    ``bank`` (``xyz``, ``feat``, ``pid``) replaces the default three channels at the origin.
+    """
     import torch
 
     from ephysatlas.spatial_encoder.model import (
@@ -86,12 +91,13 @@ def make_spatial_model_dir(path_models: Path, *, stats_offset: float = 0.0) -> P
     )
     split = {"train_pids": ["a", "b"], "validation_pids": ["c"], "test_pids": ["d"]}
     path_model.joinpath("split.json").write_text(json.dumps(split))
-    np.savez(
-        path_model.joinpath(model_registry.ENCODER_BANK_FILE),
-        xyz=np.zeros((3, 3), np.float32),
-        feat=np.zeros((3, f_e), np.float32),
-        pid=np.array(["a", "a", "b"]),
-    )
+    if bank is None:
+        bank = dict(
+            xyz=np.zeros((3, 3), np.float32),
+            feat=np.zeros((3, f_e), np.float32),
+            pid=np.array(["a", "a", "b"]),
+        )
+    np.savez(path_model.joinpath(model_registry.ENCODER_BANK_FILE), **bank)
     index = {
         "task": "spatial-encoding",
         "model_class": "NeighborInpaintingModel",
@@ -170,6 +176,115 @@ class TestSpatialEncoderAccessors(unittest.TestCase):
         self.assertEqual(bank["feat"].shape, (3, len(FEATURES)))
         bank["feat"][:] = 1.0
         self.assertEqual(float(encoder.neighbor_bank()["feat"].sum()), 0.0)
+
+
+class _FakeContextManager:
+    """Context that depends on the sign of x, unlike the real (self-mirroring) manager: a path
+    that reached it with an unmirrored right-hemisphere position would get another context."""
+
+    def __init__(self):
+        rng = np.random.default_rng(1)
+        self.weights = rng.normal(size=(3, 100)) * 1e3
+
+    def sample_context_numpy_m(self, xyz_m, mode="clip"):
+        ctx = np.asarray(xyz_m, np.float64) @ self.weights + 1.0
+        return {"cell_pc": ctx[:, :50], "gene_pc": ctx[:, 50:]}
+
+
+class TestSpatialEncoderPredictHemispheres(unittest.TestCase):
+    """The model lives in the left hemisphere (x -> -|x|): a right-hemisphere position must be
+    predicted exactly as its left mirror, for the context, the neighbours and the position input."""
+
+    # Left-hemisphere channels around (-2, -2, -3) mm, as the published bank stores them.
+    CENTRE = np.array([-2e-3, -2e-3, -3e-3])
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        rng = np.random.default_rng(0)
+        n = 40
+        bank = dict(
+            xyz=(self.CENTRE + rng.uniform(-2e-4, 2e-4, size=(n, 3))).astype(np.float32),
+            feat=rng.normal(size=(n, len(FEATURES))).astype(np.float32),
+            pid=np.array(["a", "b"] * (n // 2)),
+        )
+        self.path_model = make_spatial_model_dir(self.tmp, bank=bank)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _predict(self, df):
+        from unittest import mock
+
+        from ephysatlas import load_pretrained
+        from ephysatlas.models.encoder_inpainting import SpatialEncoder
+
+        fake = _FakeContextManager()
+        with mock.patch.object(SpatialEncoder, "_context_manager", lambda self: fake):
+            return load_pretrained(self.path_model, device="cpu").predict(df)
+
+    def _positions(self, x_sign):
+        import pandas as pd
+
+        rng = np.random.default_rng(2)
+        xyz = self.CENTRE + rng.uniform(-1e-4, 1e-4, size=(6, 3))
+        xyz[:, 0] = x_sign * np.abs(xyz[:, 0])
+        index = pd.MultiIndex.from_tuples(
+            [("query", c) for c in range(len(xyz))], names=["pid", "channel"]
+        )
+        return pd.DataFrame(xyz, index=index, columns=["x", "y", "z"])
+
+    def test_right_hemisphere_predicts_as_its_mirror(self):
+        from ephysatlas import load_pretrained
+
+        left, right = self._positions(-1.0), self._positions(+1.0)
+        # Guard: the left queries do have neighbours, so the comparison is not vacuous.
+        encoder = load_pretrained(self.path_model, device="cpu")
+        _, _, mask = encoder._neighbours(
+            left.to_numpy(np.float32), np.array(["query"] * len(left))
+        )
+        self.assertTrue(mask.all(axis=1).all())
+
+        np.testing.assert_allclose(
+            self._predict(right).to_numpy(), self._predict(left).to_numpy(), rtol=1e-6, atol=1e-6
+        )
+
+    def test_output_keeps_the_input_index_and_order(self):
+        import pandas as pd
+
+        left, right = self._positions(-1.0), self._positions(+1.0)
+        right.index = pd.MultiIndex.from_tuples(
+            [("query_r", c) for c in range(len(right))], names=["pid", "channel"]
+        )
+        mixed = pd.concat([left, right]).sample(frac=1.0, random_state=3)
+        out = self._predict(mixed)
+        self.assertTrue(out.index.equals(mixed.index))
+        self.assertEqual(list(out.columns), [f"pred_{f}" for f in FEATURES])
+        # Row by row, each prediction is the one of its own (mirrored) position.
+        expected = self._predict(left)
+        for channel in range(len(left)):
+            for pid in ("query", "query_r"):
+                np.testing.assert_allclose(
+                    out.loc[(pid, channel)].to_numpy(),
+                    expected.loc[("query", channel)].to_numpy(),
+                    rtol=1e-6,
+                    atol=1e-6,
+                )
+
+    def test_neighbor_bank_is_built_in_the_left_hemisphere(self):
+        import pandas as pd
+
+        from ephysatlas import load_pretrained
+        from ephysatlas.models.encoder_inpainting import build_neighbor_bank
+
+        encoder = load_pretrained(self.path_model, device="cpu")
+        df = pd.concat([self._positions(-1.0), self._positions(+1.0)])
+        for i, feature in enumerate(FEATURES):
+            df[feature] = float(i)
+        out = self.tmp.joinpath("bank")
+        out.mkdir()
+        build_neighbor_bank(out, df, encoder.index, model=encoder.model)
+        with np.load(out.joinpath(model_registry.ENCODER_BANK_FILE)) as bank:
+            np.testing.assert_allclose(bank["xyz"][:, 0], -np.abs(df["x"].to_numpy()), rtol=1e-6)
 
 
 if __name__ == "__main__":

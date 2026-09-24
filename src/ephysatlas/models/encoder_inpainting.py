@@ -150,10 +150,11 @@ def _load_inpainting_encoder(path_model: Path, manifest: dict = None):
 def build_neighbor_bank(path_model: Path, df, manifest: dict, model=None) -> Path:
     """Write the neighbour bank a published encoder needs in order to run at all.
 
-    The bank holds, for every training channel: its position, its **standardised** feature
-    vector, and its insertion id. Standardising at build time rather than load time is what
-    keeps the bank self-consistent with the weights shipping beside it -- the statistics used are
-    the checkpoint's own buffers, not anything recomputed from the caller's data.
+    The bank holds, for every training channel: its position (mirrored to the left hemisphere,
+    like the queries), its **standardised** feature vector, and its insertion id. Standardising at
+    build time rather than load time is what keeps the bank self-consistent with the weights
+    shipping beside it -- the statistics used are the checkpoint's own buffers, not anything
+    recomputed from the caller's data.
 
     Args:
         path_model (Path): Model directory to write into.
@@ -176,7 +177,10 @@ def build_neighbor_bank(path_model: Path, df, manifest: dict, model=None) -> Pat
     if model is None:
         model = _load_inpainting_encoder(path_model, manifest)
 
-    xyz = df.loc[:, ["x", "y", "z"]].to_numpy(dtype=np.float32)
+    from ephysatlas.spatial_encoder.utils import mirror_xyz_to_left
+
+    # Positions mirrored to the left hemisphere, where the model and its queries live.
+    xyz = mirror_xyz_to_left(df.loc[:, ["x", "y", "z"]].to_numpy(dtype=np.float32))
     raw = df.loc[:, features].to_numpy(dtype=np.float32)
     e_mean = model.e_mean.detach().cpu().numpy()
     e_std = model.e_std.detach().cpu().numpy()
@@ -507,10 +511,14 @@ class SpatialEncoder:
     def predict(self, df, batch_size: int = 1024) -> pd.DataFrame:
         """Predict electrophysiological features for each channel position.
 
+        The model was trained on positions mirrored to the left hemisphere (``x -> -|x|``): its
+        context lookup, neighbour bank and position input all live there. A right-hemisphere
+        position is therefore predicted exactly as its left mirror.
+
         Args:
             df (pd.DataFrame): Indexed by ``(pid, channel)``, carrying the coordinate columns the
-                manifest names in ``inputs.columns`` (``x, y, z``, in metres). The feature columns
-                are *not* read -- they are what this predicts.
+                manifest names in ``inputs.columns`` (``x, y, z``, in metres), in either
+                hemisphere. The feature columns are *not* read -- they are what this predicts.
             batch_size (int, optional): Rows per forward pass.
 
         Returns:
@@ -525,6 +533,7 @@ class SpatialEncoder:
         import torch
 
         from ephysatlas.spatial_encoder.model import unstandardize
+        from ephysatlas.spatial_encoder.utils import mirror_xyz_to_left
 
         columns = list(self.inputs.get("columns") or ["x", "y", "z"])
         missing = [c for c in columns if c not in df.columns]
@@ -539,7 +548,8 @@ class SpatialEncoder:
             features, self.outputs.get("feature_order_sha256")
         )
 
-        xyz = df.loc[:, columns].to_numpy(dtype=np.float32)
+        # Mirrored once, here, for the context, the neighbour search and the position input alike.
+        xyz = mirror_xyz_to_left(df.loc[:, columns].to_numpy(dtype=np.float32))
         pids = df.index.get_level_values(0).to_numpy().astype(str)
         ctx = self._standardised_context(xyz)
         e_n, p_n, mask = self._neighbours(xyz, pids)
