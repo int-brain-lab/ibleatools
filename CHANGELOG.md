@@ -18,6 +18,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Breaking.** The unit-level family is the K=25 / context-weights / kNN model above: `load_pretrained` dispatches `UnitAutoencoder` manifests, and the previous waveform+ACG `MultimodalAutoencoder` + `PointTransformerGMM` wrapper is removed
 - `LoadInsertionData` and `ContextAtlasManager` default to `~/ephys-atlas/data` (or `$EPHYS_ATLAS_DATA_DIR`) instead of the working directory; the unit-level `Config` defaults its data and results directories the same way (`$EPHYS_ATLAS_RESULTS_DIR` for results)
 - The autoencoder checkpoint stores its configuration as JSON-safe values, so a model trained on Windows loads on Linux and macOS
+- `spatial_encoder.utils.build_channels_plus_emptyvoxels_with_neighbors` accepts released preprocessing statistics without `ctx_mean`/`ctx_std`: the ephys clipping and standardisation stay frozen and the context normalisation is recomputed over the empty grid voxels, as an ablation that samples the context differently (the bilateral MERFISH/AGEA-only models of the supplementary figure) needs. Previously it refused them as incomplete
 - The prepared unit data records the sha1 of the context volumes it was sampled from (`context_volumes_sha1` in its manifest) and is rebuilt when they are not the channel release's: a stale `context_atlas/` copy in the prepared-data directory used to be reused silently, putting the unit contexts in another release's PCA basis. `load_unit_model` samples contexts from the volumes the unit release ships
 
 ### Removed

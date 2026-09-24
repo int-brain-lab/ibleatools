@@ -388,23 +388,28 @@ def concat_context(cell_pc: np.ndarray, gene_pc: np.ndarray) -> np.ndarray:
     return np.concatenate([cell_pc, gene_pc], axis=-1)
 
 
-def _coerce_preprocessing_stats(preprocessing_stats: dict | None):
+EPHYS_STATS_KEYS = ("rec_ephys_low_pctl", "rec_ephys_high_pctl", "e_mean", "e_std")
+CONTEXT_STATS_KEYS = ("ctx_mean", "ctx_std")
+
+
+def _coerce_preprocessing_stats(
+    preprocessing_stats: dict | None, *, require_context: bool = True
+):
     """
     Convert a saved channel_stats.npz payload to torch tensors.
 
-    Returns None when no frozen stats were supplied (first training of a vintage).
+    Returns None when no frozen stats were supplied (first training of a vintage). With
+    ``require_context=False`` the context normalisation (``ctx_mean``, ``ctx_std``) may be left
+    out -- both together -- and is then absent from the result, so the caller recomputes it while
+    keeping the frozen ephys preprocessing.
     """
     if preprocessing_stats is None:
         return None
 
-    required = {
-        "rec_ephys_low_pctl",
-        "rec_ephys_high_pctl",
-        "e_mean",
-        "e_std",
-        "ctx_mean",
-        "ctx_std",
-    }
+    present = [k for k in CONTEXT_STATS_KEYS if k in preprocessing_stats]
+    required = set(EPHYS_STATS_KEYS)
+    if require_context or present:
+        required.update(CONTEXT_STATS_KEYS)
     missing = required.difference(preprocessing_stats)
     if missing:
         raise ValueError(
@@ -412,7 +417,7 @@ def _coerce_preprocessing_stats(preprocessing_stats: dict | None):
             f"Missing keys: {sorted(missing)}"
         )
 
-    return {
+    stats = {
         "rec_ephys_low_pctl": torch.as_tensor(
             preprocessing_stats["rec_ephys_low_pctl"], dtype=torch.float32
         ),
@@ -423,13 +428,15 @@ def _coerce_preprocessing_stats(preprocessing_stats: dict | None):
         "e_std": torch.as_tensor(
             preprocessing_stats["e_std"], dtype=torch.float32
         ).clamp_min(1e-6),
-        "ctx_mean": torch.as_tensor(
-            preprocessing_stats["ctx_mean"], dtype=torch.float32
-        ),
-        "ctx_std": torch.as_tensor(
-            preprocessing_stats["ctx_std"], dtype=torch.float32
-        ).clamp_min(1e-6),
     }
+    if "ctx_mean" in required:
+        stats["ctx_mean"] = torch.as_tensor(
+            preprocessing_stats["ctx_mean"], dtype=torch.float32
+        )
+        stats["ctx_std"] = torch.as_tensor(
+            preprocessing_stats["ctx_std"], dtype=torch.float32
+        ).clamp_min(1e-6)
+    return stats
 
 
 def _resolve_probe_split(
@@ -553,6 +560,10 @@ def build_channels_plus_emptyvoxels_with_neighbors(
     - Existing/released vintage:
         split_manifest=<saved split>, preprocessing_stats=<saved channel_stats>
         -> use those artifacts exactly; never regenerate the split or stats.
+    - Released ephys preprocessing with another context sampler (e.g. an ablation):
+        preprocessing_stats=<saved channel_stats without ctx_mean/ctx_std>
+        -> the ephys clipping and standardisation are frozen; the context
+           normalisation is recomputed over the empty grid voxels.
 
     The function remains backward compatible: when
     return_preprocessing_stats=False it returns the historical 9 values.
@@ -596,9 +607,11 @@ def build_channels_plus_emptyvoxels_with_neighbors(
     has_ctx = np.any(ctx_all != 0.0, axis=1)
     grid_mask = ~has_eph & has_ctx
 
-    saved_stats = _coerce_preprocessing_stats(preprocessing_stats)
+    saved_stats = _coerce_preprocessing_stats(
+        preprocessing_stats, require_context=False
+    )
 
-    if saved_stats is None:
+    if saved_stats is None or "ctx_mean" not in saved_stats:
         ctx_all_t = torch.from_numpy(ctx_all).float()
         ctx_mean = ctx_all_t[grid_mask].mean(dim=0)
         ctx_std = ctx_all_t[grid_mask].std(dim=0, unbiased=False).clamp_min(1e-6)
