@@ -49,25 +49,15 @@ Release steps
        with h5py.File(h5_path, "r") as f:
            print(dict(f.attrs))
 
-2. **Convert to the legacy dense ``.npz`` schema** with
-   :func:`ephysatlas.data.convert_h5_encoding_volume_to_npz`. This scatters
-   ``predicted_features`` into a ``(nx, ny, nz, N)`` grid by ``ccf_xyz_index``
-   (zeros outside the brain mask) and recomputes ``mean_per_feature``/``std_per_feature``
-   over the populated voxels only:
-
-   .. code-block:: python
-
-       from pathlib import Path
-       from ephysatlas.data import convert_h5_encoding_volume_to_npz
-
-       convert_h5_encoding_volume_to_npz(
-           Path("~/Downloads/ephys_atlas_50um_2026_W39.h5").expanduser(),
-           Path("brainwide_ephys_atlas_50um.npz"),
-       )
-
-   Sanity-check before uploading: the number of nonzero voxels in
-   ``ephys_atlas_vol`` must equal the source ``n_rows``, and a few round-tripped
-   ``(i, j, k)`` values should match ``predicted_features`` (within float16 precision).
+2. **Convert to the legacy dense ``.npz`` schema.** This is a one-off release step, not
+   library code, so it lives outside the package: run
+   ``ibldevtools/olivier/2026-09-24_release_encoding_volume.py`` (update ``H5_PATH``/
+   ``LABEL`` at the top for the new vintage first). It scatters ``predicted_features``
+   into a ``(nx, ny, nz, N)`` grid by ``ccf_xyz_index`` (zeros outside the brain mask),
+   recomputes ``mean_per_feature``/``std_per_feature`` over the populated voxels only,
+   and asserts that the number of nonzero voxels in ``ephys_atlas_vol`` equals the
+   source ``n_rows`` and that round-tripped values match ``predicted_features`` (within
+   float16 precision) before it lets you proceed to upload.
 
 3. **Upload both files** to the vintage's S3 prefix, using the ``ibl`` AWS profile:
 
@@ -112,5 +102,5 @@ separate, deliberate migration, not a side effect of a routine release:
 * Teach the ``ea-load-encoding-volumes`` skill and :doc:`load-encoding-volume` the
   row-list access pattern instead of (or alongside) the dense-grid one.
 * Keep emitting the legacy ``.npz`` for a transition period for any downstream
-  consumer that hasn't been audited, then drop
-  :func:`convert_h5_encoding_volume_to_npz` once nothing depends on it.
+  consumer that hasn't been audited, then drop the h5-to-npz conversion step once
+  nothing depends on it.
