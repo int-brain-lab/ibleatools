@@ -99,6 +99,21 @@ class Config:
 
     # Final empirical projection.
     knn_decoder_k: int = 20
+    # Context-local member readout of the phenotype: a component's TRAIN members whose context key
+    # (a ridge map of the context onto within-component feature residuals, penalty chosen on VAL
+    # among readout_key_alphas, reduced to its readout_key_dim leading directions) is near the
+    # query's represent it, shrunk toward all its members with pseudo-count readout_shrinkage.
+    # key_dim / neighbours / shrinkage: the most regularised setting within one (probe-clustered)
+    # standard error of the best VALIDATION error of the mean phenotype for 2026_W39.
+    readout_key_dim: int = 3
+    readout_key_alphas: tuple[float, ...] = (1e2, 1e3, 1e4, 3e4, 1e5)
+    readout_neighbours: int = 4096
+    readout_shrinkage: float = 10.0
+    # Off the TRAIN data the readout is blended toward the global member means, with weight
+    # 1 - (h_ref / h(x)) ** key_dim for a query whose kernel scale h(x) exceeds h_ref, this
+    # quantile of the TRAIN kernel scale (None: no off-data blending). An absent (all-zero)
+    # context always gets the global member means.
+    readout_off_data_quantile: float | None = 0.99
 
     mirror_x_to_single_hemisphere: bool = True
     mirror_x_sign: float = -1.0

@@ -8,11 +8,14 @@ The unit-level model describes the spike-sorted units (neurons) found at a brain
 2. a full-covariance Gaussian mixture over the standardized latents, whose components read as
    *putative cell types*, has global component geometry and mixture weights conditioned on the
    molecular context (MERFISH + AGEA PCA) at the unit's position;
-3. a distance-weighted k-nearest-neighbour projection onto train-split exemplars maps latents
-   back to interpretable waveform features.
+3. a readout onto train-split exemplars maps the model back to interpretable waveform features:
+   the context also selects which training members represent each component -- those whose
+   molecular context resembles the position's (releases made before this context-local readout
+   project latents onto their distance-weighted k nearest exemplars instead).
 
 So, like the spatial encoder, this family's ``predict`` takes positions and returns the phenotype
-expected there: the local component weights mixed with each component's expected features.
+expected there: the local component weights mixed with each component's expected features there.
+``sample`` draws from the same predictive distribution: real training units.
 
 ``import torch`` stays inside the methods: the region classifier imports xgboost at module scope
 and the two segfault together on macOS arm64, so nothing here may pull torch at import time.
@@ -280,6 +283,13 @@ class UnitEncoder:
             )
         return df.loc[:, columns].to_numpy(dtype=np.float32)
 
+    def _weights_and_context(self, xyz: np.ndarray, batch_size: int):
+        """Yield ``(mixture weights, standardized context)`` of positions, one batch at a time."""
+        transform = self._context_model.transform
+        for i in range(0, len(xyz), batch_size):
+            context_pc = transform.transform(self._raw_context(xyz[i : i + batch_size]))
+            yield self._context_model._weights_from_pc(context_pc), context_pc
+
     def mixture_weights(self, df, batch_size: int = 65536) -> pd.DataFrame:
         """Putative cell-type composition at each position.
 
@@ -293,12 +303,7 @@ class UnitEncoder:
         """
         self._load()
         xyz = self._coordinates(df)
-        chunks = [
-            self._context_model.weights_for_context(
-                self._raw_context(xyz[i : i + batch_size])
-            )
-            for i in range(0, len(xyz), batch_size)
-        ]
+        chunks = [w for w, _ in self._weights_and_context(xyz, batch_size)]
         weights = (
             np.concatenate(chunks, axis=0)
             if chunks
@@ -310,9 +315,13 @@ class UnitEncoder:
     def predict(self, df, batch_size: int = 65536) -> pd.DataFrame:
         """Predict the expected unit phenotype at each position.
 
-        The expected phenotype is the local mixture weights times each component's expected kNN
-        phenotype features -- deterministic and smooth in space, and exactly what the published
-        unit-level atlas figures map.
+        The expected phenotype is the local mixture weights times each component's expected
+        features at that position: the mean of the component's training members whose molecular
+        context resembles the position's, shrunk toward the mean of all its members -- the more so
+        the farther the context lies from the training data, and entirely where the position has
+        no context (the context-local member readout; a release made before it mixes global
+        per-component expectations). Deterministic, and exactly what the published unit-level
+        atlas figures map.
 
         Args:
             df (pd.DataFrame): Carries the coordinate columns the manifest names in
@@ -327,17 +336,85 @@ class UnitEncoder:
             KeyError: If a coordinate column is absent, naming it.
             ValueError: If the manifest's feature list no longer matches its recorded digest.
         """
+        from ephysatlas.unit_level_encoder.pipeline import phenotype_means
+
         features = self.features
         model_registry.validate_feature_order(
             features, self.outputs.get("feature_order_sha256")
         )
-        weights = self.mixture_weights(df, batch_size=batch_size).to_numpy(np.float64)
-        predictions = (weights @ self.component_features.astype(np.float64)).astype(
-            np.float32
+        self._load()
+        xyz = self._coordinates(df)
+        chunks = [
+            phenotype_means(pc, w, self._knn, self._component_features, self.cfg)
+            for w, pc in self._weights_and_context(xyz, batch_size)
+        ]
+        predictions = (
+            np.concatenate(chunks, axis=0)
+            if chunks
+            else np.zeros((0, len(features)), np.float32)
         )
         return pd.DataFrame(
             predictions, index=df.index, columns=[f"pred_{f}" for f in features]
         )
+
+    def sample(
+        self, df, n_samples: int = 16, seed: int = 0, batch_size: int = 65536
+    ) -> pd.DataFrame:
+        """Draw unit phenotypes at each position from the model's predictive distribution.
+
+        Each draw picks a putative cell type from the local mixture weights, then one of its
+        training members whose molecular context resembles the position's (or, with the
+        shrinkage probability, any of its members): a real training unit. The draws average to
+        :meth:`predict`.
+
+        Args:
+            df (pd.DataFrame): Carries ``x, y, z`` in metres; any index.
+            n_samples (int, optional): Draws per position.
+            seed (int, optional): Seed of the draws.
+            batch_size (int, optional): Positions per forward pass.
+
+        Returns:
+            pd.DataFrame: ``n_samples`` rows per position, indexed like ``df`` with each label
+            repeated (``df.index.repeat(n_samples)``): ``sample`` (draw number), ``component``
+            (the drawn unit's GMM component) and one column per phenotype feature.
+
+        Raises:
+            RuntimeError: If the release predates the context-local member readout (its
+                ``knn_bank.npz`` holds no ``labels_train``/``key_train``); ``predict`` still works.
+        """
+        from ephysatlas.unit_level_encoder.pipeline import readout_settings
+
+        self._load()
+        if not self._knn.has_context_readout:
+            raise RuntimeError(
+                f"{self.path_model.name} was released before the context-local member readout: "
+                "its knn_bank.npz has no labels_train/key_train, so sample() is unavailable "
+                "(predict() still works)"
+            )
+        cfg = self.cfg
+        xyz = self._coordinates(df)
+        rng = np.random.default_rng(seed)
+        chunks = [
+            self._knn.sample_context_local(
+                pc,
+                w,
+                n_samples,
+                rng,
+                **readout_settings(cfg),
+            )
+            for w, pc in self._weights_and_context(xyz, batch_size)
+        ]
+        rows = (
+            np.concatenate(chunks, axis=0).ravel() if chunks else np.zeros(0, np.int64)
+        )
+        out = pd.DataFrame(
+            self._knn.feature_train[rows],
+            index=df.index.repeat(int(n_samples)),
+            columns=self.features,
+        )
+        out.insert(0, "component", self._knn.labels_train[rows])
+        out.insert(0, "sample", np.tile(np.arange(int(n_samples)), len(xyz)))
+        return out
 
     # -- units -> latent phenotype ----------------------------------------------------------
 
@@ -415,7 +492,11 @@ class UnitEncoder:
         return self._gmm.predict(np.asarray(standardized_latents, np.float64))
 
     def expected_features(self, standardized_latents) -> np.ndarray:
-        """kNN-projected phenotype features of standardized latents, ``[N, n_features]``."""
+        """kNN-projected phenotype features of standardized latents, ``[N, n_features]``.
+
+        The distance-weighted projection of a latent onto its k nearest training exemplars; it
+        does not involve position (``predict`` does).
+        """
         self._load()
         return self._knn.expected_features(np.asarray(standardized_latents, np.float32))
 

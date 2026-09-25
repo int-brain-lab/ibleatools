@@ -156,6 +156,217 @@ class TestUnitEncoderWrapper(unittest.TestCase):
     def test_split_is_read_from_the_release(self):
         self.assertEqual(self._encoder().split()["test"], ["c"])
 
+    def test_sample_needs_a_release_with_the_context_local_readout(self):
+        encoder = self._encoder()
+        self.assertFalse(encoder.knn_decoder.has_context_readout)
+        with self.assertRaisesRegex(RuntimeError, "context-local member readout"):
+            encoder.sample(self.positions)
+
+
+class TestUnitEncoderContextLocalReadout(unittest.TestCase):
+    """A release whose kNN bank carries the context-local member readout."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = Path(tempfile.mkdtemp())
+        cls.path_model = make_unit_model_dir(cls.tmp, readout=True)
+        cls.positions = unit_positions(n=30)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def _encoder(self):
+        return TestUnitEncoderWrapper._encoder(self)
+
+    def _context(self, encoder):
+        xyz = encoder._coordinates(self.positions)
+        return encoder.context_model.transform.transform(encoder._raw_context(xyz))
+
+    def test_bank_round_trips_the_readout_and_components_are_member_means(self):
+        encoder = self._encoder()
+        knn = encoder.knn_decoder
+        self.assertTrue(knn.has_context_readout)
+        self.assertEqual(len(knn.labels_train), len(knn.z_train))
+        self.assertEqual(knn.key_train.shape, (len(knn.z_train), 2))
+        np.testing.assert_allclose(
+            encoder.component_features,
+            knn.member_means(encoder.cfg.gmm_components),
+            rtol=1e-6,
+        )
+
+    def test_predict_mixes_context_local_member_means(self):
+        from ephysatlas.unit_level_encoder.pipeline import readout_settings
+
+        encoder = self._encoder()
+        weights = encoder.mixture_weights(self.positions).to_numpy(np.float64)
+        expected = encoder.knn_decoder.context_local_means(
+            self._context(encoder), weights, **readout_settings(encoder.cfg)
+        )
+        out = encoder.predict(self.positions).to_numpy()
+        np.testing.assert_allclose(out, expected, rtol=1e-5, atol=1e-6)
+        global_mix = weights @ encoder.component_features.astype(np.float64)
+        self.assertGreater(np.abs(out - global_mix).max(), 1e-3)
+        # Infinite shrinkage falls back to the global member means.
+        encoder.cfg.readout_shrinkage = 1e9
+        np.testing.assert_allclose(
+            encoder.predict(self.positions).to_numpy(), global_mix, rtol=1e-4, atol=1e-5
+        )
+
+    def test_sample_draws_real_members_averaging_to_predict(self):
+        encoder = self._encoder()
+        knn = encoder.knn_decoder
+        positions = self.positions.iloc[:3]
+        draws = encoder.sample(positions, n_samples=4000, seed=1)
+        self.assertEqual(list(draws.columns), ["sample", "component", *UNIT_FEATURES])
+        self.assertTrue(draws.index.equals(positions.index.repeat(4000)))
+        features = draws.loc[:, UNIT_FEATURES].to_numpy()
+        rows = np.flatnonzero(np.isin(knn.feature_train[:, 0], features[:, 0]))
+        self.assertEqual(
+            len(np.unique(features[:, 0])), len(np.unique(knn.feature_train[rows, 0]))
+        )
+        lookup = dict(zip(knn.feature_train[:, 0].tolist(), knn.labels_train.tolist()))
+        self.assertEqual(
+            draws["component"].tolist(), [lookup[v] for v in features[:, 0].tolist()]
+        )
+        means = features.reshape(3, 4000, -1).mean(axis=1)
+        np.testing.assert_allclose(
+            means, encoder.predict(positions).to_numpy(), atol=0.1
+        )
+        again = encoder.sample(positions, n_samples=4000, seed=1)
+        self.assertTrue(draws.equals(again))
+
+    def test_positions_without_context_get_the_global_member_means(self):
+        encoder = self._encoder()
+        n_context = encoder.cfg.n_cell_pcs + encoder.cfg.n_gene_pcs
+        encoder._raw_context = lambda xyz: np.zeros((len(xyz), n_context), np.float32)
+        weights = encoder.mixture_weights(self.positions).to_numpy(np.float64)
+        np.testing.assert_allclose(
+            encoder.predict(self.positions).to_numpy(),
+            weights @ encoder.component_features.astype(np.float64),
+            rtol=1e-5,
+            atol=1e-6,
+        )
+        # Draws come from all of the drawn component's members, not only local ones.
+        draws = encoder.sample(self.positions.iloc[:1], n_samples=6000, seed=2)
+        np.testing.assert_allclose(
+            draws.loc[:, UNIT_FEATURES].to_numpy().mean(axis=0),
+            encoder.predict(self.positions.iloc[:1]).to_numpy()[0],
+            atol=0.1,
+        )
+
+
+class TestContextLocalReadoutMath(unittest.TestCase):
+    """EmpiricalKNNDecoder's readout against its formula, computed by hand."""
+
+    def test_means_and_draws_follow_the_shrunk_local_member_means(self):
+        from ephysatlas.unit_level_encoder.knn_decoder import EmpiricalKNNDecoder
+
+        rng = np.random.default_rng(0)
+        n, n_components, neighbours, shrinkage = 300, 3, 40, 3.0
+        features = rng.normal(size=(n, 2))
+        labels = rng.integers(0, n_components, n)
+        context = rng.normal(size=(n, 4))
+        knn = EmpiricalKNNDecoder.from_bank(rng.normal(size=(n, 3)), features, k=5)
+        knn.set_context_readout(labels, np.eye(2, 4), np.zeros(2), context)
+        # Queries in and beyond the data: the farthest are shrunk toward the global means.
+        query = rng.normal(size=(6, 4)) * np.linspace(0.5, 4.0, 6)[:, None]
+        weights = rng.dirichlet(np.ones(n_components), size=len(query))
+        got = knn.context_local_means(
+            query,
+            weights,
+            neighbours=neighbours,
+            shrinkage=shrinkage,
+            off_data_quantile=0.9,
+        )
+
+        def kernel_scale(key):
+            dist = np.linalg.norm(context[:, :2] - key, axis=1)
+            return np.median(np.sort(dist)[:neighbours])
+
+        h_ref = np.quantile([kernel_scale(key) for key in context[:, :2]], 0.9)
+        expected = np.zeros((len(query), 2))
+        for i in range(len(query)):
+            dist = np.linalg.norm(context[:, :2] - query[i, :2], axis=1)
+            near = np.argsort(dist)[:neighbours]
+            kernel = np.exp(-0.5 * (dist[near] / np.median(dist[near])) ** 2)
+            kernel /= kernel.sum()
+            in_data = min(1.0, (h_ref / np.median(dist[near])) ** 2)
+            n_total = 1.0 / np.sum(kernel**2)
+            for k in range(n_components):
+                member = labels[near] == k
+                weight_k = kernel[member].sum()
+                local = kernel[member] @ features[near][member] / max(weight_k, 1e-300)
+                n_k = weight_k * n_total
+                mean_k = features[labels == k].mean(axis=0)
+                shrunk = (n_k * local + shrinkage * mean_k) / (n_k + shrinkage)
+                expected[i] += weights[i, k] * (
+                    in_data * shrunk + (1.0 - in_data) * mean_k
+                )
+        np.testing.assert_allclose(got, expected, rtol=1e-4, atol=1e-5)
+
+        for i in (0, len(query) - 1):  # in and far beyond the data
+            rows = knn.sample_context_local(
+                query[i : i + 1],
+                weights[i : i + 1],
+                40000,
+                rng,
+                neighbours=neighbours,
+                shrinkage=shrinkage,
+                off_data_quantile=0.9,
+            )
+            np.testing.assert_allclose(
+                features[rows[0]].mean(axis=0), got[i], atol=0.03
+            )
+
+    def test_far_from_the_data_the_readout_tends_to_the_global_member_means(self):
+        from ephysatlas.unit_level_encoder.knn_decoder import EmpiricalKNNDecoder
+
+        rng = np.random.default_rng(3)
+        n, n_components = 400, 3
+        features = rng.normal(size=(n, 2))
+        labels = rng.integers(0, n_components, n)
+        context = rng.normal(size=(n, 4))
+        knn = EmpiricalKNNDecoder.from_bank(rng.normal(size=(n, 3)), features, k=5)
+        knn.set_context_readout(labels, np.eye(2, 4), np.zeros(2), context)
+        weights = rng.dirichlet(np.ones(n_components), size=3)
+        global_mix = weights @ knn.member_means(n_components).astype(np.float64)
+        settings = {"neighbours": 50, "shrinkage": 2.0}
+        errors, errors_without = [], []
+        for distance in (3.0, 30.0, 300.0):
+            query = np.zeros((3, 4))
+            query[:, 0] = distance
+            without = knn.context_local_means(query, weights, **settings)
+            errors_without.append(np.abs(without - global_mix).max())
+            shrunk = knn.context_local_means(
+                query, weights, off_data_quantile=0.99, **settings
+            )
+            errors.append(np.abs(shrunk - global_mix).max())
+        # Without the off-data rule the edge of the data speaks for any far query; with it the
+        # readout tends to the global member means as the query moves away, and is unchanged
+        # within the range of the data (distance 3 of a standard normal cloud).
+        self.assertGreater(min(errors_without), 0.1)
+        self.assertEqual(errors[0], errors_without[0])
+        self.assertTrue(errors[0] > 10 * errors[1] > 10 * errors[2])
+        self.assertLess(errors[2], 1e-3)
+
+    def test_a_bank_saved_without_the_readout_loads_without_it(self):
+        from ephysatlas.unit_level_encoder.knn_decoder import EmpiricalKNNDecoder
+
+        rng = np.random.default_rng(1)
+        knn = EmpiricalKNNDecoder.from_bank(
+            rng.normal(size=(30, 3)), rng.normal(size=(30, 2)), k=4
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            loaded = EmpiricalKNNDecoder.load_bank(
+                knn.save_bank(Path(tmp) / "bank.npz")
+            )
+        self.assertFalse(loaded.has_context_readout)
+        with self.assertRaisesRegex(RuntimeError, "context-local member readout"):
+            loaded.context_local_means(
+                np.zeros((1, 4)), np.ones((1, 2)) / 2, neighbours=5, shrinkage=1.0
+            )
+
 
 class TestUnitEncoderSelftest(unittest.TestCase):
     """selftest reproduces the golden outputs shipped with a release, and catches corruption."""

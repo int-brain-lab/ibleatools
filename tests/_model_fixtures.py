@@ -221,6 +221,8 @@ def unit_test_config():
         context_layers=2,
         context_dropout=0.0,
         feature_slice_component_mc_samples=16,
+        readout_neighbours=20,
+        readout_shrinkage=2.0,
     )
 
 
@@ -245,13 +247,16 @@ class FakeContextManager:
         }
 
 
-def make_unit_model_dir(path_models: Path, *, checksums: bool = True) -> Path:
+def make_unit_model_dir(
+    path_models: Path, *, checksums: bool = True, readout: bool = False
+) -> Path:
     """Write a tiny random-init unit model in the published release layout, with its manifest.
 
     Every stage is real but small: a random-init :class:`UnitAutoencoder`, a latent scaler and a
     3-component full-covariance GMM fitted on random latents, a random-init context-weight net,
-    and a kNN bank of random exemplars. No golden example is written; see
-    :func:`write_unit_golden_example`.
+    and a kNN bank of random exemplars -- with a random context-local member readout when
+    ``readout``, else without one, like a release made before it. No golden example is written;
+    see :func:`write_unit_golden_example`.
     """
     import joblib
     import torch
@@ -319,6 +324,15 @@ def make_unit_model_dir(path_models: Path, *, checksums: bool = True) -> Path:
     knn = EmpiricalKNNDecoder.from_bank(
         z_train, features, k=cfg.knn_decoder_k, feature_names=UNIT_FEATURES
     )
+    if readout:
+        knn.set_context_readout(
+            gmm.predict(z_train),
+            rng.normal(size=(2, n_context)) * 0.3,
+            np.zeros(2),
+            rng.normal(size=(len(z_train), n_context)),
+            key_alpha=10.0,
+            void_context_pc=transform.transform(np.zeros((1, n_context))),
+        )
     knn.save_bank(path_model.joinpath(model_registry.UNIT_KNN_BANK_FILE))
     save_component_features(
         path_model.joinpath(model_registry.UNIT_COMPONENT_FEATURES_FILE),

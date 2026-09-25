@@ -22,6 +22,7 @@ from .gmm_models import (
     fit_latent_scaler,
     load_context_weight_bundle,
     responsibilities,
+    sample_conditional,
     save_context_weight_bundle,
 )
 from .knn_decoder import (
@@ -34,6 +35,9 @@ from .train import checkpoint_name, encode_all, load_autoencoder_file, train_aut
 from .waveform_features import FEATURE_NAMES, extract_generated_waveform_features
 
 MODEL_SPACE_FEATURES_FILE = "waveform_features_model_space.npy"
+READOUT_SUMMARY_FILE = "readout_summary.json"
+# Unit features the context-local readout key does not regress (categorical, +1 / -1).
+CATEGORICAL_FEATURES = ("polarity",)
 
 
 @dataclass
@@ -144,6 +148,7 @@ def _model_paths(cfg: Config) -> dict[str, Path]:
         "gmm_dir": root / "gmm_k25_full",
         "context_dir": root / "context_weights_k25",
         "knn": root / "knn_bank_k20.npz",
+        "readout_summary": root / READOUT_SUMMARY_FILE,
         "component_features": root / model_registry.UNIT_COMPONENT_FEATURES_FILE,
     }
 
@@ -219,10 +224,104 @@ def _build_knn(data, z_scaled, cfg) -> EmpiricalKNNDecoder:
     )
 
 
+def readout_settings(cfg: Config) -> dict:
+    """Keyword arguments of the context-local member readout, from the configuration."""
+    quantile = cfg.readout_off_data_quantile
+    return {
+        "neighbours": int(cfg.readout_neighbours),
+        "shrinkage": float(cfg.readout_shrinkage),
+        "off_data_quantile": None if quantile is None else float(quantile),
+    }
+
+
+def fit_context_readout(
+    knn: EmpiricalKNNDecoder,
+    data,
+    gmm,
+    z_scaled,
+    context_pc,
+    cfg: Config,
+    *,
+    void_context_pc=None,
+) -> dict:
+    """Fit the context-local member readout into ``knn`` (in place) and return its fit summary.
+
+    Each TRAIN exemplar is labelled with its GMM component. The readout key is a ridge regression
+    of the units' within-component feature residuals -- the continuous model-space features,
+    TRAIN-standardized, minus the mean of their component's TRAIN members -- on the standardized
+    molecular context. Its penalty is the one of ``cfg.readout_key_alphas`` with the lowest
+    VALIDATION error, and the fitted map keeps its ``cfg.readout_key_dim`` leading directions over
+    TRAIN. The TEST split is not used.
+
+    Args:
+        knn: The kNN bank of TRAIN exemplars (``_build_knn``).
+        data: The prepared ``UnitData``.
+        gmm: The global GMM.
+        z_scaled: ``[N, latent_dim]`` standardized latents of every unit of ``data``.
+        context_pc: ``[N, n_context]`` standardized molecular context of every unit.
+        cfg: Unit-model configuration.
+        void_context_pc: ``[n_context]`` standardized all-zero (absent) context, whose queries
+            get the global member means.
+    """
+    from sklearn.linear_model import Ridge
+
+    train, val = data.split == 0, data.split == 1
+    labels = gmm.predict(np.asarray(z_scaled, np.float64))
+    names = list(data.waveform_feature_names)
+    continuous = [j for j, name in enumerate(names) if name not in CATEGORICAL_FEATURES]
+    feats = model_space_waveform_features(data, cfg)[:, continuous].astype(np.float64)
+    feats = (feats - feats[train].mean(0)) / np.maximum(feats[train].std(0), 1e-12)
+    n_components = int(gmm.n_components)
+    counts = np.bincount(labels[train], minlength=n_components)
+    sums = np.zeros((n_components, feats.shape[1]))
+    np.add.at(sums, labels[train], feats[train])
+    residual = feats - (sums / np.maximum(counts, 1)[:, None])[labels]
+    x = np.asarray(context_pc, np.float64)
+    val_mse = {}
+    for alpha in cfg.readout_key_alphas:
+        ridge = Ridge(alpha=float(alpha)).fit(x[train], residual[train])
+        val_mse[float(alpha)] = float(
+            np.mean((ridge.predict(x[val]) - residual[val]) ** 2)
+        )
+    alpha = min(val_mse, key=val_mse.get)
+    ridge = Ridge(alpha=alpha).fit(x[train], residual[train])
+    fitted = ridge.predict(x[train])
+    centre = fitted.mean(axis=0)
+    _, singular, vt = np.linalg.svd(fitted - centre, full_matrices=False)
+    dim = int(cfg.readout_key_dim)
+    dim = len(singular) if dim <= 0 else min(dim, len(singular))
+    basis = vt[:dim].T
+    knn.set_context_readout(
+        labels[knn.train_indices],
+        (ridge.coef_.T @ basis).T,
+        (ridge.intercept_ - centre) @ basis,
+        x[knn.train_indices],
+        key_alpha=alpha,
+        void_context_pc=void_context_pc,
+    )
+    return {
+        "method": "context_local_members",
+        "key_features": [names[j] for j in continuous],
+        "key_alpha": alpha,
+        "key_alpha_validation_mse": val_mse,
+        "key_dim": dim,
+        "key_singular_values": singular.tolist(),
+        **readout_settings(cfg),
+        "train_members_per_component": counts.tolist(),
+    }
+
+
 def compute_component_features(
     gmm, knn: EmpiricalKNNDecoder, cfg: Config
 ) -> np.ndarray:
-    """E[kNN phenotype feature | GMM component], with the settings the published figures use."""
+    """E[phenotype feature | GMM component].
+
+    With the context-local readout: the mean of the component's TRAIN members (the readout's
+    shrinkage target). Without it (models released before it): the kNN projection of Monte Carlo
+    draws from the component, with the settings the published figures use.
+    """
+    if knn.has_context_readout:
+        return knn.member_means(gmm.n_components)
     return component_feature_expectations(
         gmm,
         knn,
@@ -246,6 +345,58 @@ def save_component_features(
         ),
     )
     return path
+
+
+def phenotype_means(
+    context_pc, weights, knn: EmpiricalKNNDecoder, component_features, cfg
+):
+    """``[n, n_features]`` expected phenotype at standardized contexts with mixture weights.
+
+    The context-local member readout when the kNN bank has one; otherwise (models released before
+    it) the mixture weights times the component feature expectations.
+    """
+    if knn.has_context_readout:
+        return knn.context_local_means(context_pc, weights, **readout_settings(cfg))
+    return (
+        np.asarray(weights, np.float64) @ np.asarray(component_features, np.float64)
+    ).astype(np.float32)
+
+
+def sample_unit_exemplars(
+    indices, n_samples, gmm, context_model, knn: EmpiricalKNNDecoder, cfg, rng
+) -> np.ndarray:
+    """``[len(indices), n_samples]`` kNN-bank rows of TRAIN exemplars drawn for dataset units.
+
+    The predictive distribution of the phenotype at each unit's position: the context-local member
+    readout when the kNN bank has one; otherwise (models released before it) latents drawn from
+    the conditional GMM and projected onto one of their kNN exemplars. The sampled phenotypes are
+    ``knn.feature_train[rows]`` (latents ``knn.z_train[rows]``, dataset indices
+    ``knn.train_indices[rows]``).
+
+    Args:
+        indices: Units of the dataset ``context_model`` was built on.
+        n_samples: Draws per unit.
+        gmm: The global GMM.
+        context_model: ``ContextWeightModel`` over the dataset's contexts.
+        knn: The kNN bank.
+        cfg: Unit-model configuration (readout settings).
+        rng: ``np.random.Generator``.
+    """
+    indices = np.asarray(indices, int)
+    if knn.has_context_readout:
+        return knn.sample_context_local(
+            context_model.context_pc[indices],
+            context_model.weights(indices),
+            n_samples,
+            rng,
+            **readout_settings(cfg),
+        )
+    if len(indices) == 0:
+        return np.empty((0, int(n_samples)), np.int64)
+    z = np.concatenate(
+        sample_conditional(indices, n_samples, gmm, context_model, rng), axis=0
+    )
+    return knn.sample_rows(z, rng).reshape(len(indices), int(n_samples))
 
 
 def load_component_features(path: Path) -> tuple[np.ndarray, list[str]]:
@@ -312,7 +463,19 @@ def train_unit_model(cfg: Config, data=None) -> UnitModelBundle:
     )
 
     knn = _build_knn(data, z_scaled, cfg)
+    readout_info = fit_context_readout(
+        knn,
+        data,
+        gmm,
+        z_scaled,
+        context_pc,
+        cfg,
+        void_context_pc=context_transform.transform(np.zeros((1, context_pc.shape[1]))),
+    )
     knn.save_bank(paths["knn"])
+    paths["readout_summary"].write_text(
+        json.dumps(readout_info, indent=2), encoding="utf-8"
+    )
     component_features = compute_component_features(gmm, knn, cfg)
     save_component_features(
         paths["component_features"], component_features, knn.feature_names, cfg
@@ -404,16 +567,34 @@ def load_unit_model(
     knn = EmpiricalKNNDecoder.load_bank(paths["knn"], k=cfg.knn_decoder_k)
     latents = encode_all(ae, data, cfg)
     z_scaled = scaler.transform(latents["joint"]).astype(np.float32)
-    if list(knn.feature_names) != list(data.waveform_feature_names):
-        # The phenotype projection is the only stage that depends on the feature set: rebuild
-        # the kNN bank and the component expectations on the current features and keep the
-        # autoencoder, latent scaler, GMM and context weights as trained.
+    if list(knn.feature_names) != list(data.waveform_feature_names) or (
+        not knn.has_context_readout or knn.key_void is None
+    ):
+        # The phenotype projection is the only stage that depends on the feature set, and the
+        # readout only on the fitted stages: rebuild the kNN bank, its context-local readout and
+        # the component expectations and keep the autoencoder, latent scaler, GMM and context
+        # weights as trained.
         print(
-            f"[kNN] the saved bank projects onto {list(knn.feature_names)}; rebuilding it for "
-            f"{list(data.waveform_feature_names)}"
+            f"[kNN] rebuilding the saved bank (features {list(knn.feature_names)}, context-local "
+            f"readout: {knn.has_context_readout}) for {list(data.waveform_feature_names)} with "
+            "the context-local readout"
         )
         knn = _build_knn(data, z_scaled, cfg)
+        readout_info = fit_context_readout(
+            knn,
+            data,
+            gmm,
+            z_scaled,
+            context_model.context_pc,
+            cfg,
+            void_context_pc=context_model.transform.transform(
+                np.zeros((1, data.context.shape[1]))
+            ),
+        )
         knn.save_bank(paths["knn"])
+        paths["readout_summary"].write_text(
+            json.dumps(readout_info, indent=2), encoding="utf-8"
+        )
         component_features = compute_component_features(gmm, knn, cfg)
         save_component_features(
             paths["component_features"], component_features, knn.feature_names, cfg
