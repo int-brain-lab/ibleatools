@@ -301,6 +301,7 @@ class BaseFeatureCalculator(abc.ABC):
             output_dir=snippet_level_dir,
             scratch_dir=options.scratch_dir,
             lf_k_filter=options.lf_k_filter,
+            skip_lf_destripe=options.skip_lf_destripe,
             feature_params=options.feature_params,
             **kwargs,
         )

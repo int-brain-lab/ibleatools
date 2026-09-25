@@ -307,6 +307,7 @@ class ChannelDataFrameSchema(pa.DataFrameModel):
         metadata={"raw_unit": "N/A"},
     )
     atlas_id: int = pa.Field(
+        coerce=True,
         description="Atlas region identifier in Allen mapping",
         metadata={"raw_unit": "N/A"},
     )
@@ -1428,7 +1429,7 @@ def lf(data, fs, bands=None, decay_features=True):
     return ModelLfFeatures.validate(df_lf)
 
 
-def csd(data, fs, geometry, bands=None, decimate=10, scale=True):
+def csd(data, fs, geometry, bands=None, decimate=10, scale=True, denoise=True):
     """Compute CSD features from a numpy array.
 
     Computes the current source density (CSD) features from electrophysiological data
@@ -1441,10 +1442,21 @@ def csd(data, fs, geometry, bands=None, decimate=10, scale=True):
         bands (dict, optional): Dictionary with frequency bands to compute.
             Defaults to BANDS constant.
         decimate (int, optional): Decimation factor for CSD calculation.
-            Defaults to 10.
+            Defaults to 10. ``1`` skips ``scipy.signal.decimate`` entirely
+            (passed through unchanged) rather than calling it with a
+            no-op factor: ``scipy.signal.decimate(..., q=1, ...)`` designs an
+            anti-aliasing filter with cutoff exactly at the Nyquist boundary,
+            which ``scipy.signal.firwin`` rejects.
         scale (bool, optional): Forwarded to current_source_density. If True, scale the
             finite difference by the intercontact distance and tissue conductivity;
             if False, return the raw numerical finite difference. Defaults to True.
+        denoise (bool, optional): Apply ``ibldsp.cadzow.cadzow_denoiser`` to the
+            decimated data before the CSD finite difference. Defaults to
+            ``True`` (today's behavior). Set ``False`` when ``data`` has
+            already been Cadzow-denoised upstream (e.g. combined with
+            ``decimate=1`` for a source that is already at the target rate),
+            so it isn't denoised a second time on top of a lossy
+            reconstruction.
 
     Returns:
         pd.DataFrame: DataFrame with columns ['channel', 'rms_lf_csd', 'psd_delta_csd',
@@ -1454,19 +1466,22 @@ def csd(data, fs, geometry, bands=None, decimate=10, scale=True):
         The function applies Cadzow denoising and current source density computation
         before computing the spectral features.
     """
-    data_rs = scipy.signal.decimate(data, decimate, axis=1, ftype="fir")
-    data_rs = ibldsp.cadzow.cadzow_denoiser(
-        data_rs,
-        rank=5,
-        fs=fs / decimate,
-        niter=1,
-        fmax=125,
-        nswx=64,
-        ovx=32,
-        gap_threshold=2.0,
-        ppca_k=2.0,
-        h=geometry,
+    data_rs = (
+        data if decimate == 1 else scipy.signal.decimate(data, decimate, axis=1, ftype="fir")
     )
+    if denoise:
+        data_rs = ibldsp.cadzow.cadzow_denoiser(
+            data_rs,
+            rank=5,
+            fs=fs / decimate,
+            niter=1,
+            fmax=125,
+            nswx=64,
+            ovx=32,
+            gap_threshold=2.0,
+            ppca_k=2.0,
+            h=geometry,
+        )
     # Calculate the CSD features
     data_rs_diff2 = ibldsp.voltage.current_source_density(
         data_rs, h=geometry, n=2, scale=scale
