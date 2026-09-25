@@ -21,6 +21,10 @@ NwbFeatureCalculator
     Calculator for NWB recordings (local, streamed, or DANDI).
 NwbSource
     Describes how to open one NWB-backed SpikeInterface recording.
+LFPackFeatureCalculator
+    Calculator for an lfpack-compressed LF archive.
+NumpyArrayFeatureCalculator
+    Calculator for an LF array already held in memory.
 
 Examples
 --------
@@ -38,6 +42,8 @@ Examples
 
 from .base import BaseFeatureCalculator
 from .ibl import IBLPIDFeatureCalculator
+from .lfpack import LFPackFeatureCalculator
+from .numpy_array import NumpyArrayFeatureCalculator
 from .nwb import NwbFeatureCalculator, NwbSource
 from .spikeglx import SpikeGLXFileFeatureCalculator
 from .spikeglx_like import SpikeGlxLikeFeatureCalculator
@@ -65,7 +71,9 @@ __all__ = [
     "FeatureComputationResult",
     "FeatureParams",
     "IBLPIDFeatureCalculator",
+    "LFPackFeatureCalculator",
     "LfParams",
+    "NumpyArrayFeatureCalculator",
     "NwbFeatureCalculator",
     "NwbSource",
     "RawSnippet",
