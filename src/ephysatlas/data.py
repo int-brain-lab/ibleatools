@@ -440,9 +440,46 @@ def download_encoding_volume(
     )
 
 
+# Alpha-band-power column group the outlier filter targets, tried in priority order against
+# every raw feature-set naming convention this repo has used. The *first* fully-present group
+# wins -- this is a fallback chain, not a union: when the legacy 'alpha_mean'/'alpha_std' pair
+# is present, behaviour must stay byte-identical to before (existing fixtures/tests rely on
+# exactly that pair being treated, and 'psd_alpha' has a stricter non-nullable downstream
+# schema than 'alpha_mean' does, so blindly outlier-NaNing it too is not a safe no-op). Only
+# when that legacy pair is genuinely absent (today's LFPackFeatureCalculator-based extraction,
+# which dropped it) does this fall back to whichever of the current LF/CSD-plane names
+# ('psd_alpha'/'psd_alpha_csd') the extraction actually produced -- a single-feature-set
+# extraction (e.g. LF-only) has no '*_csd' columns at all, so that case falls back further to
+# 'psd_alpha' alone. See `alpha_outlier_columns`.
+ALPHA_OUTLIER_CANDIDATE_GROUPS = (
+    ("alpha_mean", "alpha_std"),
+    ("psd_alpha", "psd_alpha_csd"),
+    ("psd_alpha",),
+    ("psd_alpha_csd",),
+)
+
+
+def alpha_outlier_columns(df: pd.DataFrame) -> list[str]:
+    """Alpha-band-power columns present in `df`, for `outlier_treatment`.
+
+    Returns the first fully-present group from `ALPHA_OUTLIER_CANDIDATE_GROUPS`, or an empty
+    list if none match (`outlier_treatment` no-ops on that). Keeps the outlier filter working
+    for a single extracted feature set (e.g. LF-only) instead of assuming every run extracted
+    the full LF+CSD set under one specific historical naming convention, while leaving
+    unchanged behaviour wherever the legacy names are still present.
+    """
+    for group in ALPHA_OUTLIER_CANDIDATE_GROUPS:
+        if all(c in df.columns for c in group):
+            return list(group)
+    return []
+
+
 def outlier_treatment(df_features, columns=None, replace_with_nan=False):
     # TODO can make it more general by allowing for different detection and replacement functions.
-    if columns is None:
+    if not columns:
+        # None, or an empty list because the caller's candidate columns weren't part of this
+        # particular feature set (e.g. an LF-only extraction has no CSD-plane alpha column) --
+        # both are "nothing to treat here", not an error.
         return df_features
     bad_index = False
     for column in columns:
@@ -572,7 +609,9 @@ def read_features_from_disk(
         df_features = pd.DataFrame(schema(df_features))
 
     # Do the outlier treatment for the alpha features.
-    df_features = outlier_treatment(df_features, columns=["alpha_mean", "alpha_std"])
+    df_features = outlier_treatment(
+        df_features, columns=alpha_outlier_columns(df_features)
+    )
 
     return df_features
 
