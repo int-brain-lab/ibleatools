@@ -43,32 +43,40 @@ class PosEnc3D(nn.Module):
 
 
 class NeighborEncoder(nn.Module):
-    def __init__(self, f_ephys, d_model, d_pos=64, drop=0.1):
+    def __init__(self, f_ephys, d_model, d_pos=64, drop=0.1, use_positions=True):
         super().__init__()
-        self.pos = PosEnc3D(d_pos)
-        self.embed = mlp(f_ephys + d_pos, d_model, d_model, n_layers=2, drop=drop)
+        # Without positions a neighbour token encodes its ephys features only.
+        self.pos = PosEnc3D(d_pos) if use_positions else None
+        d_in = f_ephys + (d_pos if use_positions else 0)
+        self.embed = mlp(d_in, d_model, d_model, n_layers=2, drop=drop)
 
     def forward(self, e_n, p_n_abs, p_n_rel, mask):  # e_n: [B,M,Fe]
-        pos = self.pos(p_n_abs, p_n_rel)  # [B,M,d_pos]
-        x = torch.cat([e_n, pos], dim=-1)
+        x = e_n
+        if self.pos is not None:
+            pos = self.pos(p_n_abs, p_n_rel)  # [B,M,d_pos]
+            x = torch.cat([e_n, pos], dim=-1)
         h = self.embed(x)  # [B,M,d_model]
         h = h * mask[..., None]  # zero out pads
         return h
 
 
 class QueryEncoder(nn.Module):
-    def __init__(self, f_ctx, d_model, d_pos=64, drop=0.1):
+    def __init__(self, f_ctx, d_model, d_pos=64, drop=0.1, use_positions=True):
         super().__init__()
-        self.pos = PosEnc3D(d_pos)
-        self.embed = mlp(f_ctx + d_pos, d_model, d_model, n_layers=2, drop=drop)
+        # Without positions the query token encodes the molecular context only.
+        self.pos = PosEnc3D(d_pos) if use_positions else None
+        d_in = f_ctx + (d_pos if use_positions else 0)
+        self.embed = mlp(d_in, d_model, d_model, n_layers=2, drop=drop)
 
     def forward(self, ctx_q, p_q_abs):
-        # broadcast rel=0 for the query token
-        B = ctx_q.size(0)
-        p_rel0 = torch.zeros(B, 1, 3, device=ctx_q.device, dtype=ctx_q.dtype)
-        p_abs = p_q_abs[:, None, :]
-        pos = self.pos(p_abs, p_rel0)  # [B,1,d_pos]
-        x = torch.cat([ctx_q[:, None, :], pos], dim=-1)
+        x = ctx_q[:, None, :]
+        if self.pos is not None:
+            # broadcast rel=0 for the query token
+            B = ctx_q.size(0)
+            p_rel0 = torch.zeros(B, 1, 3, device=ctx_q.device, dtype=ctx_q.dtype)
+            p_abs = p_q_abs[:, None, :]
+            pos = self.pos(p_abs, p_rel0)  # [B,1,d_pos]
+            x = torch.cat([x, pos], dim=-1)
         h = self.embed(x)  # [B,1,d_model]
         return h
 
@@ -120,6 +128,12 @@ class NeighborInpaintingModel(nn.Module):
     """
     Predict ephys for a single query channel using context of that channel
     and a variable-size set of neighbor ephys from *other* probes.
+
+    ``use_positions`` also feeds the query position and the neighbours' absolute and relative
+    positions to the encoders. Releases before the 2026_W39 republication (Hub commit af6e41e6) did
+    so, in metres, which left the positional encoders practically unused; without them, space
+    enters only through the context at the query and the choice of neighbours (within the
+    radius), and the query and neighbour positions passed to ``forward`` are ignored.
     """
 
     def __init__(
@@ -135,10 +149,12 @@ class NeighborInpaintingModel(nn.Module):
         nhead=8,
         depth=2,
         drop=0.1,
+        use_positions=False,
     ):
         super().__init__()
-        self.qenc = QueryEncoder(f_ctx, d_model, drop=drop)
-        self.nenc = NeighborEncoder(f_ephys, d_model, drop=drop)
+        self.use_positions = bool(use_positions)
+        self.qenc = QueryEncoder(f_ctx, d_model, drop=drop, use_positions=self.use_positions)
+        self.nenc = NeighborEncoder(f_ephys, d_model, drop=drop, use_positions=self.use_positions)
         self.blocks = nn.ModuleList(
             [CrossBlock(d_model, nhead=nhead, drop=drop) for _ in range(depth)]
         )

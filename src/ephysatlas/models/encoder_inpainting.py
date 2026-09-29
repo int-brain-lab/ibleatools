@@ -47,6 +47,8 @@ def _architecture(path_model: Path, manifest: dict, state: dict) -> dict:
     if "e_mean" in state:
         arch["f_ephys"] = int(state["e_mean"].shape[0])
         arch.setdefault("f_out", int(state["e_mean"].shape[0]))
+    # So is the presence of positional encoders: releases that predate the setting all had them.
+    arch["use_positions"] = any(key.startswith("qenc.pos.") for key in state)
     missing = [k for k in ("f_ctx", "f_ephys", "f_out") if not arch.get(k)]
     if missing:
         raise ValueError(
@@ -61,6 +63,7 @@ def _architecture(path_model: Path, manifest: dict, state: dict) -> dict:
         "nhead": int(arch.get("nhead", 8)),
         "depth": int(arch.get("depth", 2)),
         "drop": float(arch.get("drop", 0.1)),
+        "use_positions": arch["use_positions"],
     }
 
 
@@ -127,6 +130,7 @@ def _load_inpainting_encoder(path_model: Path, manifest: dict = None):
         nhead=arch["nhead"],
         depth=arch["depth"],
         drop=arch["drop"],
+        use_positions=arch["use_positions"],
     )
     model.load_state_dict(state, strict=True)
     # A silent strict=False, or a checkpoint that never held the buffers, would leave these zero
