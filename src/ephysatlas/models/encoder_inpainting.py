@@ -487,7 +487,11 @@ class SpatialEncoder:
         p_n = np.zeros((n, m_max, 3), dtype=np.float32)
         mask = np.zeros((n, m_max), dtype=bool)
 
-        nn = ChannelNN(bank["xyz"])
+        # One search tree per loaded model: rebuilding it over the whole bank on every call
+        # dominated the cost of the many small queries the alignment methods make.
+        if getattr(self, "_bank_nn", None) is None:
+            self._bank_nn = ChannelNN(bank["xyz"])
+        nn = self._bank_nn
         # k_cap wider than m_max so same-probe exclusion cannot starve the neighbourhood.
         candidates = nn.query_radius(
             xyz_m.astype(np.float64), r_m=radius_m, k_cap=8 * m_max
@@ -534,11 +538,6 @@ class SpatialEncoder:
             KeyError: If a required coordinate column is absent, naming it.
             ValueError: If the manifest's feature list no longer matches its recorded digest.
         """
-        import torch
-
-        from ephysatlas.spatial_encoder.model import unstandardize
-        from ephysatlas.spatial_encoder.utils import mirror_xyz_to_left
-
         columns = list(self.inputs.get("columns") or ["x", "y", "z"])
         missing = [c for c in columns if c not in df.columns]
         if missing:
@@ -552,9 +551,42 @@ class SpatialEncoder:
             features, self.outputs.get("feature_order_sha256")
         )
 
+        predictions = self.predict_xyz(
+            df.loc[:, columns].to_numpy(dtype=np.float32),
+            df.index.get_level_values(0).to_numpy().astype(str),
+            batch_size=batch_size,
+        )
+        return pd.DataFrame(
+            predictions, index=df.index, columns=[f"pred_{f}" for f in features]
+        )
+
+    def predict_xyz(
+        self, xyz_m, pids=None, batch_size: int = 1024, standardized: bool = False
+    ) -> np.ndarray:
+        """Predict the features at an array of positions (the array form of :meth:`predict`).
+
+        Args:
+            xyz_m (np.ndarray): ``[N, 3]`` positions in metres, either hemisphere.
+            pids (str | array-like, optional): Insertion id of each position (or one for all),
+                whose own channels are excluded from the neighbours -- pass the probe's pid when
+                predicting for a probe whose channels may be in the bank. None excludes nothing.
+            batch_size (int, optional): Rows per forward pass.
+            standardized (bool, optional): Return the model's standardised output instead of
+                feature units.
+
+        Returns:
+            np.ndarray: ``[N, n_features]`` float32 predictions, in ``outputs.columns`` order.
+        """
+        import torch
+
+        from ephysatlas.spatial_encoder.model import unstandardize
+        from ephysatlas.spatial_encoder.utils import mirror_xyz_to_left
+
         # Mirrored once, here, for the context, the neighbour search and the position input alike.
-        xyz = mirror_xyz_to_left(df.loc[:, columns].to_numpy(dtype=np.float32))
-        pids = df.index.get_level_values(0).to_numpy().astype(str)
+        xyz = mirror_xyz_to_left(np.asarray(xyz_m, dtype=np.float32).reshape(-1, 3).copy())
+        if pids is None or isinstance(pids, str):
+            pids = np.full(xyz.shape[0], "" if pids is None else pids)
+        pids = np.asarray(pids).astype(str)
         ctx = self._standardised_context(xyz)
         e_n, p_n, mask = self._neighbours(xyz, pids)
 
@@ -576,14 +608,13 @@ class SpatialEncoder:
                     torch.from_numpy(p_n[start:stop]).to(device),
                     torch.from_numpy(mask[start:stop]).to(device),
                 )
-                # Back into feature units with the statistics the checkpoint shipped.
-                chunks.append(
-                    unstandardize(mu.float(), model.e_mean, model.e_std).cpu().numpy()
-                )
-        predictions = np.concatenate(chunks, axis=0)
-        return pd.DataFrame(
-            predictions, index=df.index, columns=[f"pred_{f}" for f in features]
-        )
+                if not standardized:
+                    # Back into feature units with the statistics the checkpoint shipped.
+                    mu = unstandardize(mu.float(), model.e_mean, model.e_std)
+                chunks.append(mu.float().cpu().numpy())
+        if not chunks:
+            return np.zeros((0, int(model.e_mean.numel())), dtype=np.float32)
+        return np.concatenate(chunks, axis=0).astype(np.float32)
 
     def selftest(self, rtol: float = 1e-4, atol: float = 1e-5) -> bool:
         """Reproduce the shipped golden predictions, if the model ships an example.
