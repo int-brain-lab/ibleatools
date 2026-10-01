@@ -49,18 +49,10 @@ lite = []
 # Full install: the base (lite) plus the spike/waveform-computation stack AND the
 # SDSC supercomputing-pipeline deps (luigi, iblscripts).
 full = [
-    # 0.5.24+: do_enforce_decrease is a Literal, not a bool. DARTsort installs
-    # dredge-ephys itself.
-    "dartsort==0.5.24",
-    # >=0.104.0 is incompatible with dartsort 0.5.24: private API renames
-    # (recording._recording_segments -> _segments,
-    # get_chunk_with_margin(channel_indices=...) -> last_dimension_indices) land
-    # somewhere between 0.104.0 and later 0.104.x commits, breaking
-    # dartsort.subtract(). Confirmed working: spikeinterface==0.104.9 (latest
-    # PyPI release as of 2026-09-18) + dartsort==0.5.24.
+    "dartsort>=0.5.25",
     "spikeinterface>=0.104.9",
     "hdbscan>=0.8.40",
-    "h5py==3.15.1", #Some dartsort error arises in the unit tests, if I don't fix this.
+    "h5py>=3.15.1", #Some dartsort error arises in the unit tests, if I don't fix this.
     "linear-operator>=0.6",
     "opt-einsum>=3.4.0",
     "luigi>=3.6.0",
