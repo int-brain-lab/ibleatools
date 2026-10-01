@@ -440,9 +440,27 @@ def download_encoding_volume(
     )
 
 
+# Alpha-power columns for the outlier filter, in priority order: the first group fully
+# present in the dataframe is used (legacy names first, so existing behaviour is unchanged).
+ALPHA_OUTLIER_CANDIDATE_GROUPS = (
+    ("alpha_mean", "alpha_std"),
+    ("psd_alpha", "psd_alpha_csd"),
+    ("psd_alpha",),
+    ("psd_alpha_csd",),
+)
+
+
+def alpha_outlier_columns(df: pd.DataFrame) -> list[str]:
+    """First group of `ALPHA_OUTLIER_CANDIDATE_GROUPS` fully present in `df`, else an empty list."""
+    for group in ALPHA_OUTLIER_CANDIDATE_GROUPS:
+        if all(c in df.columns for c in group):
+            return list(group)
+    return []
+
+
 def outlier_treatment(df_features, columns=None, replace_with_nan=False):
     # TODO can make it more general by allowing for different detection and replacement functions.
-    if columns is None:
+    if not columns:
         return df_features
     bad_index = False
     for column in columns:
@@ -572,7 +590,9 @@ def read_features_from_disk(
         df_features = pd.DataFrame(schema(df_features))
 
     # Do the outlier treatment for the alpha features.
-    df_features = outlier_treatment(df_features, columns=["alpha_mean", "alpha_std"])
+    df_features = outlier_treatment(
+        df_features, columns=alpha_outlier_columns(df_features)
+    )
 
     return df_features
 

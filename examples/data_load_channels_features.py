@@ -6,18 +6,22 @@ import ephysatlas.data
 import ephysatlas.anatomy
 import ephysatlas.plots
 
-VINTAGE = '2024_W50'
-VINTAGE = '2025_W28'
+VINTAGE = None
 # this will download the Allen brain templates
 brain_atlas = ephysatlas.anatomy.ClassifierAtlas()
 
-path_features = Path(f'/datadisk/Data/paper-ephys-atlas/ephys-atlas-decoding/features/{VINTAGE}')  # mac
-if not path_features.exists():
+if VINTAGE is None:
+    one = ONE(base_url='https://alyx.internationalbrainlab.org', mode='remote')
+    VINTAGE = ephysatlas.data.get_latest_label(one=one, project='ea_active')
+
+path_features = Path(f'/Users/olivier/Documents/datadisk/ephys-atlas-decoding/features')  # mac
+
+if not path_features.joinpath(VINTAGE).exists():
     # an ONE account is required to access the private IBL datasets
     one = ONE(base_url='https://alyx.internationalbrainlab.org', mode='remote')
-    download_path = ephysatlas.data.download_tables(path_features.parent, label=VINTAGE, one=one)
+    download_path = ephysatlas.data.download_tables(path_features, label=VINTAGE, one=one)
     print(download_path)  # PosixPath('/home/olivier/scratch/2025_W27')
 
 # once features and anatomy are downloaded, this will load the features Dataframe
-df_features = ephysatlas.data.read_features_from_disk(path_features, brain_atlas=brain_atlas, strict=False)
+df_features = ephysatlas.data.read_features_from_disk(download_path, brain_atlas=brain_atlas, strict=False)
 ephysatlas.plots.plot_features_distributions(df_features, title=f"Features distributions for {VINTAGE}")
