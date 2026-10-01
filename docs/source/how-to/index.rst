@@ -15,7 +15,6 @@ Getting Started
    load-cluster-features
    load-lfp-features
    load-encoding-volume
-   release-encoding-volume
    basic-feature-extraction
 
 Overview
