@@ -68,7 +68,9 @@ class _FakeLFPackReader:
         self._saturation = (
             saturation
             if saturation is not None
-            else pd.DataFrame(columns=["start_sample", "stop_sample", "start_time", "stop_time"])
+            else pd.DataFrame(
+                columns=["start_sample", "stop_sample", "start_time", "stop_time"]
+            )
         )
 
     def read(self, nsel, csel, sync=False, bin_channels=None):
@@ -160,7 +162,9 @@ class TestLFPackFeatureCalculator(unittest.TestCase):
         # Construction alone must not touch the filesystem: the reader is
         # imported and opened only on first access of `.reader`.
         self.assertIsNone(calc._reader)
-        with mock.patch("lfpack.LFPackReader", return_value=_FakeLFPackReader()) as mocked:
+        with mock.patch(
+            "lfpack.LFPackReader", return_value=_FakeLFPackReader()
+        ) as mocked:
             mocked.assert_not_called()
             first = calc.reader
             second = calc.reader

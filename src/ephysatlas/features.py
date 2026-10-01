@@ -1467,7 +1467,9 @@ def csd(data, fs, geometry, bands=None, decimate=10, scale=True, denoise=True):
         before computing the spectral features.
     """
     data_rs = (
-        data if decimate == 1 else scipy.signal.decimate(data, decimate, axis=1, ftype="fir")
+        data
+        if decimate == 1
+        else scipy.signal.decimate(data, decimate, axis=1, ftype="fir")
     )
     if denoise:
         data_rs = ibldsp.cadzow.cadzow_denoiser(
