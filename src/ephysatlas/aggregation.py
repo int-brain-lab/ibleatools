@@ -338,7 +338,9 @@ def get_aggregated_features_per_pid(snippet_df_per_pid: pd.DataFrame):
     agg_df_per_pid = agg_df_per_pid.reset_index()
 
     agg_df_per_pid = outlier_treatment(
-        agg_df_per_pid, columns=alpha_outlier_columns(agg_df_per_pid), replace_with_nan=True
+        agg_df_per_pid,
+        columns=alpha_outlier_columns(agg_df_per_pid),
+        replace_with_nan=True,
     )
 
     # then we join with the channel information to get coordinates and anatomical information
