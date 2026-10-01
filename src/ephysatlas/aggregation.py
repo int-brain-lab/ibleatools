@@ -367,9 +367,7 @@ def get_aggregated_features_per_pid(snippet_df_per_pid: pd.DataFrame):
     chan_cols = ["channel", "axial_um", "lateral_um"]
     if "distance_to_tip_um" in df_channels.columns:
         chan_cols.append("distance_to_tip_um")
-    # channels.pqt stores per-channel QC labels as 'labels'; denoise_raw_features_data
-    # expects them as 'channel_labels' (the package-wide name, see data.py). Also
-    # presence-filtered: a no-op until channels.pqt carries the column.
+    # channels.pqt calls the QC labels 'labels', downstream expects 'channel_labels'
     if "labels" in df_channels.columns:
         chan_cols.append("labels")
     agg_df_per_pid = agg_df_per_pid.merge(
