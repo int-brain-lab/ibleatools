@@ -301,14 +301,34 @@ class TestProjectDataIO(unittest.TestCase):
         s3_key = mock_aws.s3_download_file.call_args[0][0]
         self.assertEqual(
             s3_key,
-            f"aggregates/atlas/projects/{self.project}/lfp_aggregates/lf_compressed_all.h5",
+            f"aggregates/atlas/projects/{self.project}/lfp_aggregates/lf_compressed_v04_a07_default_all.h5",
         )
+
+    def test_download_lfp_features_tiers(self):
+        for level, fname in {
+            "small": "lf_compressed_v04_a14_small_all.h5",
+            "fine": "lf_compressed_v04_a2p5_fine_all.h5",
+        }.items():
+            with patch("ephysatlas.data.aws") as mock_aws:
+                mock_aws.get_s3_from_alyx.return_value = (MagicMock(), "test-bucket")
+                ephysatlas.data.download_lfp_features(
+                    self.tmp / "dl", project=self.project, one=MagicMock(), level=level
+                )
+            self.assertTrue(mock_aws.s3_download_file.call_args[0][0].endswith(fname))
+
+    def test_lfp_v03_levels_raise(self):
+        with self.assertRaisesRegex(ValueError, "'small'"):
+            ephysatlas.data.download_lfp_features(
+                self.tmp / "dl", project=self.project, one=MagicMock(), level="mild"
+            )
+        with self.assertRaises(ValueError):
+            ephysatlas.data.read_lfp_features(self.project_path, "pid123", level="x")
 
     def test_read_lfp_features(self):
         with patch("lfpack.LFPackReader") as mock_reader_cls:
             ephysatlas.data.read_lfp_features(self.project_path, "pid123")
         args, kwargs = mock_reader_cls.call_args
-        self.assertTrue(str(args[0]).endswith("lf_compressed_all.h5"))
+        self.assertTrue(str(args[0]).endswith("lf_compressed_v04_a07_default_all.h5"))
         self.assertEqual(kwargs["recording"], "pid123")
 
 

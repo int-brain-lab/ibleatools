@@ -43,9 +43,10 @@ Folder Layout
         │   ├── clusters_good.stlfp.npy          spike-triggered LFP                  (n_good × 250)  float16
         │   ├── waveforms.voltage.npy            neighbourhood traces (~8 GB)         (n_traces × 128) float16
         │   └── waveforms.table.pqt              pid/cluster_id/abs_channel index     (n_traces × 3)
-        └── lfp_aggregates/                      ← merged LFP archives, one group per pid (lfpack)
-            ├── lf_compressed_all.h5             default level    (ε=150, α=28)  ~23 GB
-            └── lf_compressed_aggressive_all.h5  aggressive level (ε=450, α=96)  ~12 GB
+        └── lfp_aggregates/                      ← merged LFP archives v04, one group per pid (lfpack ≥ 1.0)
+            ├── lf_compressed_v04_a14_small_all.h5    small   (ε=100, α=14)   ~11 GB
+            ├── lf_compressed_v04_a07_default_all.h5  default (ε=100, α=7)    ~21.5 GB
+            └── lf_compressed_v04_a2p5_fine_all.h5    fine    (ε=100, α=2.5)  ~46 GB
 
 Versioning
 ----------

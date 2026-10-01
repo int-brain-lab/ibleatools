@@ -24,7 +24,7 @@ dependencies = [
     # (wrong dist_chanel_from_peak arg, signed weights fed into the weighted spread
     # average) -- both used by #123's spatial_spread_um/slowness_s_per_m features below.
     "ibl-neuropixel>=1.13.0", # ibldsp, neuropixel, spikeglx
-    "lfpack>=0.2.0",          # data.py read_lfp_features() lazy import (LFPackReader)
+    "lfpack>=1.0.0",          # data.py read_lfp_features() lazy import (LFPackReader)
     "iblatlas",               # iblatlas.atlas/regions/genomics
     "xgboost>=3.0.1",         # regionclassifier (top-level import)
     "specparam==2.0.0rc3",    # features.lf() lazy import

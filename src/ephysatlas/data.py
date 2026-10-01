@@ -42,12 +42,29 @@ _ACG3D_FILES = [
     "clusters.acgs_3d.npy",
     "acgs_3d.times.npy",
 ]
-# Merged multi-recording LFP archives in lfp_aggregates/, keyed by compression level.
+# Merged multi-recording LFP archives (lfpack v04, format 2) in lfp_aggregates/, keyed by
+# tier. Tiers differ only in the wavelet-packet threshold alpha (epsilon=100 throughout).
 _LFP_AGGREGATES_FILES = {
-    "default": "lf_compressed_all.h5",  # epsilon=150, alpha=28, ~23 GB
-    "aggressive": "lf_compressed_aggressive_all.h5",  # epsilon=450, alpha=96, ~12 GB
-    "mild": "lf_compressed_mild_all.h5",  # gentlest compression, highest fidelity, ~34 GB
+    "small": "lf_compressed_v04_a14_small_all.h5",  # alpha=14, ~11 GB
+    "default": "lf_compressed_v04_a07_default_all.h5",  # alpha=7, ~21.5 GB
+    "fine": "lf_compressed_v04_a2p5_fine_all.h5",  # alpha=2.5, ~46 GB
 }
+# v03 levels removed in favour of v04; map them to the closest v04 tier for the error.
+_LFP_DEPRECATED_LEVELS = {"mild": "small", "aggressive": "small"}
+
+
+def _lfp_archive_name(level):
+    """Return the v04 archive file name for a tier, rejecting unknown or v03 levels."""
+    if level in _LFP_DEPRECATED_LEVELS:
+        raise ValueError(
+            f"LFP level {level!r} was a v03 level and is deprecated; use the v04 "
+            f"{_LFP_DEPRECATED_LEVELS[level]!r} tier (or one of {list(_LFP_AGGREGATES_FILES)})"
+        )
+    if level not in _LFP_AGGREGATES_FILES:
+        raise ValueError(
+            f"level must be one of {list(_LFP_AGGREGATES_FILES)}, got {level!r}"
+        )
+    return _LFP_AGGREGATES_FILES[level]
 
 
 def get_waveforms_coordinates(
@@ -789,11 +806,12 @@ def download_lfp_features(
     overwrite=False,
     level="default",
 ):
-    """Download the merged LFP-compressed HDF5 archive from AWS S3.
+    """Download the merged LFP-compressed HDF5 archive (lfpack v04) from AWS S3.
 
-    The archive is a single multi-recording HDF5 file (produced by ``lfpack.merge_h5``)
-    containing one top-level group per insertion (pid). Use :func:`read_lfp_features`
-    to open a reader for a specific pid.
+    The archive is a single multi-recording HDF5 file (lfpack format 2, produced by
+    ``lfpack.merge_h5``) containing one top-level group per insertion (pid). Use
+    :func:`read_lfp_features` to open a reader for a specific pid. Reading format 2
+    requires ``lfpack>=1.0.0``.
 
     Parameters
     ----------
@@ -805,24 +823,22 @@ def download_lfp_features(
         ONE client instance for AWS authentication.
     overwrite : bool, optional
         Force re-download if the file already exists locally. Defaults to False.
-    level : {"default", "aggressive", "mild"}, optional
-        Compression level to download. "default" (epsilon=150, alpha=28, ~23 GB) is
-        higher fidelity; "aggressive" (epsilon=450, alpha=96, ~12 GB) trades fidelity
-        for size; "mild" (~34 GB) is the gentlest compression of the three, i.e. the
-        closest to the raw LFP. Defaults to "default".
+    level : {"small", "default", "fine"}, optional
+        Compression tier to download (epsilon=100; tiers differ only in alpha).
+        "small" (alpha=14, ~11 GB, 0.57 % of float32) decodes like the former v03
+        "mild"; "default" (alpha=7, ~21.5 GB, 1.10 %); "fine" (alpha=2.5, ~46 GB,
+        2.35 %) is the closest to the raw LFP. The v03 levels "mild" and "aggressive"
+        are removed and raise a ``ValueError``. Defaults to "default".
 
     Returns
     -------
     Path
         Local path to the downloaded HDF5 file.
     """
-    assert level in _LFP_AGGREGATES_FILES, (
-        f"level must be one of {list(_LFP_AGGREGATES_FILES)}, got {level!r}"
-    )
+    fname = _lfp_archive_name(level)
     s3, bucket_name, local_project_path = _project_s3(local_path, project, one)
     dest = local_project_path.joinpath("lfp_aggregates")
     dest.mkdir(parents=True, exist_ok=True)
-    fname = _LFP_AGGREGATES_FILES[level]
     local_file = dest.joinpath(fname)
     aws.s3_download_file(
         f"aggregates/atlas/projects/{project}/lfp_aggregates/{fname}",
@@ -843,9 +859,10 @@ def read_lfp_features(path_project, pid, level="default", scale=0, bin_channels=
         Path to the project folder (parent of ``lfp_aggregates/``).
     pid : str
         Insertion ID; matches the top-level recording key in the merged HDF5 file.
-    level : {"default", "aggressive", "mild"}, optional
-        Compression level to read, matching the file downloaded by
-        :func:`download_lfp_features`. Defaults to "default".
+    level : {"small", "default", "fine"}, optional
+        Compression tier to read, matching the file downloaded by
+        :func:`download_lfp_features`. Requires ``lfpack>=1.0.0`` (format 2).
+        Defaults to "default".
     scale : int, optional
         Pyramidal resolution level to open, 0 = base full LFP rate. Defaults to 0.
     bin_channels : int, optional
@@ -860,12 +877,7 @@ def read_lfp_features(path_project, pid, level="default", scale=0, bin_channels=
     """
     import lfpack
 
-    assert level in _LFP_AGGREGATES_FILES, (
-        f"level must be one of {list(_LFP_AGGREGATES_FILES)}, got {level!r}"
-    )
-    h5_file = Path(path_project).joinpath(
-        "lfp_aggregates", _LFP_AGGREGATES_FILES[level]
-    )
+    h5_file = Path(path_project).joinpath("lfp_aggregates", _lfp_archive_name(level))
     return lfpack.LFPackReader(
         h5_file, recording=pid, scale=scale, bin_channels=bin_channels
     )
