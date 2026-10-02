@@ -77,11 +77,30 @@ class ChannelModel:
         """Model units back to feature units."""
         return np.asarray(features_std, dtype=np.float64) * (self.e_std + 1e-8) + self.e_mean
 
+    def predict(self, xyz_m: np.ndarray, pid: str = "", batch_size: int = 2048) -> np.ndarray:
+        """``[N, F]`` predicted features (feature units) at ``xyz_m``, through the released model's
+        public :meth:`~ephysatlas.models.encoder_inpainting.SpatialEncoder.predict`.
+
+        ``pid`` labels every position (the ``pid`` level of the index ``predict`` reads), so the
+        probe's own channels are excluded from the model's neighbours; '' excludes nothing.
+        """
+        import pandas as pd
+
+        xyz = np.asarray(xyz_m, dtype=np.float32).reshape(-1, 3)
+        columns = list(self.encoder.inputs.get("columns") or ["x", "y", "z"])
+        index = pd.MultiIndex.from_arrays(
+            [np.full(len(xyz), str(pid)), np.arange(len(xyz))], names=["pid", "channel"]
+        )
+        df = pd.DataFrame(xyz, index=index, columns=columns)
+        out = self.encoder.predict(df, batch_size=batch_size)
+        return out[[f"pred_{f}" for f in self.features]].to_numpy(dtype=np.float64)
+
     def predict_std(self, xyz_m: np.ndarray, pid: str = "", batch_size: int = 2048) -> np.ndarray:
-        """``[N, F]`` standardised predictions at ``xyz_m``, excluding ``pid``'s own neighbours."""
-        return self.encoder.predict_xyz(
-            xyz_m, pid, batch_size=batch_size, standardized=True
-        ).astype(np.float64)
+        """``[N, F]`` standardised predictions at ``xyz_m``, excluding ``pid``'s own neighbours.
+
+        :meth:`predict` in model units: the exact inverse of the release's ``X * std + mean``.
+        """
+        return (self.predict(xyz_m, pid, batch_size=batch_size) - self.e_mean) / self.e_std
 
     def context_std(self, xyz_m: np.ndarray) -> np.ndarray:
         """``[N, F_ctx]`` standardised molecular context (all zero outside the atlas)."""
