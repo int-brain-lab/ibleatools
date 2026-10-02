@@ -469,6 +469,11 @@ class ProbeConfidenceTrainConfig:
 
     # how many random synthetic variants per probe
     samples_per_probe: int = 8
+    # Keep each synthetic sample after it is first built instead of rebuilding it every epoch.
+    # Shifts, perturbations, labels and contexts are seeded by the sample's index and so identical
+    # in every epoch anyway; only the prediction at perturbed positions varied, through the random
+    # subset of neighbours NeighborCollate draws. ~0.3 MB per sample.
+    cache_samples: bool = True
 
     patience: int = 4
     min_delta: float = 1e-4
@@ -508,6 +513,12 @@ class SyntheticProbeConfidenceDataset(Dataset):
     Shift-based synthetic dataset.
 
     samples_per_probe = how many random candidate shifts we sample per probe.
+
+    A sample's shift, perturbation, labels and context come from a random generator seeded by its
+    index, so they are the same in every epoch. With ``cfg.cache_samples`` the sample is built once
+    and served from memory afterwards, which also fixes the prediction at perturbed positions (it
+    otherwise varies between epochs with the random neighbour subset of ``NeighborCollate``). With
+    ``num_workers > 0`` each DataLoader worker keeps its own cache.
     """
 
     def __init__(
@@ -530,17 +541,19 @@ class SyntheticProbeConfidenceDataset(Dataset):
         self.n_probes = len(bank)
         self.samples_per_probe = int(max(1, cfg.samples_per_probe))
         self.n = self.n_probes * self.samples_per_probe
+        self.cache_samples = bool(getattr(cfg, "cache_samples", True))
+        self._cache = {}
 
     def __len__(self):
         return self.n
 
-    def __getitem__(self, idx):
+    def _build(self, idx):
         rng = np.random.default_rng(self.seed + idx)
 
         # deterministic mapping from idx -> base probe, but still randomized inside
         probe_idx = int(idx % self.n_probes)
 
-        rec, ctx, pred, labels, valid = _build_shift_based_synthetic_probe_sample(
+        return _build_shift_based_synthetic_probe_sample(
             probe_idx=probe_idx,
             bank=self.bank,
             cfg=self.cfg,
@@ -549,6 +562,16 @@ class SyntheticProbeConfidenceDataset(Dataset):
             base_model=self.base_model,
             handles=self.handles,
         )
+
+    def __getitem__(self, idx):
+        idx = int(idx)
+        if not self.cache_samples:
+            rec, ctx, pred, labels, valid = self._build(idx)
+        else:
+            if idx not in self._cache:
+                self._cache[idx] = self._build(idx)
+            # Copies, so a consumer editing a sample in place cannot alter the cache.
+            rec, ctx, pred, labels, valid = (a.copy() for a in self._cache[idx])
 
         return {
             "rec": torch.from_numpy(rec).float(),  # [C,F_e]

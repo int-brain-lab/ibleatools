@@ -1,3 +1,4 @@
+import functools
 import os
 
 import numpy as np
@@ -1143,6 +1144,16 @@ class NeighborCollate:
 # ============================================================
 # Synthetic sample generation
 # ============================================================
+@functools.lru_cache(maxsize=1)
+def _shared_allen_atlas() -> AllenAtlas:
+    """One ``AllenAtlas`` per process for the confidence-sample generation.
+
+    Building an atlas takes ~0.75 s while a region lookup takes <1 ms, so building one per
+    synthetic sample dominated the confidence model's training time.
+    """
+    return AllenAtlas()
+
+
 def _build_shift_based_synthetic_probe_sample(
     *,
     probe_idx: int,
@@ -1225,7 +1236,7 @@ def _build_shift_based_synthetic_probe_sample(
 
     if hist_cosmos_full is None:
         try:
-            brain_atlas = AllenAtlas()
+            brain_atlas = _shared_allen_atlas()
             hist_cosmos_full = region_ids_from_xyz(
                 brain_atlas, hist_xyz_full, mapping="Cosmos"
             )
@@ -1321,7 +1332,7 @@ def _build_shift_based_synthetic_probe_sample(
             # relabel perturbed channels by comparing to original aligned Cosmos region
             if use_cosmos_labeling and cosmos_true is not None:
                 try:
-                    brain_atlas = AllenAtlas()
+                    brain_atlas = _shared_allen_atlas()
                     cosmos_after = region_ids_from_xyz(
                         brain_atlas, query_xyz_pert, mapping="Cosmos"
                     )
@@ -1960,7 +1971,7 @@ def _make_histology_probe_bank(
     e_mean = base_model.e_mean.detach().cpu().numpy().astype(np.float32)
     e_std = base_model.e_std.detach().cpu().numpy().astype(np.float32)
 
-    brain_atlas = AllenAtlas()
+    brain_atlas = _shared_allen_atlas()
     bank = []
 
     for p in tqdm(probe_ids):
