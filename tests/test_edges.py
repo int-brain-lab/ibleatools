@@ -8,6 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
+import scipy.ndimage
 
 from ephysatlas.edges import (
     compute_edges_volume,
@@ -56,6 +57,28 @@ class TestMahalanobisGradient(unittest.TestCase):
         self.assertAlmostEqual(np.nanmax(profile), expected, delta=0.1 * expected)
         double = mahalanobis_gradient(2 * pcs, valid, RES_UM, 100, 100)
         np.testing.assert_allclose(double, 2 * edges, rtol=1e-5, equal_nan=True)
+
+    def test_aggregation_across_pcs(self):
+        rng = np.random.default_rng(1)
+        pcs = scipy.ndimage.gaussian_filter(
+            rng.normal(size=SHAPE + (3,)).astype(np.float32), (2, 2, 2, 0)
+        )
+        valid = np.ones(SHAPE, dtype=bool)
+        single = np.stack(
+            [
+                mahalanobis_gradient(pcs[..., [c]], valid, RES_UM, aggregate="mean")
+                for c in range(3)
+            ]
+        )  # one PC: mean == its gradient magnitude
+        for aggregate, expected in {
+            "median": np.median(single, axis=0),
+            "mean": single.mean(axis=0),
+            "rss": np.sqrt((single**2).sum(axis=0)),
+        }.items():
+            got = mahalanobis_gradient(pcs, valid, RES_UM, aggregate=aggregate)
+            np.testing.assert_allclose(got, expected, rtol=1e-4, equal_nan=True)
+        with self.assertRaises(ValueError):
+            mahalanobis_gradient(pcs, valid, RES_UM, aggregate="max")
 
     def test_nan_border_and_uniform_volume(self):
         pcs = np.ones(SHAPE + (2,), dtype=np.float32)
@@ -106,6 +129,7 @@ class TestEdgesVolume(unittest.TestCase):
         self.assertEqual(stored.shape, (SHAPE[1], SHAPE[0], SHAPE[2]))
         np.testing.assert_array_equal(archive["grid_shape"], stored.shape)
         self.assertEqual(int(archive["res_um"][0]), RES_UM)
+        self.assertEqual(str(archive["aggregate"]), "median")
         np.testing.assert_allclose(
             np.transpose(stored, (1, 0, 2)).astype(np.float32),
             edges,
