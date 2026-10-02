@@ -28,6 +28,8 @@ ROLE_WEIGHTS = "weights"
 ROLE_CONTEXT = "context"
 ROLE_BANK = "neighbor_bank"
 ROLE_CONFIDENCE = "confidence"
+ROLE_SPLIT = "split"
+ROLE_STATS = "stats"
 
 
 def _architecture(path_model: Path, manifest: dict, state: dict) -> dict:
@@ -45,6 +47,8 @@ def _architecture(path_model: Path, manifest: dict, state: dict) -> dict:
     if "e_mean" in state:
         arch["f_ephys"] = int(state["e_mean"].shape[0])
         arch.setdefault("f_out", int(state["e_mean"].shape[0]))
+    # So is the presence of positional encoders: releases that predate the setting all had them.
+    arch["use_positions"] = any(key.startswith("qenc.pos.") for key in state)
     missing = [k for k in ("f_ctx", "f_ephys", "f_out") if not arch.get(k)]
     if missing:
         raise ValueError(
@@ -59,6 +63,7 @@ def _architecture(path_model: Path, manifest: dict, state: dict) -> dict:
         "nhead": int(arch.get("nhead", 8)),
         "depth": int(arch.get("depth", 2)),
         "drop": float(arch.get("drop", 0.1)),
+        "use_positions": arch["use_positions"],
     }
 
 
@@ -125,6 +130,7 @@ def _load_inpainting_encoder(path_model: Path, manifest: dict = None):
         nhead=arch["nhead"],
         depth=arch["depth"],
         drop=arch["drop"],
+        use_positions=arch["use_positions"],
     )
     model.load_state_dict(state, strict=True)
     # A silent strict=False, or a checkpoint that never held the buffers, would leave these zero
@@ -148,10 +154,11 @@ def _load_inpainting_encoder(path_model: Path, manifest: dict = None):
 def build_neighbor_bank(path_model: Path, df, manifest: dict, model=None) -> Path:
     """Write the neighbour bank a published encoder needs in order to run at all.
 
-    The bank holds, for every training channel: its position, its **standardised** feature
-    vector, and its insertion id. Standardising at build time rather than load time is what
-    keeps the bank self-consistent with the weights shipping beside it -- the statistics used are
-    the checkpoint's own buffers, not anything recomputed from the caller's data.
+    The bank holds, for every training channel: its position (mirrored to the left hemisphere,
+    like the queries), its **standardised** feature vector, and its insertion id. Standardising at
+    build time rather than load time is what keeps the bank self-consistent with the weights
+    shipping beside it -- the statistics used are the checkpoint's own buffers, not anything
+    recomputed from the caller's data.
 
     Args:
         path_model (Path): Model directory to write into.
@@ -174,7 +181,10 @@ def build_neighbor_bank(path_model: Path, df, manifest: dict, model=None) -> Pat
     if model is None:
         model = _load_inpainting_encoder(path_model, manifest)
 
-    xyz = df.loc[:, ["x", "y", "z"]].to_numpy(dtype=np.float32)
+    from ephysatlas.spatial_encoder.utils import mirror_xyz_to_left
+
+    # Positions mirrored to the left hemisphere, where the model and its queries live.
+    xyz = mirror_xyz_to_left(df.loc[:, ["x", "y", "z"]].to_numpy(dtype=np.float32))
     raw = df.loc[:, features].to_numpy(dtype=np.float32)
     e_mean = model.e_mean.detach().cpu().numpy()
     e_std = model.e_std.detach().cpu().numpy()
@@ -230,22 +240,73 @@ class SpatialEncoder:
             self._model = _load_inpainting_encoder(self.path_model, self.index)
         return self._model
 
-    def preprocessing_stats(self) -> dict:
-        """Return the standardisation statistics baked into the checkpoint.
+    @property
+    def features(self) -> list:
+        """Ordered names of the features this model predicts (``outputs.columns``)."""
+        return list(self.outputs.get("columns") or [])
 
-        These are the registered buffers the model ships with -- the feature and context means
-        and stds -- exposed so a caller can standardise its own data the way the weights expect.
+    def preprocessing_stats(self) -> dict:
+        """Return the training-data statistics the model was fitted with.
+
+        Always holds the standardisation the weights expect -- the feature and context means and
+        stds, i.e. the registered buffers the checkpoint ships with. When the release publishes
+        ``preprocessing/channel_stats.npz`` it also holds what the buffers cannot carry: the
+        per-feature clipping percentiles (``rec_ephys_low_pctl``/``rec_ephys_high_pctl``) applied
+        to the recorded features before standardisation.
 
         Returns:
-            dict: ``{"e_mean", "e_std", "ctx_mean", "ctx_std"}`` as numpy arrays.
+            dict: ``{"e_mean", "e_std", "ctx_mean", "ctx_std", ...}`` as numpy arrays.
         """
         model = self.model
-        return {
+        stats = {
             "e_mean": model.e_mean.detach().cpu().numpy(),
             "e_std": model.e_std.detach().cpu().numpy(),
             "ctx_mean": model.ctx_mean.detach().cpu().numpy(),
             "ctx_std": model.ctx_std.detach().cpu().numpy(),
         }
+        name = (self.index.get("artifacts") or {}).get(ROLE_STATS)
+        if name and self.path_model.joinpath(name).exists():
+            with np.load(self.path_model.joinpath(name), allow_pickle=False) as payload:
+                released = {key: payload[key] for key in payload.files}
+            # The buffers are what the weights actually use: a published stats file that
+            # disagrees with them would silently mis-standardise every caller's data.
+            for key, value in stats.items():
+                if key in released and not np.allclose(
+                    released[key], value, rtol=1e-5, atol=1e-7
+                ):
+                    raise ValueError(
+                        f"{self.path_model.name}: {name} {key} disagrees with the checkpoint buffer"
+                    )
+            stats = {**released, **stats}
+        return stats
+
+    def split(self) -> dict:
+        """The probe split the model was trained with.
+
+        Returns:
+            dict: ``{"train_pids", "validation_pids", "test_pids"}`` (lists of insertion ids),
+            plus whatever else the published ``split.json`` records.
+
+        Raises:
+            FileNotFoundError: If the release publishes no split.
+        """
+        import json
+
+        name = (self.index.get("artifacts") or {}).get(ROLE_SPLIT, "split.json")
+        path = self.path_model.joinpath(name)
+        if not path.exists():
+            raise FileNotFoundError(f"{self.path_model.name} publishes no {name}")
+        split = json.loads(path.read_text(encoding="utf-8"))
+        # Releases written before the split contract was settled record the training loader's own
+        # keys (e.g. ea-encoder-channel@2026_W32); expose them under the published names.
+        for published, legacy in (
+            ("train_pids", "p_tr_names"),
+            ("validation_pids", "p_va_names"),
+            ("test_pids", "p_te_names"),
+        ):
+            if published not in split and legacy in split:
+                split[published] = [str(pid) for pid in split[legacy]]
+        return split
 
     @property
     def context_dir(self) -> Path:
@@ -277,6 +338,47 @@ class SpatialEncoder:
         return torch.load(
             self.path_model.joinpath(name), map_location="cpu", weights_only=False
         )
+
+    def load_confidence_model(self):
+        """Instantiate the probe-confidence model published alongside, in ``eval()`` mode.
+
+        The confidence model scores, channel by channel, how consistent a probe's recorded
+        features are with this encoder's predictions at its reported positions (used to flag
+        misaligned insertions). Its constructor arguments are read from the checkpoint's
+        ``architecture`` record, falling back to the manifest's ``config.confidence``.
+
+        Returns:
+            ProbeSequenceConfidenceTransformer | None: None when the release ships no confidence
+            model.
+
+        Raises:
+            ValueError: If the checkpoint does not record its architecture.
+        """
+        from ephysatlas.spatial_encoder.model import ProbeSequenceConfidenceTransformer
+
+        checkpoint = self.confidence_model()
+        if checkpoint is None:
+            return None
+        arch = dict((self.config.get("confidence") or {}).get("architecture") or {})
+        arch.update(checkpoint.get("architecture") or {})
+        required = ("f_ctx", "f_e", "d_model", "nhead", "depth", "mlp_ratio", "drop")
+        missing = [key for key in required if key not in arch]
+        if missing:
+            raise ValueError(
+                f"{self.path_model.name}: the confidence model does not record {missing}; it "
+                f"cannot be rebuilt without its architecture."
+            )
+        model = ProbeSequenceConfidenceTransformer(
+            f_ctx=int(arch["f_ctx"]),
+            f_e=int(arch["f_e"]),
+            d_model=int(arch["d_model"]),
+            nhead=int(arch["nhead"]),
+            depth=int(arch["depth"]),
+            mlp_ratio=float(arch["mlp_ratio"]),
+            drop=float(arch["drop"]),
+        )
+        model.load_state_dict(checkpoint["model_state"], strict=True)
+        return model.eval()
 
     def _context_manager(self):
         """Build the atlas context manager over the *published* PCA volumes.
@@ -323,6 +425,16 @@ class SpatialEncoder:
             with np.load(self.path_model.joinpath(name), allow_pickle=False) as data:
                 self._bank = {k: data[k].copy() for k in ("xyz", "feat", "pid")}
         return self._bank
+
+    def neighbor_bank(self) -> dict:
+        """The published training-channel bank the model draws neighbours from.
+
+        Returns:
+            dict: ``xyz`` (``[n, 3]`` positions, metres, mirrored to the left hemisphere), ``feat``
+            (``[n, n_features]`` clipped and standardised features) and ``pid`` (insertion id per
+            channel), exactly as the model saw them during training.
+        """
+        return {key: value.copy() for key, value in self._neighbor_bank().items()}
 
     # -- the pipeline ----------------------------------------------------------------------
 
@@ -375,7 +487,11 @@ class SpatialEncoder:
         p_n = np.zeros((n, m_max, 3), dtype=np.float32)
         mask = np.zeros((n, m_max), dtype=bool)
 
-        nn = ChannelNN(bank["xyz"])
+        # One search tree per loaded model: rebuilding it over the whole bank on every call
+        # dominated the cost of the many small queries the alignment methods make.
+        if getattr(self, "_bank_nn", None) is None:
+            self._bank_nn = ChannelNN(bank["xyz"])
+        nn = self._bank_nn
         # k_cap wider than m_max so same-probe exclusion cannot starve the neighbourhood.
         candidates = nn.query_radius(
             xyz_m.astype(np.float64), r_m=radius_m, k_cap=8 * m_max
@@ -403,10 +519,14 @@ class SpatialEncoder:
     def predict(self, df, batch_size: int = 1024) -> pd.DataFrame:
         """Predict electrophysiological features for each channel position.
 
+        The model was trained on positions mirrored to the left hemisphere (``x -> -|x|``): its
+        context lookup, neighbour bank and position input all live there. A right-hemisphere
+        position is therefore predicted exactly as its left mirror.
+
         Args:
             df (pd.DataFrame): Indexed by ``(pid, channel)``, carrying the coordinate columns the
-                manifest names in ``inputs.columns`` (``x, y, z``, in metres). The feature columns
-                are *not* read -- they are what this predicts.
+                manifest names in ``inputs.columns`` (``x, y, z``, in metres), in either
+                hemisphere. The feature columns are *not* read -- they are what this predicts.
             batch_size (int, optional): Rows per forward pass.
 
         Returns:
@@ -418,10 +538,6 @@ class SpatialEncoder:
             KeyError: If a required coordinate column is absent, naming it.
             ValueError: If the manifest's feature list no longer matches its recorded digest.
         """
-        import torch
-
-        from ephysatlas.spatial_encoder.model import unstandardize
-
         columns = list(self.inputs.get("columns") or ["x", "y", "z"])
         missing = [c for c in columns if c not in df.columns]
         if missing:
@@ -435,8 +551,42 @@ class SpatialEncoder:
             features, self.outputs.get("feature_order_sha256")
         )
 
-        xyz = df.loc[:, columns].to_numpy(dtype=np.float32)
-        pids = df.index.get_level_values(0).to_numpy().astype(str)
+        predictions = self.predict_xyz(
+            df.loc[:, columns].to_numpy(dtype=np.float32),
+            df.index.get_level_values(0).to_numpy().astype(str),
+            batch_size=batch_size,
+        )
+        return pd.DataFrame(
+            predictions, index=df.index, columns=[f"pred_{f}" for f in features]
+        )
+
+    def predict_xyz(
+        self, xyz_m, pids=None, batch_size: int = 1024, standardized: bool = False
+    ) -> np.ndarray:
+        """Predict the features at an array of positions (the array form of :meth:`predict`).
+
+        Args:
+            xyz_m (np.ndarray): ``[N, 3]`` positions in metres, either hemisphere.
+            pids (str | array-like, optional): Insertion id of each position (or one for all),
+                whose own channels are excluded from the neighbours -- pass the probe's pid when
+                predicting for a probe whose channels may be in the bank. None excludes nothing.
+            batch_size (int, optional): Rows per forward pass.
+            standardized (bool, optional): Return the model's standardised output instead of
+                feature units.
+
+        Returns:
+            np.ndarray: ``[N, n_features]`` float32 predictions, in ``outputs.columns`` order.
+        """
+        import torch
+
+        from ephysatlas.spatial_encoder.model import unstandardize
+        from ephysatlas.spatial_encoder.utils import mirror_xyz_to_left
+
+        # Mirrored once, here, for the context, the neighbour search and the position input alike.
+        xyz = mirror_xyz_to_left(np.asarray(xyz_m, dtype=np.float32).reshape(-1, 3).copy())
+        if pids is None or isinstance(pids, str):
+            pids = np.full(xyz.shape[0], "" if pids is None else pids)
+        pids = np.asarray(pids).astype(str)
         ctx = self._standardised_context(xyz)
         e_n, p_n, mask = self._neighbours(xyz, pids)
 
@@ -458,14 +608,13 @@ class SpatialEncoder:
                     torch.from_numpy(p_n[start:stop]).to(device),
                     torch.from_numpy(mask[start:stop]).to(device),
                 )
-                # Back into feature units with the statistics the checkpoint shipped.
-                chunks.append(
-                    unstandardize(mu.float(), model.e_mean, model.e_std).cpu().numpy()
-                )
-        predictions = np.concatenate(chunks, axis=0)
-        return pd.DataFrame(
-            predictions, index=df.index, columns=[f"pred_{f}" for f in features]
-        )
+                if not standardized:
+                    # Back into feature units with the statistics the checkpoint shipped.
+                    mu = unstandardize(mu.float(), model.e_mean, model.e_std)
+                chunks.append(mu.float().cpu().numpy())
+        if not chunks:
+            return np.zeros((0, int(model.e_mean.numel())), dtype=np.float32)
+        return np.concatenate(chunks, axis=0).astype(np.float32)
 
     def selftest(self, rtol: float = 1e-4, atol: float = 1e-5) -> bool:
         """Reproduce the shipped golden predictions, if the model ships an example.

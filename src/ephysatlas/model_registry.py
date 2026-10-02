@@ -40,14 +40,24 @@ ENCODER_WEIGHTS_FILE = "spatial_encoder.pt"
 ENCODER_CONFIDENCE_FILE = "confidence_model.pt"
 ENCODER_BANK_FILE = "neighbor_bank.npz"
 ENCODER_CONTEXT_FILES = ("agea_vol_pca.npy", "merfish_vol_pca.npy")
+# Training-data statistics the encoder was fitted with: the per-feature clipping percentiles and
+# the feature/context standardisation. The means and stds also ride inside the weights as buffers;
+# the clipping thresholds do not, and are needed to preprocess new recordings the way training did.
+ENCODER_STATS_FILE = "preprocessing/channel_stats.npz"
 
-# Unit-level encoder: the canonical filenames a published release stages its checkpoints under.
-# Unlike the other families it ships no recorded data -- only weights. The per-unit atlas
-# arrays are read from a local cache prepared outside this package.
+# Unit-level encoder: the canonical filenames of a published release. Unlike the other families
+# it ships no recorded unit data -- only the fitted model and the train-split kNN exemplar bank.
+# The per-unit atlas arrays stay on IBL S3 and are prepared locally when needed.
 UNIT_AE_FILE = "autoencoder.pt"
-UNIT_GMM_FILE = "point_transformer_gmm.pt"
+UNIT_CONFIG_FILE = "config.json"
 UNIT_SCALER_FILE = "shared_latent_scaler.joblib"
-UNIT_UNCOND_GMM_FILE = "unconditional_gmm_train_only.joblib"
+UNIT_GMM_FILE = "global_gmm.joblib"
+UNIT_CONTEXT_TRANSFORM_FILE = "context_transform.joblib"
+UNIT_CONTEXT_WEIGHTS_FILE = "context_weight_model_bundle.pt"
+UNIT_KNN_BANK_FILE = "knn_bank.npz"
+# E[feature | GMM component], K x F: what predict() mixes with the local component weights.
+UNIT_COMPONENT_FEATURES_FILE = "component_feature_expectations.npz"
+UNIT_STATS_FILE = "preprocessing/unit_stats.npz"
 
 
 class HFModelSource:
