@@ -13,7 +13,7 @@ import scipy.ndimage
 from ephysatlas.edges import (
     compute_edges_volume,
     load_whitened_pcs,
-    mahalanobis_gradient,
+    edge_strength,
 )
 
 RES_UM = 50
@@ -49,13 +49,13 @@ class TestMahalanobisGradient(unittest.TestCase):
         pcs = np.zeros(SHAPE + (1,), dtype=np.float32)
         pcs[SHAPE[0] // 2 :, ..., 0] = 1
         valid = np.ones(SHAPE, dtype=bool)
-        edges = mahalanobis_gradient(pcs, valid, RES_UM, sigma_um=100, erode_um=100)
+        edges = edge_strength(pcs, valid, RES_UM, sigma_um=100, erode_um=100)
         profile = np.nanmean(edges, axis=(1, 2))
         self.assertLessEqual(abs(int(np.nanargmax(profile)) - SHAPE[0] // 2), 1)
         # smoothed unit step: peak slope is 1 / (sigma sqrt(2 pi)) per voxel
         expected = 1 / (2 * np.sqrt(2 * np.pi)) * 1e3 / RES_UM
         self.assertAlmostEqual(np.nanmax(profile), expected, delta=0.1 * expected)
-        double = mahalanobis_gradient(2 * pcs, valid, RES_UM, 100, 100)
+        double = edge_strength(2 * pcs, valid, RES_UM, 100, 100)
         np.testing.assert_allclose(double, 2 * edges, rtol=1e-5, equal_nan=True)
 
     def test_aggregation_across_pcs(self):
@@ -66,7 +66,7 @@ class TestMahalanobisGradient(unittest.TestCase):
         valid = np.ones(SHAPE, dtype=bool)
         single = np.stack(
             [
-                mahalanobis_gradient(pcs[..., [c]], valid, RES_UM, aggregate="mean")
+                edge_strength(pcs[..., [c]], valid, RES_UM, aggregate="mean")
                 for c in range(3)
             ]
         )  # one PC: mean == its gradient magnitude
@@ -75,15 +75,15 @@ class TestMahalanobisGradient(unittest.TestCase):
             "mean": single.mean(axis=0),
             "rss": np.sqrt((single**2).sum(axis=0)),
         }.items():
-            got = mahalanobis_gradient(pcs, valid, RES_UM, aggregate=aggregate)
+            got = edge_strength(pcs, valid, RES_UM, aggregate=aggregate)
             np.testing.assert_allclose(got, expected, rtol=1e-4, equal_nan=True)
         with self.assertRaises(ValueError):
-            mahalanobis_gradient(pcs, valid, RES_UM, aggregate="max")
+            edge_strength(pcs, valid, RES_UM, aggregate="max")
 
     def test_nan_border_and_uniform_volume(self):
         pcs = np.ones(SHAPE + (2,), dtype=np.float32)
         valid = np.ones(SHAPE, dtype=bool)
-        edges = mahalanobis_gradient(pcs, valid, RES_UM, sigma_um=100, erode_um=100)
+        edges = edge_strength(pcs, valid, RES_UM, sigma_um=100, erode_um=100)
         self.assertEqual(edges.shape, SHAPE)
         self.assertTrue(np.isnan(edges[0]).all() and np.isnan(edges[:, :, -1]).all())
         self.assertTrue(np.isfinite(edges[2:-2, 2:-2, 2:-2]).all())
@@ -94,7 +94,7 @@ class TestMahalanobisGradient(unittest.TestCase):
         valid = np.ones(SHAPE, dtype=bool)
         valid[:, :, SHAPE[2] // 2 :] = False
         pcs[~valid] = np.nan
-        edges = mahalanobis_gradient(pcs, valid, RES_UM, sigma_um=100, erode_um=100)
+        edges = edge_strength(pcs, valid, RES_UM, sigma_um=100, erode_um=100)
         # constant data inside the mask: no edge, even next to the NaN exterior
         np.testing.assert_allclose(np.nanmax(edges), 0, atol=1e-3)
 

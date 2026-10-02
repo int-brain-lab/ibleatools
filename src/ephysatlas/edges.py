@@ -1,5 +1,5 @@
 """
-Ephys edges: local Mahalanobis gradient of an encoding volume.
+Ephys edges: local gradient of an encoding volume.
 
 The encoding volume (see :func:`ephysatlas.data.download_encoding_volume`) is
 z-scored, rotated onto its principal components and divided by their standard
@@ -14,7 +14,7 @@ Functions
 ---------
 load_whitened_pcs
     Whitened PCA of an encoding volume file
-mahalanobis_gradient
+edge_strength
     Gradient magnitude of the whitened PCs, aggregated across PCs, per mm
 save_edges_volume
     Write an edges volume with the encoding volume's conventions
@@ -125,7 +125,7 @@ def load_whitened_pcs(
     }
 
 
-def mahalanobis_gradient(
+def edge_strength(
     pcs,
     valid,
     res_um,
@@ -243,7 +243,7 @@ def compute_edges_volume(
         Output file. Defaults to ``brainwide_ephys_edges_{res_um}um.npz`` in the
         folder of `volume_file`.
     atlas, sigma_um, erode_um, variance_threshold, exclude_acronyms, aggregate
-        See :func:`load_whitened_pcs` and :func:`mahalanobis_gradient`.
+        See :func:`load_whitened_pcs` and :func:`edge_strength`.
 
     Returns
     -------
@@ -253,7 +253,7 @@ def compute_edges_volume(
     """
     volume_file = Path(volume_file)
     pca = load_whitened_pcs(volume_file, atlas, exclude_acronyms, variance_threshold)
-    edges = mahalanobis_gradient(
+    edges = edge_strength(
         pca["pcs"], pca["valid"], pca["res_um"], sigma_um, erode_um, aggregate
     )
     out_file = (
