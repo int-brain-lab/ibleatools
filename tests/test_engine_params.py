@@ -343,11 +343,13 @@ class TestDartsortAdapter(unittest.TestCase):
                         data, 30000.0, geometry, params=params, scratch_dir=scratch
                     )
 
+        # DARTsort 0.5.25 renamed detection_threshold -> voltage_threshold and
+        # residnorm_decrease_threshold -> subtraction_threshold.
         cfg = captured["subtraction_cfg"]
-        self.assertEqual(cfg.detection_threshold, 6.0)
+        self.assertEqual(cfg.voltage_threshold, 6.0)
         self.assertEqual(cfg.spatial_dedup_radius_um, 90.0)
         self.assertEqual(cfg.positive_temporal_dedup_radius_samples, 11)
-        self.assertAlmostEqual(cfg.residnorm_decrease_threshold, 5.5)
+        self.assertAlmostEqual(cfg.subtraction_threshold, 5.5)
 
     def test_njobs_forwarded_to_dartsort_subtract(self):
         """Forward worker counts through the current DARTsort computation config."""

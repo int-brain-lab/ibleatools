@@ -224,13 +224,14 @@ class DartParameters(pydantic.BaseModel):
             ``ComputationConfig``. ``0`` runs in the main process; positive values
             select that many workers. Defaults to 0.
         detection_threshold (float): Peak detection threshold, in units of channel
-            RMS. Defaults to 4.0.
+            RMS. Passed to DARTsort as ``voltage_threshold``. Defaults to 4.0.
         spatial_dedup_radius_um (float): Radius in micrometres within which only the
             largest simultaneous peak is kept. Defaults to 150.0.
         positive_temporal_dedup_radius_samples (int): Samples around a trough in
             which positive peaks are suppressed. Defaults to 7.
         residnorm_decrease_threshold (float): Minimum residual-norm decrease for a
-            detected spike to be subtracted. Defaults to 3.162 (sqrt(10)).
+            detected spike to be subtracted. Passed to DARTsort as
+            ``subtraction_threshold``. Defaults to 3.162 (sqrt(10)).
     """
 
     localization_radius: pydantic.PositiveFloat = 150
@@ -1660,12 +1661,14 @@ def dart_subtraction_numpy(data, fs, geometry, params=None, scratch_dir=None, **
         # This is behaviour change from older version of dartsort
         # In the older version, there was gradual reduction of threshold.
         # Not it is a fixed threshold
-        detection_threshold=params.detection_threshold,  # sigma deviation
+        # sigma deviation; DARTsort >=0.5.25 name for detection_threshold
+        voltage_threshold=params.detection_threshold,
         realign_to_denoiser=False,
         relative_peak_radius_um=None,
         spatial_dedup_radius_um=params.spatial_dedup_radius_um,
         positive_temporal_dedup_radius_samples=params.positive_temporal_dedup_radius_samples,
-        residnorm_decrease_threshold=params.residnorm_decrease_threshold,
+        # DARTsort >=0.5.25 name for residnorm_decrease_threshold (applies as whiten=False)
+        subtraction_threshold=params.residnorm_decrease_threshold,
         trough_priority=None,
         whiten=False,
     )

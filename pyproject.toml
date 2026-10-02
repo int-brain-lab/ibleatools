@@ -24,7 +24,7 @@ dependencies = [
     # (wrong dist_chanel_from_peak arg, signed weights fed into the weighted spread
     # average) -- both used by #123's spatial_spread_um/slowness_s_per_m features below.
     "ibl-neuropixel>=1.13.0", # ibldsp, neuropixel, spikeglx
-    "lfpack>=0.2.0",          # data.py read_lfp_features() lazy import (LFPackReader)
+    "lfpack>=1.0.0",          # data.py read_lfp_features() lazy import (LFPackReader)
     "iblatlas",               # iblatlas.atlas/regions/genomics
     "xgboost>=3.0.1",         # regionclassifier (top-level import)
     "specparam==2.0.0rc3",    # features.lf() lazy import
@@ -49,18 +49,10 @@ lite = []
 # Full install: the base (lite) plus the spike/waveform-computation stack AND the
 # SDSC supercomputing-pipeline deps (luigi, iblscripts).
 full = [
-    # 0.5.24+: do_enforce_decrease is a Literal, not a bool. DARTsort installs
-    # dredge-ephys itself.
-    "dartsort==0.5.24",
-    # >=0.104.0 is incompatible with dartsort 0.5.24: private API renames
-    # (recording._recording_segments -> _segments,
-    # get_chunk_with_margin(channel_indices=...) -> last_dimension_indices) land
-    # somewhere between 0.104.0 and later 0.104.x commits, breaking
-    # dartsort.subtract(). Confirmed working: spikeinterface==0.104.9 (latest
-    # PyPI release as of 2026-09-18) + dartsort==0.5.24.
+    "dartsort>=0.5.25",
     "spikeinterface>=0.104.9",
     "hdbscan>=0.8.40",
-    "h5py==3.15.1", #Some dartsort error arises in the unit tests, if I don't fix this.
+    "h5py>=3.15.1", #Some dartsort error arises in the unit tests, if I don't fix this.
     "linear-operator>=0.6",
     "opt-einsum>=3.4.0",
     "luigi>=3.6.0",
