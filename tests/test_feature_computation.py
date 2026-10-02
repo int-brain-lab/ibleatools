@@ -12,7 +12,9 @@ from ephysatlas.feature_computation import (
     load_data_from_files,
     add_target_coordinates,
     compute_features_from_raw,
+    destripe_ap_lf,
 )
+from ephysatlas.features import csd
 
 import ephysatlas
 
@@ -402,6 +404,83 @@ class TestFeatureComputation(unittest.TestCase):
             self.assertIn("channel", result_df_lf.columns)
             # The function should automatically compute LF and CSD when only LF is provided
             # But to avoid long computation, we can just check that it runs without error
+
+    def test_destripe_ap_lf_skip_lf_destripe_returns_raw_lf_unchanged(self):
+        """skip_lf_destripe=True must bypass destripe_lfp entirely."""
+        rng = np.random.default_rng(0)
+        raw_lf = rng.standard_normal((4, 2500)).astype(np.float32)
+        geometry = {
+            "x": np.zeros(4),
+            "y": np.arange(4) * 20.0,
+            "sample_shift": np.zeros(4),
+            "shank": np.zeros(4),
+        }
+        _, des_lf = destripe_ap_lf(
+            None, raw_lf, fs_lf=250.0, geometry=geometry, skip_lf_destripe=True
+        )
+        self.assertIs(des_lf, raw_lf)
+
+    def test_destripe_ap_lf_default_still_destripes(self):
+        """skip_lf_destripe defaults to False, preserving today's behavior."""
+        rng = np.random.default_rng(0)
+        raw_lf = rng.standard_normal((4, 25000)).astype(np.float32)
+        geometry = {
+            "x": np.zeros(4),
+            "y": np.arange(4) * 20.0,
+            "sample_shift": np.zeros(4),
+            "shank": np.zeros(4),
+        }
+        _, des_lf = destripe_ap_lf(None, raw_lf, fs_lf=2500.0, geometry=geometry)
+        self.assertIsNot(des_lf, raw_lf)
+        self.assertEqual(des_lf.shape, raw_lf.shape)
+
+    def test_csd_decimate_one_does_not_crash(self):
+        """decimate=1 must be a passthrough, not a scipy.signal.decimate(q=1) call
+        (which raises: firwin's cutoff 1/q lands exactly on the Nyquist boundary)."""
+        rng = np.random.default_rng(0)
+        data = rng.standard_normal((4, 3000)).astype(np.float32)
+        geometry = {
+            "x": np.zeros(4),
+            "y": np.arange(4) * 20.0,
+            "sample_shift": np.zeros(4),
+            "shank": np.zeros(4),
+            "col": np.zeros(4, dtype=int),
+            "row": np.arange(4),
+        }
+        df = csd(data, 250.0, geometry, decimate=1, denoise=False)
+        self.assertIn("rms_lf_csd", df.columns)
+
+    def test_csd_denoise_false_changes_output_vs_denoise_true(self):
+        """denoise=False must skip the internal cadzow_denoiser re-pass."""
+        rng = np.random.default_rng(0)
+        data = rng.standard_normal((4, 3000)).astype(np.float32)
+        geometry = {
+            "x": np.zeros(4),
+            "y": np.arange(4) * 20.0,
+            "sample_shift": np.zeros(4),
+            "shank": np.zeros(4),
+            "col": np.zeros(4, dtype=int),
+            "row": np.arange(4),
+        }
+        df_denoised = csd(data, 250.0, geometry, decimate=1, denoise=True)
+        df_bypassed = csd(data, 250.0, geometry, decimate=1, denoise=False)
+        self.assertFalse(df_denoised.equals(df_bypassed))
+
+    def test_csd_default_denoise_reproduces_today_behavior(self):
+        """denoise defaults to True, unchanged from before this parameter existed."""
+        rng = np.random.default_rng(0)
+        data = rng.standard_normal((4, 25000)).astype(np.float32)
+        geometry = {
+            "x": np.zeros(4),
+            "y": np.arange(4) * 20.0,
+            "sample_shift": np.zeros(4),
+            "shank": np.zeros(4),
+            "col": np.zeros(4, dtype=int),
+            "row": np.arange(4),
+        }
+        df_default = csd(data, 2500.0, geometry)
+        df_explicit_true = csd(data, 2500.0, geometry, denoise=True)
+        pd.testing.assert_frame_equal(df_default, df_explicit_true)
 
 
 if __name__ == "__main__":
