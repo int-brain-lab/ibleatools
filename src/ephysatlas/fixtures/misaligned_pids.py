@@ -2,7 +2,7 @@
 
 Source: the IBL alignment and data revision sheet (2026-10-07). Every insertion of that sheet
 whose curation status is not "Validated - Unchanged" or "Validated - New upload" (to do, dev to
-look, labelled CRITICAL, or no status) is listed here (295 insertions). Insertions validated
+look, labelled CRITICAL, or no status) is listed here (294 insertions). Insertions validated
 with a new upload are kept, with the positions of their new alignment.
 """
 
@@ -301,5 +301,4 @@ misaligned_pids = [
     "fe380793-8035-414e-b000-09bfe5ece92a",
     "ff5fceaf-8247-42ab-a187-f7876441899d",
     "ffb1b072-2de7-44a4-8115-5799b9866382",
-    "nan",
 ]
