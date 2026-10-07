@@ -184,8 +184,71 @@ class TestPreparedDataFreshness(unittest.TestCase):
         self.assertTrue(self._rebuilt(legacy))
 
 
-if __name__ == "__main__":
-    unittest.main()
+class TestMultichannelWaveformCache(unittest.TestCase):
+    """The multichannel waveform cache is reused only for the units it was extracted for."""
+
+    def setUp(self):
+        import pandas as pd
+
+        self.tmp = Path(tempfile.mkdtemp())
+        self.agg = self.tmp / "cells_aggregates"
+        self.agg.mkdir()
+        rows = [
+            {"pid": "p0", "cluster_id": u, "abs_channel": c}
+            for u in range(3)
+            for c in range(20)
+        ]
+        pd.DataFrame(rows).to_parquet(self.agg / "waveforms.table.pqt")
+        voltage = np.random.default_rng(0).normal(size=(60, 128)).astype(np.float32)
+        np.save(self.agg / "waveforms.voltage.npy", voltage)
+        self.cache = self.tmp / "prepared" / "waveforms_good_multichannel_C20.npy"
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _extract(self, clusters):
+        import pandas as pd
+
+        from ephysatlas.unit_level_encoder.prepare_data import (
+            _build_multichannel_waveform_cache,
+        )
+
+        df_good = pd.DataFrame({"pid": ["p0"] * len(clusters), "cluster_id": clusters})
+        return _build_multichannel_waveform_cache(
+            cells_agg_path=self.agg,
+            df_good=df_good,
+            pid_col="pid",
+            target_channels=20,
+            cache_path=self.cache,
+        )
+
+    def test_cache_of_the_same_units_is_reused(self):
+        first, _, _ = self._extract([0, 1, 2])
+        again, _, info = self._extract([0, 1, 2])
+        self.assertTrue(info.get("loaded_existing_cache"))
+        np.testing.assert_array_equal(again, first)
+
+    def test_cache_serves_a_subset_of_its_units(self):
+        # Fewer units, e.g. after more insertions were excluded, in another order.
+        first, _, _ = self._extract([0, 1, 2])
+        waveforms, keep, info = self._extract([2, 0])
+        self.assertTrue(info.get("subset_of_cache"))
+        self.assertTrue(keep.all())
+        np.testing.assert_array_equal(waveforms, first[[2, 0]])
+
+    def test_cache_without_the_requested_units_is_extracted_again(self):
+        self._extract([0, 1])
+        waveforms, keep, info = self._extract([0, 2])
+        self.assertFalse(info.get("loaded_existing_cache", False))
+        self.assertEqual(waveforms.shape[0], 2)
+        self.assertTrue(keep.all())
+
+    def test_cache_without_a_unit_record_is_extracted_again(self):
+        # Extracted before the cache recorded its units: their identity is unknown.
+        self._extract([0, 1, 2])
+        self.cache.with_name(self.cache.stem + "_unit_keys.npy").unlink()
+        _, _, info = self._extract([0, 1, 2])
+        self.assertFalse(info.get("loaded_existing_cache", False))
 
 
 class TestModelSpaceFeatureCache(unittest.TestCase):
@@ -231,3 +294,7 @@ class TestModelSpaceFeatureCache(unittest.TestCase):
         # Recomputing needs the channel positions, which this data lacks.
         with self.assertRaisesRegex(RuntimeError, "channel positions"):
             model_space_waveform_features(self._data(["a", "b"]), self.cfg)
+
+
+if __name__ == "__main__":
+    unittest.main()

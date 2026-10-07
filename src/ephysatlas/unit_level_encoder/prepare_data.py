@@ -152,11 +152,29 @@ def _build_multichannel_waveform_cache(
     """
     Extract multi-channel waveforms for df_good rows and cache them.
 
+    The cache records the units it was extracted for (``<cache>_unit_keys.npy``) and serves any
+    subset of them (for example after more insertions were excluded), in the order of df_good;
+    units it does not hold (or a cache without a unit record) make it extract again.
+
     Returns:
         waveforms_good: [N_kept, target_channels, 128]
         keep_mask:      [len(df_good)] True for units with waveform rows
         info:           diagnostics for manifest
     """
+    unit_keys = _make_unit_keys(
+        df_good[pid_col].to_numpy(), _cluster_ids_from_df(df_good)
+    ).astype(str)
+    keys_path = cache_path.with_name(cache_path.stem + "_unit_keys.npy")
+    if cache_path.exists() and not overwrite_cache:
+        cached_keys = (
+            np.load(keys_path, allow_pickle=False) if keys_path.exists() else None
+        )
+        if cached_keys is None or not np.isin(unit_keys, cached_keys).all():
+            print(
+                f"The cached multichannel waveforms {cache_path} were extracted for other "
+                "units; extracting them again."
+            )
+            overwrite_cache = True
     if cache_path.exists() and not overwrite_cache:
         print(f"Using cached multichannel waveform file: {cache_path}")
         waveforms_cached = np.load(cache_path, allow_pickle=False)
@@ -182,10 +200,19 @@ def _build_multichannel_waveform_cache(
                 f"but waveforms.shape[0]={waveforms_cached.shape[0]}. "
                 "Delete the waveform cache or rerun with overwrite_multichannel_cache=True."
             )
+        keep_mask = keep_mask.astype(bool)
+        if not np.array_equal(cached_keys, unit_keys):
+            # The cache holds more units than requested: take the rows of the requested ones.
+            cached_rows = cached_keys[keep_mask]
+            row_of = pd.Series(np.arange(len(cached_rows)), index=cached_rows)
+            keep_mask = np.isin(unit_keys, cached_rows)
+            waveforms_cached = waveforms_cached[row_of.loc[unit_keys[keep_mask]].to_numpy()]
+            info["subset_of_cache"] = True
+            print(f"  {int(keep_mask.sum()):,} of its {len(cached_rows):,} units")
 
         return (
             waveforms_cached.astype(np.float32, copy=False),
-            keep_mask.astype(bool),
+            keep_mask,
             info,
         )
 
@@ -271,6 +298,7 @@ def _build_multichannel_waveform_cache(
         raise RuntimeError("No good units had matching rows in waveforms.table.pqt.")
 
     waveforms_good = np.stack(extracted, axis=0).astype(np.float32)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
     waveform_scales = None
     if normalize_max_abs:
         waveforms_good, waveform_scales = _normalize_waveforms_max_abs(waveforms_good)
@@ -280,11 +308,11 @@ def _build_multichannel_waveform_cache(
             allow_pickle=False,
         )
 
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
     np.save(cache_path, waveforms_good, allow_pickle=False)
 
     keep_mask_path = cache_path.with_name(cache_path.stem + "_keep_mask.npy")
     np.save(keep_mask_path, keep_mask, allow_pickle=False)
+    np.save(keys_path, unit_keys, allow_pickle=False)
 
     info = {
         "cache_path": str(cache_path),
