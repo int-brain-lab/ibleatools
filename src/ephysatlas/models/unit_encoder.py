@@ -3,7 +3,7 @@
 The unit-level model describes the spike-sorted units (neurons) found at a brain location:
 
 1. a multimodal autoencoder (:class:`UnitAutoencoder`) embeds a unit's multi-channel waveform,
-   3D autocorrelogram and spike-triggered population coupling into a joint latent -- the unit's
+   3D autocorrelogram and population coupling into a joint latent -- the unit's
    phenotype -- which a train-only scaler standardizes;
 2. a full-covariance Gaussian mixture over the standardized latents, whose components read as
    *putative cell types*, has global component geometry and mixture weights conditioned on the
@@ -433,8 +433,8 @@ class UnitEncoder:
                 prepared for training (``waveform_shape`` in the config).
             acg (np.ndarray, optional): ``[N, n_bins, n_lags]`` 3D autocorrelograms; required
                 when the model uses the ACG modality.
-            stpc (np.ndarray, optional): ``[N, n_lags]`` spike-triggered population coupling;
-                required when the model uses the stPC modality.
+            stpc (np.ndarray, optional): ``[N, n_lags]`` population coupling;
+                required when the model uses the population-coupling (stPC) modality.
             standardize (bool, optional): Apply the released latent scaler (the space the GMM
                 and the kNN bank live in). Defaults to True.
             batch_size (int, optional): Units per forward pass.

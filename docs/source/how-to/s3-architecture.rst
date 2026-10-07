@@ -39,7 +39,7 @@ Folder Layout
         │   ├── clusters.acgs_log.npy            log-binned ACGs, normalised  (n_clusters × 128) float16
         │   ├── acgs_log.times.npy               ACG bin centres in seconds   (128,) float64
         │   ├── clusters.waveforms_peak.npy      peak-channel waveform        (n_clusters × 128) float16
-        │   ├── clusters_good.stpc.npy           spike-triggered population coupling  (n_good × 1000) float16
+        │   ├── clusters_good.stpc.npy           population coupling                  (n_good × 1000) float16
         │   ├── clusters_good.stlfp.npy          spike-triggered LFP                  (n_good × 250)  float16
         │   ├── waveforms.voltage.npy            neighbourhood traces (~8 GB)         (n_traces × 128) float16
         │   └── waveforms.table.pqt              pid/cluster_id/abs_channel index     (n_traces × 3)

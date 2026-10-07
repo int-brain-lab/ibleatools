@@ -576,7 +576,7 @@ def produce_output_dataframes(
 
     This function serves as the main entry point for processing electrophysiological data from multiple
     probes. It coordinates the entire pipeline: aggregating channel metadata, processing raw features,
-    applying denoising, and remapping waveform spike features to the sparse ModelSpikeShapeFeatures schema.
+    applying denoising, and remapping waveform features to the sparse ModelSpikeShapeFeatures schema.
     The function handles both the data processing and optional file output.
 
     Args:
@@ -590,7 +590,7 @@ def produce_output_dataframes(
             - 'snippets_df.pqt': Input snippets DataFrame
             - 'channels.pqt': Aggregated channel metadata
             - 'raw_ephys_features.pqt': Aggregated raw features
-            - 'raw_ephys_features_denoised.pqt': Denoised features with remapped waveform spike features
+            - 'raw_ephys_features_denoised.pqt': Denoised features with remapped waveform features
             The directory is created if it does not exist. Default is None (no files are written).
 
     Returns:

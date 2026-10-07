@@ -3,7 +3,7 @@ Load Cells Features
 
 This guide covers downloading and loading the **cells-level feature aggregates**
 across all IBL insertions: cell tables, log-binned ACGs, peak-channel waveforms,
-spike-triggered population coupling (stPC), and spike-triggered LFP (stLFP).
+population coupling (stPC), and spike-triggered LFP (stLFP).
 
 S3 Layout
 ---------
@@ -20,7 +20,7 @@ S3 Layout
         ├── clusters.acgs_log.npy                 log-binned ACGs, normalised by spike_count    (n_cells × 128) float16
         ├── acgs_log.times.npy                    ACG bin centres in seconds                    (128,) float64
         ├── clusters.waveforms_peak.npy           peak-channel waveform per cell                (n_cells × 128) float16
-        ├── clusters_good.stpc.npy                spike-triggered population coupling           (n_good × 1000)    float16
+        ├── clusters_good.stpc.npy                population coupling                           (n_good × 1000)    float16
         ├── clusters_good.stlfp.npy               spike-triggered LFP                           (n_good × 250)     float16
         ├── clusters.acgs_3d.npy                  firing-rate-decile x log-time-lag 3D ACG (~3.5 GB) (n_cells × 10 × 201) float16
         ├── acgs_3d.times.npy                     3D ACG log-time bin centres, ms                (201,) float64
