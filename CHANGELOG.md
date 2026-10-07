@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Changed
-- `ephysatlas.fixtures.misaligned_pids` follows the IBL alignment and data revision of 2026-10-07: the 295 insertions whose curation status is not "Validated - Unchanged" or "Validated - New upload" (previously 261 insertions; 20 of those were validated and leave the list, 23 are no longer flagged, 77 are added)
+- `ephysatlas.fixtures.misaligned_pids` follows the IBL alignment and data revision of 2026-10-07: the 294 insertions whose curation status is not "Validated - Unchanged" or "Validated - New upload" (previously 261 insertions; 20 of those were validated and leave the list, 23 are no longer flagged, 76 are added)
 - `ephysatlas.data.download_tables` uses a locally derived feature release as it is (a folder holding its tables and a `refresh_manifest.json`, e.g. a release whose channel and unit positions were refreshed from the current Alyx alignments) instead of looking for it on S3
 
 ### Fixed
