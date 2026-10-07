@@ -5,6 +5,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+- `ephysatlas.fixtures.misaligned_pids` follows the IBL alignment and data revision of 2026-10-07: the 295 insertions whose curation status is not "Validated - Unchanged" or "Validated - New upload" (previously 261 insertions; 20 of those were validated and leave the list, 23 are no longer flagged, 77 are added)
+- `ephysatlas.data.download_tables` uses a locally derived feature release as it is (a folder holding its tables and a `refresh_manifest.json`, e.g. a release whose channel and unit positions were refreshed from the current Alyx alignments) instead of looking for it on S3
+
+### Fixed
+- The histology alignment with units (`histology_unit`, `UnitModel.load`, `scripts/run_alignment_heldout.py`) no longer needs a hand-made `unit_local_axial_um_np1_geometry_v2.npy`: data preparation writes each unit's sorter cluster id (`cluster_ids.npy`) and probe-local axial position (`unit_axial_um.npy`, cluster table `axial_um`) from the same rows as the other unit arrays, `UnitData` carries them (`cluster_ids`, `axial_um`), and prepared data without them are re-prepared. A file written in another unit order can no longer give a wrong unit cost silently
+
 ### Added
 - The unit-level interpolation model (`ephysatlas.unit_level_encoder`): waveform + 3D ACG + stPC modality autoencoders concatenated into a 60-D latent (`UnitAutoencoder`), a K=25 full-covariance Gaussian mixture over the standardised latents whose mixture weights are conditioned on the molecular context (MERFISH + AGEA PCA) at the unit's position, and a k=20 distance-weighted nearest-neighbour projection onto training units that maps latents to waveform features. Data preparation (`prepare_data`), training (`train_unit_model`) and loading (`load_unit_model`, from the Hub, a local release or a training directory) live in the package; the frozen context volumes and the probe split are taken from the channel-level release of the same vintage
 - `UnitEncoder` (`ephysatlas.models.unit_encoder`) serves a published unit-level model through `load_pretrained`: `.predict(df)` maps positions (`x, y, z`) to the expected phenotype (`pred_<feature>` columns, the local mixture weights times each component's expected features), `.mixture_weights(df)` returns the putative cell-type composition, `.encode()`, `.assign()`, `.components()`, `.expected_features()`, `.split()`, `.preprocessing_stats()`, `.bundle(data)` and `.selftest()` (positions -> predictions and synthetic units -> latents golden files)
