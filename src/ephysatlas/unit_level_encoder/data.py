@@ -26,6 +26,9 @@ class UnitData:
     split: np.ndarray  # 0 train, 1 validation, 2 test
     # Probe position (x, y, um) of each waveform channel, [N, C, 2]; NaN for padding channels.
     channel_xy_um: Optional[np.ndarray] = None
+    # Spike-sorter cluster id and probe-local axial position (um from the tip) of each unit.
+    cluster_ids: Optional[np.ndarray] = None
+    axial_um: Optional[np.ndarray] = None
 
 
 @dataclass
@@ -173,6 +176,8 @@ def load_prepared_data(
         "waveform_features.npy",
         "waveform_feature_names.json",
         "waveform_channel_xy_um.npy",
+        "cluster_ids.npy",
+        "unit_axial_um.npy",
     ]
     if cfg.use_acg:
         required.append("acgs.npy")
@@ -192,6 +197,13 @@ def load_prepared_data(
     allen = np.load(data_dir / "allen.npy").astype(np.int64)
     features = np.load(data_dir / "waveform_features.npy").astype(np.float32)
     channel_xy = np.load(data_dir / "waveform_channel_xy_um.npy").astype(np.float32)
+    cluster_ids = np.load(data_dir / "cluster_ids.npy").astype(np.int64)
+    axial_um = np.load(data_dir / "unit_axial_um.npy").astype(np.float32)
+    if not (len(cluster_ids) == len(axial_um) == len(pids)):
+        raise ValueError(
+            f"Prepared arrays in {data_dir} describe different units: {len(pids)} pids, "
+            f"{len(cluster_ids)} cluster ids, {len(axial_um)} axial positions; re-prepare the data."
+        )
     feature_names = json.loads(
         (data_dir / "waveform_feature_names.json").read_text(encoding="utf-8")
     )
@@ -227,6 +239,8 @@ def load_prepared_data(
         waveform_feature_names=feature_names,
         split=split,
         channel_xy_um=channel_xy,
+        cluster_ids=cluster_ids,
+        axial_um=axial_um,
     )
     assert_probe_disjoint(data)
     return data

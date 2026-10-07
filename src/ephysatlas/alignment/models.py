@@ -166,8 +166,9 @@ class UnitModel:
     """The released unit-level model over the prepared unit dataset (offline runs only).
 
     ``z_scaled`` are the standardised 60-d latents of every prepared unit, ``pids`` their
-    insertion and ``axial_um`` their physical NP1 axial position (µm from the tip) from the spike
-    sorter -- never the human alignment.
+    insertion and ``axial_um`` their physical axial position on the probe (µm from the tip) from
+    the spike sorter -- never the human alignment. All three come from the same prepared unit
+    arrays (:func:`ephysatlas.unit_level_encoder.prepare_unit_data`), so their order agrees.
     """
 
     bundle: object
@@ -183,7 +184,11 @@ class UnitModel:
         device: Optional[str] = None,
         prepared_data_dir: Optional[Path] = None,
     ) -> "UnitModel":
-        """Load the release and its prepared unit data (prepared from IBL S3 when missing)."""
+        """Load the release and its prepared unit data (prepared from IBL S3 when missing).
+
+        The prepared data hold each unit's sorter-local axial position (``unit_axial_um.npy``,
+        written with the other unit arrays); data prepared before it existed are re-prepared.
+        """
         from ephysatlas.unit_level_encoder import Config, load_unit_model
 
         cfg = Config(vintage=revision, device=device or default_device())
@@ -193,17 +198,13 @@ class UnitModel:
             bundle = load_unit_model(cfg, source="release", release_dir=repo_id)
         else:
             bundle = load_unit_model(cfg, source="hub", repo_id=repo_id, revision=revision)
-        depth_path = Path(bundle.cfg.prepared_data_dir) / "unit_local_axial_um_np1_geometry_v2.npy"
-        if not depth_path.exists():
-            raise FileNotFoundError(
-                f"{depth_path} is missing: the unit cost needs each unit's sorter-local axial "
-                "position (cluster table axial_um)."
-            )
-        axial = np.load(depth_path).astype(float)
-        if len(axial) != len(bundle.data.pids):
+        axial = bundle.data.axial_um
+        if axial is None or len(axial) != len(bundle.data.pids):
             raise ValueError(
-                f"{depth_path.name} describes {len(axial)} units, the prepared data {len(bundle.data.pids)}"
+                f"the prepared unit data in {bundle.cfg.prepared_data_dir} have no per-unit axial "
+                "positions aligned with the units; re-prepare them (Config.force_reprepare_data)."
             )
+        axial = np.asarray(axial, dtype=float)
         return cls(
             bundle=bundle,
             z_scaled=np.asarray(bundle.z_scaled, dtype=np.float32),

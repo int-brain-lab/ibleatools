@@ -1135,6 +1135,19 @@ def prepare_latest_cells_encoder_data(
     np.save(out_dir / "ctx.npy", ctx.astype(np.float32), allow_pickle=False)
     np.save(out_dir / "xyz.npy", xyz_m.astype(np.float32), allow_pickle=False)
     np.save(out_dir / "pids.npy", pids.astype(object), allow_pickle=True)
+    # Sorter identity and probe-local axial position (um from the tip, physical channel map; never
+    # the histology alignment) of every unit, written from the same rows as the arrays above so
+    # that the unit order cannot drift; the unit cost of the histology alignment uses them.
+    np.save(
+        out_dir / "cluster_ids.npy",
+        pd.to_numeric(pd.Series(_cluster_ids_from_df(df_good))).to_numpy(np.int64),
+        allow_pickle=False,
+    )
+    np.save(
+        out_dir / "unit_axial_um.npy",
+        pd.to_numeric(df_good["axial_um"]).to_numpy(np.float32),
+        allow_pickle=False,
+    )
     np.save(out_dir / "cosmos.npy", cosmos_ids.astype(np.int64), allow_pickle=False)
     np.save(out_dir / "allen.npy", atlas_ids.astype(np.int64), allow_pickle=False)
 

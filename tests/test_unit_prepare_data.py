@@ -103,6 +103,8 @@ class TestPreparedDataFreshness(unittest.TestCase):
         "cosmos.npy",
         "allen.npy",
         "waveform_features.npy",
+        "cluster_ids.npy",
+        "unit_axial_um.npy",
     )
 
     def setUp(self):
@@ -162,6 +164,11 @@ class TestPreparedDataFreshness(unittest.TestCase):
 
     def test_data_sampled_from_the_release_volumes_is_reused(self):
         self.assertFalse(self._rebuilt(self.manifest))
+
+    def test_data_without_unit_axial_positions_is_rebuilt(self):
+        # Prepared before the unit cost's axial positions were written with the unit arrays.
+        self.cfg.prepared_data_dir.joinpath("unit_axial_um.npy").unlink()
+        self.assertTrue(self._rebuilt(self.manifest))
 
     def test_data_sampled_from_other_volumes_is_rebuilt(self):
         stale = {**self.manifest, "context_volumes_sha1": {"agea_vol_pca.npy": "0"}}

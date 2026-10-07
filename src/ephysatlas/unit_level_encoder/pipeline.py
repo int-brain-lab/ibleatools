@@ -81,6 +81,8 @@ def prepare_unit_data(cfg: Config, split_manifest: dict | None = None):
         "waveform_features.npy",
         "waveform_feature_names.json",
         "waveform_channel_xy_um.npy",
+        "cluster_ids.npy",
+        "unit_axial_um.npy",
         "latest_cells_encoder_manifest.json",
     ]
     have_all = all((data_dir / name).exists() for name in required)
