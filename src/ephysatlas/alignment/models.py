@@ -18,7 +18,7 @@ import numpy as np
 
 CHANNEL_MODEL_REPO_ID = "int-brain-lab/ea-encoder-channel"
 UNIT_MODEL_REPO_ID = "int-brain-lab/ea-encoder-unit"
-VINTAGE = "2026_W39"
+VINTAGE = "2026_W41"
 
 
 def default_device() -> str:

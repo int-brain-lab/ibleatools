@@ -31,7 +31,7 @@ class Config:
 
     seed: int = 0
     project: str = "ibl_neuropixel_brainwide_01"
-    vintage: str = "2026_W39"
+    vintage: str = "2026_W41"
     # Published channel-level model (repo id or local release directory) that provides the frozen
     # MERFISH/AGEA context volumes and the authoritative probe split for ``vintage``.
     channel_model: str = CHANNEL_MODEL_REPO_ID

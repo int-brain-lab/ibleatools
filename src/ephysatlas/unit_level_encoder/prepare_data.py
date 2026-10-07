@@ -738,7 +738,7 @@ def prepare_latest_cells_encoder_data(
     use_stpc: bool = True,
     stpc_window_ms: float = 80.0,
     channel_model: str | Path = CHANNEL_MODEL_REPO_ID,
-    context_vintage: str = "2026_W39",
+    context_vintage: str = "2026_W41",
     n_cell_pcs: int = 50,
     n_gene_pcs: int = 50,
     mirror_x_to_single_hemisphere: bool = True,
@@ -1388,7 +1388,7 @@ if __name__ == "__main__":
         default=CHANNEL_MODEL_REPO_ID,
         help="channel-level release (HF repo id or local directory) providing the context volumes",
     )
-    parser.add_argument("--context-vintage", type=str, default="2026_W39")
+    parser.add_argument("--context-vintage", type=str, default="2026_W41")
     parser.add_argument("--n-cell-pcs", type=int, default=50)
     parser.add_argument("--n-gene-pcs", type=int, default=50)
     parser.add_argument("--no-mirror-x", action="store_true")
