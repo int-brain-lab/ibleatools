@@ -350,6 +350,9 @@ class TestDartsortAdapter(unittest.TestCase):
         self.assertEqual(cfg.spatial_dedup_radius_um, 90.0)
         self.assertEqual(cfg.positive_temporal_dedup_radius_samples, 11)
         self.assertAlmostEqual(cfg.subtraction_threshold, 5.5)
+        # DARTsort 0.5.31 changed the default proposal to "tpca", which ignores
+        # voltage_threshold after the fit pass; detection must stay voltage-based.
+        self.assertEqual(cfg.detection_proposal, "voltage")
 
     def test_njobs_forwarded_to_dartsort_subtract(self):
         """Forward worker counts through the current DARTsort computation config."""
