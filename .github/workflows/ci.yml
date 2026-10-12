@@ -13,8 +13,8 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        # DARTsort v0.5.22 requires Python >=3.11.
-        python-version: ["3.11"]
+        # DARTsort >=0.5.29 requires Python >=3.12.
+        python-version: ["3.12"]
     steps:
       - uses: actions/checkout@v4
       
