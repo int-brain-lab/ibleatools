@@ -240,7 +240,7 @@ class DartParameters(pydantic.BaseModel):
     detection_threshold: pydantic.PositiveFloat = 4.0
     spatial_dedup_radius_um: pydantic.PositiveFloat = 150.0
     positive_temporal_dedup_radius_samples: pydantic.PositiveInt = 7
-    residnorm_decrease_threshold: pydantic.PositiveFloat = 3.162
+    residnorm_decrease_threshold: pydantic.PositiveFloat = 9# Set this as 9.
     scratch_dir: Path | str | None = pydantic.Field(
         default=None,
         description="Scratch directory for temporary files. If None, will use system defaults.",
@@ -1632,9 +1632,6 @@ def dart_subtraction_numpy(data, fs, geometry, params=None, scratch_dir=None, **
         do_enforce_decrease="yes",
         save_input_voltages=False,
         extract_radius=params.localization_radius,
-        localization_radius=params.localization_radius,
-        tpca_fit_radius=params.localization_radius,
-        tpca_centered=True,
         tpca_from_templates=False,
         **legacy_denoiser,
     )
@@ -1664,10 +1661,13 @@ def dart_subtraction_numpy(data, fs, geometry, params=None, scratch_dir=None, **
         save_input_voltages=False,
         save_output_waveforms=True,  # save final nn denoised waveforms
         save_input_waveforms=True,  # save collision-cleaned, but not NN-denoised, waveforms
+        # Skip the input TemporalPCA step: it replaces the collision-cleaned waveforms
+        # by their rank-8 reconstruction before the NN denoiser, only to save
+        # collisioncleaned_tpca_features, which ibleatools never reads.
+        save_input_tpca_projs=False,
         extract_radius=params.localization_radius,
         localization_radius=params.localization_radius,
         tpca_fit_radius=params.localization_radius,
-        tpca_centered=True,
         tpca_from_templates=False,
         # A shorter TPCA window changes the output waveform length in DARTsort
         # 0.5, so use the extraction window for both saved waveform datasets.

@@ -351,6 +351,37 @@ class TestDartsortAdapter(unittest.TestCase):
         self.assertEqual(cfg.positive_temporal_dedup_radius_samples, 11)
         self.assertAlmostEqual(cfg.subtraction_threshold, 5.5)
 
+    def test_input_tpca_step_disabled_in_featurization(self):
+        """The final featurization must not run the input TemporalPCA autoencoder.
+
+        With ``save_input_tpca_projs=True`` (DARTsort default) a TemporalPCA step
+        replaces the collision-cleaned waveforms by their rank-8 reconstruction
+        before the NN denoiser, only to save TPCA features ibleatools never reads.
+        """
+        import dartsort
+
+        captured = {}
+
+        def fake_subtract(**kwargs):
+            captured.update(kwargs)
+            raise RuntimeError("__stop__")
+
+        data = np.random.RandomState(0).randn(4, 300).astype("float32")
+        geometry = {
+            "x": np.array([0.0, 32.0, 0.0, 32.0]),
+            "y": np.array([0.0, 0.0, 20.0, 20.0]),
+        }
+        with tempfile.TemporaryDirectory(prefix="dart_no_tpca_") as scratch:
+            with patch.object(dartsort, "subtract", fake_subtract):
+                with self.assertRaisesRegex(RuntimeError, "__stop__"):
+                    features.dart_subtraction_numpy(
+                        data, 30000.0, geometry, scratch_dir=scratch
+                    )
+
+        cfg = captured["featurization_cfg"]
+        self.assertFalse(cfg.save_input_tpca_projs)
+        self.assertFalse(cfg.compute_input_tpca_projs_regardless)
+
     def test_njobs_forwarded_to_dartsort_subtract(self):
         """Forward worker counts through the current DARTsort computation config."""
         # DartParameters.n_jobs must reach dartsort.subtract (previously the passed
