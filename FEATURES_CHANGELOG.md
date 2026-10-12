@@ -13,6 +13,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Per-channel standard deviations of the two features above (#127): `spatial_spread_um_std` and `slowness_s_per_m_std`, the spread of the per-spike values across the spikes detected on a channel, alongside the existing means. A large `slowness_s_per_m_std` next to a near-zero `slowness_s_per_m`, for instance, marks a channel whose mean is averaging over opposite-signed fits rather than one with genuinely simultaneous arrival. Sample standard deviation (ddof=1), computed over the spikes that have a usable value; nullable like the means, and NaN wherever fewer than two spikes on the channel qualify.
 
 ### Modified
+- `*_csd_diff1` features renamed to `*_bpr` (bipolar referencing, first spatial difference of the LFP, A/m**2)
+- CSD and BPR features: Cadzow denoising with the ibl-neuropixel 1.14 LFP defaults (Gavish-Donoho shrinkage, full grid for NP1), removing the seams at the spatial window boundaries
 - Modified aggregation pipeline to replace NaN values with median after outlier treatment in `denoise_raw_features_data`
 
 ### Fixed

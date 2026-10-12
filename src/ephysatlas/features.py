@@ -465,8 +465,9 @@ class ModelCsdFeatures(BaseChannelFeatures):
     across different frequency bands.
 
     The `*_csd` columns derive from the second spatial difference of the LFP
-    (the CSD proper, A/m**3) and the `*_csd_diff1` columns from the first
-    spatial difference (a current density, A/m**2). Both are scaled by the
+    (the CSD proper, A/m**3) and the `*_bpr` columns from the first spatial
+    difference, i.e. bipolar referencing (BPR) between consecutive contacts of
+    a column (a current density, A/m**2). Both are scaled by the
     tissue conductivity and the intercontact distance in
     `ibldsp.voltage.current_source_density`. The units documented here assume
     the default `scale=True` of `csd`; with `scale=False` the values are the
@@ -522,9 +523,9 @@ class ModelCsdFeatures(BaseChannelFeatures):
         metadata={"raw_unit": "dB rel. (A/m**3)**2/Hz"},
     )
 
-    rms_lf_csd_diff1: Optional[float] = pa.Field(
+    rms_lf_bpr: Optional[float] = pa.Field(
         coerce=True,
-        description="Root mean square of Diff1 CSD signal in A/m**2. The value is transformed to dB using 20 * np.log10(x)",
+        description="Root mean square of the bipolar referenced (BPR) signal in A/m**2. The value is transformed to dB using 20 * np.log10(x)",
         metadata={
             "raw_unit": "A/m**2",
             "transformed_unit": "dB rel. A/m**2",
@@ -532,39 +533,39 @@ class ModelCsdFeatures(BaseChannelFeatures):
         },
     )
 
-    psd_delta_csd_diff1: Optional[float] = pa.Field(
+    psd_delta_bpr: Optional[float] = pa.Field(
         coerce=True,
-        description="Power in the band 0 - 4 Hz after Diff1 current source density estimation in decibels relative to (A/m**2) ** 2 / Hz",
+        description="Power in the band 0 - 4 Hz after bipolar referencing (BPR) in decibels relative to (A/m**2) ** 2 / Hz",
         metadata={"raw_unit": "dB rel. (A/m**2)**2/Hz"},
     )
 
-    psd_theta_csd_diff1: Optional[float] = pa.Field(
+    psd_theta_bpr: Optional[float] = pa.Field(
         coerce=True,
-        description="Power in the band 4 - 10 Hz after Diff1 current source density estimation in decibels relative to (A/m**2) ** 2 / Hz",
+        description="Power in the band 4 - 10 Hz after bipolar referencing (BPR) in decibels relative to (A/m**2) ** 2 / Hz",
         metadata={"raw_unit": "dB rel. (A/m**2)**2/Hz"},
     )
 
-    psd_alpha_csd_diff1: Optional[float] = pa.Field(
+    psd_alpha_bpr: Optional[float] = pa.Field(
         coerce=True,
-        description="Power in the band 8 - 12 Hz after Diff1 current source density estimation in decibels relative to (A/m**2) ** 2 / Hz",
+        description="Power in the band 8 - 12 Hz after bipolar referencing (BPR) in decibels relative to (A/m**2) ** 2 / Hz",
         metadata={"raw_unit": "dB rel. (A/m**2)**2/Hz"},
     )
 
-    psd_beta_csd_diff1: Optional[float] = pa.Field(
+    psd_beta_bpr: Optional[float] = pa.Field(
         coerce=True,
-        description="Power in the band 15 - 30 Hz after Diff1 current source density estimation in decibels relative to (A/m**2) ** 2 / Hz",
+        description="Power in the band 15 - 30 Hz after bipolar referencing (BPR) in decibels relative to (A/m**2) ** 2 / Hz",
         metadata={"raw_unit": "dB rel. (A/m**2)**2/Hz"},
     )
 
-    psd_gamma_csd_diff1: Optional[float] = pa.Field(
+    psd_gamma_bpr: Optional[float] = pa.Field(
         coerce=True,
-        description="Power in the band 30 - 90 Hz after Diff1 current source density estimation in decibels relative to (A/m**2) ** 2 / Hz",
+        description="Power in the band 30 - 90 Hz after bipolar referencing (BPR) in decibels relative to (A/m**2) ** 2 / Hz",
         metadata={"raw_unit": "dB rel. (A/m**2)**2/Hz"},
     )
 
-    psd_lfp_csd_diff1: Optional[float] = pa.Field(
+    psd_lfp_bpr: Optional[float] = pa.Field(
         coerce=True,
-        description="Power in the band 0 - 90 Hz after Diff1 current source density estimation in decibels relative to (A/m**2) ** 2 / Hz",
+        description="Power in the band 0 - 90 Hz after bipolar referencing (BPR) in decibels relative to (A/m**2) ** 2 / Hz",
         metadata={"raw_unit": "dB rel. (A/m**2)**2/Hz"},
     )
 
@@ -1438,16 +1439,63 @@ def lf(data, fs, bands=None, decay_features=True):
     return ModelLfFeatures.validate(df_lf)
 
 
-def csd(data, fs, geometry, bands=None, decimate=10, scale=True, denoise=True):
-    """Compute CSD features from a numpy array.
+def cadzow_lfp_kwargs(geometry, **kwargs):
+    """Cadzow parameters used to denoise the LFP before the CSD and BPR.
 
-    Computes the current source density (CSD) features from electrophysiological data
-    including RMS values and power spectral density across different frequency bands.
+    The defaults are the ibl-neuropixel LFP entry points' (>= 1.14), which remove the
+    CSD seams at the spatial window boundaries: Gavish-Donoho singular-value
+    shrinkage instead of a hard rank cut, and for checkerboard layouts (NP1) the
+    full lateral x depth grid. ``rank=5``, ``niter=1``, ``fmax=None``, ``nswx=64``,
+    ``ovx=32``, ``ppca_k=2.0`` and
+
+    - NP1 (checkerboard, empty grid positions): ``ibldsp.cadzow.LFP_KWARGS_NP1``,
+      ``fill_grid=True``, ``shrinkage=2.25``
+    - NP2 and any layout filling its grid: ``ibldsp.cadzow.LFP_KWARGS_NP2``,
+      ``fill_grid=False``, ``shrinkage=1.22``
+
+    The shrinkage scales are calibrated for ``nswx=64``, ``ovx=32``.
+
+    Parameters
+    ----------
+    geometry : dict
+        Probe header with keys ``'x'`` and ``'y'`` (channel coordinates [um]).
+    **kwargs
+        Overrides of the defaults, forwarded to ``ibldsp.cadzow.cadzow_denoiser``.
+
+    Returns
+    -------
+    dict
+        ``ibldsp.cadzow.cadzow_denoiser`` keyword arguments, fully explicit.
+    """
+    x, y = np.asarray(geometry["x"]), np.asarray(geometry["y"])
+    full_grid = np.unique(x).size * np.unique(y).size == x.size
+    defaults = (
+        ibldsp.cadzow.LFP_KWARGS_NP2 if full_grid else ibldsp.cadzow.LFP_KWARGS_NP1
+    )
+    return {"fill_grid": False, **defaults, **kwargs}
+
+
+def csd(
+    data,
+    fs,
+    geometry,
+    bands=None,
+    decimate=10,
+    scale=True,
+    denoise=True,
+    cadzow_kwargs=None,
+):
+    """Compute CSD and BPR features from a numpy array.
+
+    Computes the current source density (CSD, second spatial difference) and the
+    bipolar referencing (BPR, first spatial difference) features from
+    electrophysiological data, including RMS values and power spectral density
+    across different frequency bands.
 
     Args:
         data (np.ndarray): Data array with shape (channels, samples).
         fs (float): Sampling frequency in Hz.
-        geometry (dict): Dictionary with channel geometry containing 'x' and 'y' arrays.
+        geometry (dict): Dictionary with channel geometry containing 'x', 'y', 'col' and 'row' arrays.
         bands (dict, optional): Dictionary with frequency bands to compute.
             Defaults to BANDS constant.
         decimate (int, optional): Decimation factor for CSD calculation.
@@ -1460,20 +1508,18 @@ def csd(data, fs, geometry, bands=None, decimate=10, scale=True, denoise=True):
             finite difference by the intercontact distance and tissue conductivity;
             if False, return the raw numerical finite difference. Defaults to True.
         denoise (bool, optional): Apply ``ibldsp.cadzow.cadzow_denoiser`` to the
-            decimated data before the CSD finite difference. Defaults to
-            ``True`` (today's behavior). Set ``False`` when ``data`` has
-            already been Cadzow-denoised upstream (e.g. combined with
-            ``decimate=1`` for a source that is already at the target rate),
-            so it isn't denoised a second time on top of a lossy
+            decimated data before the finite differences. Defaults to ``True``.
+            Set ``False`` when ``data`` has already been Cadzow-denoised upstream
+            (e.g. combined with ``decimate=1`` for a source that is already at the
+            target rate), so it isn't denoised a second time on top of a lossy
             reconstruction.
+        cadzow_kwargs (dict, optional): Overrides of the Cadzow parameters, see
+            :func:`cadzow_lfp_kwargs` for the defaults. Ignored if ``denoise`` is False.
 
     Returns:
         pd.DataFrame: DataFrame with columns ['channel', 'rms_lf_csd', 'psd_delta_csd',
-            'psd_theta_csd', 'psd_alpha_csd', 'psd_beta_csd', 'psd_gamma_csd', 'psd_lfp_csd'].
-
-    Note:
-        The function applies Cadzow denoising and current source density computation
-        before computing the spectral features.
+            'psd_theta_csd', 'psd_alpha_csd', 'psd_beta_csd', 'psd_gamma_csd', 'psd_lfp_csd']
+            and the same with the ``_bpr`` suffix.
     """
     data_rs = (
         data
@@ -1483,40 +1529,32 @@ def csd(data, fs, geometry, bands=None, decimate=10, scale=True, denoise=True):
     if denoise:
         data_rs = ibldsp.cadzow.cadzow_denoiser(
             data_rs,
-            rank=5,
-            fs=fs / decimate,
-            niter=1,
-            fmax=125,
-            nswx=64,
-            ovx=32,
-            gap_threshold=2.0,
-            ppca_k=2.0,
             h=geometry,
+            fs=fs / decimate,
+            **cadzow_lfp_kwargs(geometry, **(cadzow_kwargs or {})),
         )
-    # Calculate the CSD features
-    data_rs_diff2 = ibldsp.voltage.current_source_density(
+    # CSD: second spatial difference
+    data_rs_csd = ibldsp.voltage.current_source_density(
         data_rs, h=geometry, n=2, scale=scale
     )
-    df_csd = lf(data_rs_diff2, fs / decimate, bands=bands, decay_features=False)
+    df_csd = lf(data_rs_csd, fs / decimate, bands=bands, decay_features=False)
     df_csd = df_csd.rename(
         columns={c: f"{c}_csd" for c in df_csd.columns if c not in ["channel"]}
     )
 
-    # Calculate the Diff1 CSD features.
-    data_rs_diff1 = ibldsp.voltage.current_source_density(
+    # BPR: bipolar referencing, first spatial difference
+    data_rs_bpr = ibldsp.voltage.current_source_density(
         data_rs, h=geometry, n=1, scale=scale
     )
-    df_csd_diff1 = lf(data_rs_diff1, fs / decimate, bands=bands, decay_features=False)
-    df_csd_diff1 = df_csd_diff1.rename(
-        columns={
-            c: f"{c}_csd_diff1" for c in df_csd_diff1.columns if c not in ["channel"]
-        }
+    df_bpr = lf(data_rs_bpr, fs / decimate, bands=bands, decay_features=False)
+    df_bpr = df_bpr.rename(
+        columns={c: f"{c}_bpr" for c in df_bpr.columns if c not in ["channel"]}
     )
-    assert df_csd_diff1["channel"].equals(df_csd["channel"]), (
+    assert df_bpr["channel"].equals(df_csd["channel"]), (
         "Channels are not perfectly aligned!"
     )
 
-    df_csd = pd.concat([df_csd, df_csd_diff1.drop(columns=["channel"])], axis=1)
+    df_csd = pd.concat([df_csd, df_bpr.drop(columns=["channel"])], axis=1)
     return ModelCsdFeatures.validate(df_csd)
 
 
