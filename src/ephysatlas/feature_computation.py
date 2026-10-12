@@ -1332,6 +1332,7 @@ def compute_features_from_destriped(
                 "decimate": csd_p.decimate,
                 "scale": csd_p.scale,
                 "denoise": getattr(csd_p, "denoise", True),
+                "cadzow_kwargs": getattr(csd_p, "cadzow_kwargs", None),
             }
         wf_p = getattr(feature_params, "waveforms", None)
         if wf_p is not None:

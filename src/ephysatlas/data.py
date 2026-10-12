@@ -514,6 +514,22 @@ def replace_nan(df_features, columns=None):
     return df_features
 
 
+# Feature columns renamed since tables were published: legacy name -> current name.
+# The first spatial difference of the LFP was `*_csd_diff1` before it became `*_bpr`.
+LEGACY_FEATURE_RENAMES = {
+    f"{c}_csd_diff1": f"{c}_bpr"
+    for c in [
+        "rms_lf",
+        "psd_delta",
+        "psd_theta",
+        "psd_alpha",
+        "psd_beta",
+        "psd_gamma",
+        "psd_lfp",
+    ]
+}
+
+
 def read_features_from_disk(
     path_features: Path,
     brain_atlas: "iblatlas.atlas.BrainAtlas" = None,
@@ -540,7 +556,8 @@ def read_features_from_disk(
 
     Returns:
         pd.DataFrame: DataFrame containing merged electrophysiology features with channel information
-            and brain region mappings.
+            and brain region mappings. Legacy column names are renamed to the current ones
+            (see `LEGACY_FEATURE_RENAMES`).
 
     Raises:
         AssertionError: If brain atlas is not provided or if unknown mappings are specified.
@@ -558,6 +575,7 @@ def read_features_from_disk(
         df_features = pd.read_parquet(path_features / "raw_ephys_features_denoised.pqt")
     else:  # load the raw features
         df_features = pd.read_parquet(path_features / "raw_ephys_features.pqt")
+    df_features = df_features.rename(columns=LEGACY_FEATURE_RENAMES)
     df_channels = pd.read_parquet(path_features / "channels.pqt")
     duplicate_cols = set(df_features.columns).intersection(set(df_channels.columns))
     df_channels = df_channels.drop(columns=duplicate_cols)

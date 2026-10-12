@@ -36,6 +36,34 @@ class TestLFPFeatures(unittest.TestCase):
             self.data_lf, fs=2500, geometry=neuropixel.trace_header(version=1)
         )
         self.assertTrue(df.shape[0] == self.data_lf.shape[0])
+        self.assertIn("rms_lf_bpr", df.columns)
+        self.assertFalse(any("diff1" in c for c in df.columns))
+
+    def test_cadzow_lfp_kwargs(self):
+        # NP1 checkerboard: full grid + shrinkage 2.25, NP2 fills its grid: shrinkage 1.22
+        kw1 = ephysatlas.features.cadzow_lfp_kwargs(neuropixel.trace_header(version=1))
+        self.assertEqual((kw1["fill_grid"], kw1["shrinkage"]), (True, 2.25))
+        kw2 = ephysatlas.features.cadzow_lfp_kwargs(neuropixel.trace_header(version=2))
+        self.assertEqual((kw2["fill_grid"], kw2["shrinkage"]), (False, 1.22))
+        for kw in (kw1, kw2):
+            self.assertEqual(
+                {k: kw[k] for k in ["rank", "niter", "fmax", "nswx", "ovx", "ppca_k"]},
+                dict(rank=5, niter=1, fmax=None, nswx=64, ovx=32, ppca_k=2.0),
+            )
+        # overrides win, e.g. the pre-1.14 hard rank cut
+        kw = ephysatlas.features.cadzow_lfp_kwargs(
+            neuropixel.trace_header(version=1), shrinkage=None, gap_threshold=2.0
+        )
+        self.assertEqual((kw["shrinkage"], kw["gap_threshold"]), (None, 2.0))
+
+    def test_legacy_feature_renames(self):
+        renames = ephysatlas.data.LEGACY_FEATURE_RENAMES
+        bpr_columns = [
+            c
+            for c in ephysatlas.features.ModelCsdFeatures.to_schema().columns
+            if c.endswith("_bpr")
+        ]
+        self.assertEqual(sorted(renames.values()), sorted(bpr_columns))
 
     def test_lf(self):
         df = ephysatlas.features.lf(self.data_lf, fs=2500)
