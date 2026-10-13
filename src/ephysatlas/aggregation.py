@@ -368,7 +368,11 @@ def get_aggregated_features_per_pid(snippet_df_per_pid: pd.DataFrame):
     if "distance_to_tip_um" in df_channels.columns:
         chan_cols.append("distance_to_tip_um")
     # channels.pqt calls the QC labels 'labels', downstream expects 'channel_labels'
-    if "labels" in df_channels.columns:
+    # agg_df_per_pid can already contain channel_labels column
+    if (
+        "labels" in df_channels.columns
+        and "channel_labels" not in agg_df_per_pid.columns
+    ):
         chan_cols.append("labels")
     agg_df_per_pid = agg_df_per_pid.merge(
         df_channels[chan_cols], on="channel", how="left"
