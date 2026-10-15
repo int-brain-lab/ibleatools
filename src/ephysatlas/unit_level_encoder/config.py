@@ -19,6 +19,9 @@ DEFAULT_RESULTS_DIR = _default_dir("EPHYS_ATLAS_RESULTS_DIR", "results")
 # Where the published models live on the Hugging Face Hub. The unit model reuses the channel
 # model's frozen context volumes and probe split for the same vintage.
 UNIT_MODEL_REPO_ID = "int-brain-lab/ea-encoder-unit"
+# Hub tag of the released unit-level model. It is trained on the units, probe split and context
+# volumes of ``Config.vintage``.
+UNIT_MODEL_REVISION = "2026_W42"
 CHANNEL_MODEL_REPO_ID = "int-brain-lab/ea-encoder-channel"
 
 # Paths are runtime settings, not part of the scientific configuration saved with a release.
@@ -27,7 +30,7 @@ PATH_FIELDS = ("data_dir", "prepared_data_dir", "model_dir", "output_dir")
 
 @dataclass
 class Config:
-    """Configuration of the released K=25 / context / kNN=20 unit model."""
+    """Configuration of the unit-level model: autoencoder, hierarchical mixture, context networks."""
 
     seed: int = 0
     project: str = "ibl_neuropixel_brainwide_01"
@@ -74,18 +77,21 @@ class Config:
     lambda_feature_continuous: float = 0.25
     lambda_feature_polarity: float = 0.10
 
-    # Final density model.
-    gmm_components: int = 25
-    gmm_covariance_type: str = "full"
+    # Density model: a full-covariance GMM of n_types putative cell types, and inside each type
+    # (its TRAIN units by most likely type) a full-covariance GMM of up to max_subtypes sub-types
+    # with at least min_units_per_subtype units each.
+    n_types: int = 30
+    max_subtypes: int = 10
+    min_units_per_subtype: int = 20
+    type_n_init: int = 1
+    subtype_n_init: int = 3
     gmm_reg_covar: float = 1e-4
-    gmm_n_init: int = 10
     gmm_max_iter: int = 500
-    gmm_min_component_fraction: float = 0.001
 
-    # Molecular context conditions only the mixture weights gamma_k(x).
+    # Molecular context conditions only the mixture weights: two context networks give the type
+    # weights gamma_k(x) and the within-type sub-type shares gamma_j|k(x).
     n_cell_pcs: int = 50
     n_gene_pcs: int = 50
-    context_atlas_subdir: str = "context_atlas"
     context_hidden_dim: int = 128
     context_layers: int = 2
     context_dropout: float = 0.1
@@ -97,24 +103,6 @@ class Config:
     rare_component_power: float = 0.5
     rare_component_weight_cap: float = 10.0
 
-    # Final empirical projection.
-    knn_decoder_k: int = 20
-    # Context-local member readout of the phenotype: a component's TRAIN members whose context key
-    # (a ridge map of the context onto within-component feature residuals, penalty chosen on VAL
-    # among readout_key_alphas, reduced to its readout_key_dim leading directions) is near the
-    # query's represent it, shrunk toward all its members with pseudo-count readout_shrinkage.
-    # key_dim / neighbours / shrinkage: the most regularised setting within one (probe-clustered)
-    # standard error of the best VALIDATION error of the mean phenotype for 2026_W39.
-    readout_key_dim: int = 3
-    readout_key_alphas: tuple[float, ...] = (1e2, 1e3, 1e4, 3e4, 1e5)
-    readout_neighbours: int = 4096
-    readout_shrinkage: float = 10.0
-    # Off the TRAIN data the readout is blended toward the global member means, with weight
-    # 1 - (h_ref / h(x)) ** key_dim for a query whose kernel scale h(x) exceeds h_ref, this
-    # quantile of the TRAIN kernel scale (None: no off-data blending). An absent (all-zero)
-    # context always gets the global member means.
-    readout_off_data_quantile: float | None = 0.99
-
     mirror_x_to_single_hemisphere: bool = True
     mirror_x_sign: float = -1.0
 
@@ -123,7 +111,6 @@ class Config:
     kde_neighbors: int = 128
     kde_spatial_bandwidth_um: float = 350.0
     kde_latent_bandwidth: float = 0.55
-    kde_chunk_size: int = 256
 
     # Publication/visualization settings. These are not used by the main runner.
     waveform_sampling_rate_hz: float = 30_000.0
@@ -131,34 +118,15 @@ class Config:
     diagnostic_hist_bins: int = 40
     diagnostic_samples_per_region: int = 3000
     diagnostic_slice_quantiles: tuple[float, ...] = (0.2, 0.5, 0.8)
-    diagnostic_spatial_pcs: int = 3
     diagnostic_voxel_size_um: float = 100.0
-    diagnostic_slice_cmap: str = "seismic"
     diagnostic_feature_slice_cmap: str = "seismic"
-    diagnostic_save_voxel_predictions: bool = False
     max_regions_in_distribution_plot: int = 16
 
     feature_slice_count: int = 5
     feature_slice_seed: int = 20260831
-    feature_slice_reference_max_units: int = 20_000
-    feature_slice_component_mc_samples: int = 128
-    feature_slice_regional_mc_samples: int = 128
-    feature_slice_display_quantiles: tuple[float, float] = (0.02, 0.98)
-    feature_slice_display_padding_fraction: float = 0.03
-    feature_slice_center: str = "median"
-    diagnostic_voxel_size_um: float = 100.0
-    diagnostic_feature_slice_cmap: str = "seismic"
     feature_nll_samples_per_test_unit: int = 4
     feature_nll_min_bandwidth_fraction: float = 0.02
     feature_categorical_alpha: float = 1.0
-
-    latent_fidelity_test_units: int = 8000
-    latent_fidelity_sliced_wasserstein_projections: int = 128
-
-    merfish_correlation_voxel_um: int = 200
-    merfish_correlation_cmap: str = "inferno"
-    merfish_correlation_vmin: float = 0.0
-    merfish_correlation_vmax: float = 0.5
 
     device: str = field(
         default_factory=lambda: "cuda" if torch.cuda.is_available() else "cpu"

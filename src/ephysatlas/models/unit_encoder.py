@@ -5,16 +5,17 @@ The unit-level model describes the spike-sorted units (neurons) found at a brain
 1. a multimodal autoencoder (:class:`UnitAutoencoder`) embeds a unit's multi-channel waveform,
    3D autocorrelogram and population coupling into a joint latent -- the unit's
    phenotype -- which a train-only scaler standardizes;
-2. a full-covariance Gaussian mixture over the standardized latents, whose components read as
-   *putative cell types*, has global component geometry and mixture weights conditioned on the
-   molecular context (MERFISH + AGEA PCA) at the unit's position;
-3. a readout onto train-split exemplars maps the model back to interpretable waveform features:
-   the context also selects which training members represent each component -- those whose
-   molecular context resembles the position's (releases made before this context-local readout
-   project latents onto their distance-weighted k nearest exemplars instead).
+2. a hierarchical Gaussian mixture over the standardized latents: putative cell types (a
+   full-covariance GMM) and, inside each type, its sub-types (a full-covariance GMM fitted on the
+   type's training units). Assignment is top-down: a unit's sub-type always lies inside its type;
+3. at a position x, the sub-type weights ``w_kj(x) = gamma_k(x) gamma_j|k(x)`` come from two
+   networks of the molecular context (MERFISH + AGEA PCA) at x: one for the types, one for the
+   shares of the sub-types within each type;
+4. each sub-type is read out through its training members, from anywhere in the brain: their
+   posterior-weighted mean waveform features, or one of them for a draw.
 
 So, like the spatial encoder, this family's ``predict`` takes positions and returns the phenotype
-expected there: the local component weights mixed with each component's expected features there.
+expected there: the local sub-type weights mixed with each sub-type's expected features.
 ``sample`` draws from the same predictive distribution: real training units.
 
 ``import torch`` stays inside the methods: the region classifier imports xgboost at module scope
@@ -35,11 +36,13 @@ logger = logging.getLogger(__name__)
 ROLE_AUTOENCODER = "autoencoder"
 ROLE_CONFIG = "config"
 ROLE_SCALER = "scaler"
-ROLE_GMM = "gmm"
+ROLE_TYPES = "types"
+ROLE_SUBTYPES = "subtypes"
+ROLE_SUBTYPE_PARENT = "subtype_parent"
 ROLE_CONTEXT_TRANSFORM = "context_transform"
-ROLE_CONTEXT_WEIGHTS = "context_weights"
-ROLE_KNN_BANK = "knn_bank"
-ROLE_COMPONENT_FEATURES = "component_features"
+ROLE_TYPE_WEIGHTS = "type_weights"
+ROLE_SUBTYPE_WEIGHTS = "subtype_weights"
+ROLE_MEMBERS = "members"
 ROLE_CONTEXT = "context"
 ROLE_SPLIT = "split"
 ROLE_STATS = "stats"
@@ -49,11 +52,13 @@ DEFAULT_ARTIFACTS = {
     ROLE_AUTOENCODER: model_registry.UNIT_AE_FILE,
     ROLE_CONFIG: model_registry.UNIT_CONFIG_FILE,
     ROLE_SCALER: model_registry.UNIT_SCALER_FILE,
-    ROLE_GMM: model_registry.UNIT_GMM_FILE,
+    ROLE_TYPES: model_registry.UNIT_TYPES_FILE,
+    ROLE_SUBTYPES: model_registry.UNIT_SUBTYPES_FILE,
+    ROLE_SUBTYPE_PARENT: model_registry.UNIT_SUBTYPE_PARENT_FILE,
     ROLE_CONTEXT_TRANSFORM: model_registry.UNIT_CONTEXT_TRANSFORM_FILE,
-    ROLE_CONTEXT_WEIGHTS: model_registry.UNIT_CONTEXT_WEIGHTS_FILE,
-    ROLE_KNN_BANK: model_registry.UNIT_KNN_BANK_FILE,
-    ROLE_COMPONENT_FEATURES: model_registry.UNIT_COMPONENT_FEATURES_FILE,
+    ROLE_TYPE_WEIGHTS: model_registry.UNIT_TYPE_WEIGHTS_FILE,
+    ROLE_SUBTYPE_WEIGHTS: model_registry.UNIT_SUBTYPE_WEIGHTS_FILE,
+    ROLE_MEMBERS: model_registry.UNIT_MEMBERS_FILE,
     ROLE_CONTEXT: list(model_registry.ENCODER_CONTEXT_FILES),
     ROLE_SPLIT: "split.json",
 }
@@ -95,10 +100,9 @@ class UnitEncoder:
         self._cfg = None
         self._ae = None
         self._scaler = None
-        self._gmm = None
+        self._mixture = None
         self._context_model = None
-        self._knn = None
-        self._component_features = None
+        self._readout = None
         self._ctx_manager = None
 
     # -- lazily loaded pieces --------------------------------------------------------------
@@ -133,8 +137,13 @@ class UnitEncoder:
             return
         import joblib
 
-        from ephysatlas.unit_level_encoder.gmm_models import load_context_weight_bundle
-        from ephysatlas.unit_level_encoder.knn_decoder import EmpiricalKNNDecoder
+        from ephysatlas.unit_level_encoder.context_weights import (
+            HierarchicalWeightModel,
+        )
+        from ephysatlas.unit_level_encoder.hierarchy import (
+            HierarchicalMixture,
+            MemberReadout,
+        )
         from ephysatlas.unit_level_encoder.train import load_autoencoder_file
 
         cfg = self.cfg
@@ -142,37 +151,23 @@ class UnitEncoder:
             self._artifact_path(ROLE_AUTOENCODER), cfg
         )
         self._scaler = joblib.load(self._artifact_path(ROLE_SCALER))
-        self._gmm = joblib.load(self._artifact_path(ROLE_GMM))
-        # The context bundle is read from its directory under its canonical filenames.
-        context_dir = self._artifact_path(ROLE_CONTEXT_WEIGHTS).parent
-        self._context_model, _ = load_context_weight_bundle(None, context_dir, cfg)
-        self._knn = EmpiricalKNNDecoder.load_bank(
-            self._artifact_path(ROLE_KNN_BANK), k=cfg.knn_decoder_k
+        self._mixture = HierarchicalMixture.load(
+            types=self._artifact_path(ROLE_TYPES),
+            subtypes=self._artifact_path(ROLE_SUBTYPES),
+            parent=self._artifact_path(ROLE_SUBTYPE_PARENT),
         )
-        self._component_features = self._load_component_features()
+        self._context_model = HierarchicalWeightModel.load(
+            self._mixture.parent,
+            cfg,
+            transform=self._artifact_path(ROLE_CONTEXT_TRANSFORM),
+            types=self._artifact_path(ROLE_TYPE_WEIGHTS),
+            subtypes=self._artifact_path(ROLE_SUBTYPE_WEIGHTS),
+        )
+        self._readout = MemberReadout.load(self._artifact_path(ROLE_MEMBERS))
         logger.info(
             f"loaded unit encoder from {self.path_model.name}: latent_dim={cfg.latent_dim()} "
-            f"components={self._gmm.n_components} knn_k={self._knn.k}"
+            f"types={self._mixture.n_types} subtypes={self._mixture.n_subtypes}"
         )
-
-    def _load_component_features(self) -> np.ndarray:
-        """The released E[feature | component], or recomputed exactly as published when absent."""
-        path = self._artifact_path(ROLE_COMPONENT_FEATURES)
-        if path.exists():
-            with np.load(path, allow_pickle=False) as payload:
-                names = payload["feature_names"].astype(str).tolist()
-                if names != list(self._knn.feature_names):
-                    raise ValueError(
-                        f"{path.name} lists features {names}, but the kNN bank projects "
-                        f"{list(self._knn.feature_names)}"
-                    )
-                return payload["features"].astype(np.float32)
-        from ephysatlas.unit_level_encoder.pipeline import compute_component_features
-
-        logger.info(
-            f"{path.name} not shipped; recomputing the component feature expectations"
-        )
-        return compute_component_features(self._gmm, self._knn, self.cfg)
 
     # -- read-only accessors ---------------------------------------------------------------
 
@@ -187,25 +182,22 @@ class UnitEncoder:
         return self._scaler
 
     @property
-    def gmm(self):
+    def mixture(self):
+        """The putative cell types and their sub-types (``HierarchicalMixture``)."""
         self._load()
-        return self._gmm
+        return self._mixture
 
     @property
     def context_model(self):
+        """The sub-type weights at raw contexts (``HierarchicalWeightModel``)."""
         self._load()
         return self._context_model
 
     @property
-    def knn_decoder(self):
+    def readout(self):
+        """The sub-type phenotypes (``MemberReadout``)."""
         self._load()
-        return self._knn
-
-    @property
-    def component_features(self) -> np.ndarray:
-        """``[n_components, n_features]`` expected phenotype features of each component."""
-        self._load()
-        return self._component_features
+        return self._readout
 
     @property
     def features(self) -> list:
@@ -213,7 +205,13 @@ class UnitEncoder:
         columns = self.outputs.get("columns")
         if columns:
             return list(columns)
-        return list(self.knn_decoder.feature_names)
+        return list(self.readout.feature_names)
+
+    @property
+    def subtype_labels(self) -> list:
+        """``"<type>.<sub-type>"`` label of each sub-type, e.g. ``"7.2"``."""
+        mixture = self.mixture
+        return [f"{k}.{j}" for k, j in zip(mixture.parent, mixture.subtype_index())]
 
     @property
     def context_dir(self) -> Path:
@@ -283,45 +281,51 @@ class UnitEncoder:
             )
         return df.loc[:, columns].to_numpy(dtype=np.float32)
 
-    def _weights_and_context(self, xyz: np.ndarray, batch_size: int):
-        """Yield ``(mixture weights, standardized context)`` of positions, one batch at a time."""
+    def _context_pc(self, xyz: np.ndarray, batch_size: int):
+        """Yield the standardized context of positions, one batch at a time."""
         transform = self._context_model.transform
         for i in range(0, len(xyz), batch_size):
-            context_pc = transform.transform(self._raw_context(xyz[i : i + batch_size]))
-            yield self._context_model._weights_from_pc(context_pc), context_pc
+            yield transform.transform(self._raw_context(xyz[i : i + batch_size]))
 
-    def mixture_weights(self, df, batch_size: int = 65536) -> pd.DataFrame:
+    def mixture_weights(
+        self, df, level: str = "subtype", batch_size: int = 65536
+    ) -> pd.DataFrame:
         """Putative cell-type composition at each position.
 
         Args:
             df (pd.DataFrame): Carries ``x, y, z`` in metres; any index.
+            level (str, optional): ``"type"`` for the type weights gamma_k(x), ``"subtype"`` for
+                the sub-type weights gamma_k(x) gamma_j|k(x).
             batch_size (int, optional): Positions per forward pass.
 
         Returns:
-            pd.DataFrame: Indexed like ``df``, one ``component_<k>`` column per GMM component; each
-            row sums to one.
+            pd.DataFrame: Indexed like ``df``; one ``type_<k>`` column per type, or one
+            ``subtype_<k>.<j>`` column per sub-type. Each row sums to one.
         """
+        if level not in {"type", "subtype"}:
+            raise ValueError("level must be 'type' or 'subtype'")
         self._load()
         xyz = self._coordinates(df)
-        chunks = [w for w, _ in self._weights_and_context(xyz, batch_size)]
+        model = self._context_model
+        fn = model.types.weights_from_pc if level == "type" else model.weights_from_pc
+        chunks = [fn(pc) for pc in self._context_pc(xyz, batch_size)]
+        if level == "type":
+            columns = [f"type_{k}" for k in range(self._mixture.n_types)]
+        else:
+            columns = [f"subtype_{label}" for label in self.subtype_labels]
         weights = (
             np.concatenate(chunks, axis=0)
             if chunks
-            else np.zeros((0, self._gmm.n_components), np.float32)
+            else np.zeros((0, len(columns)), np.float32)
         )
-        columns = [f"component_{k:02d}" for k in range(weights.shape[1])]
         return pd.DataFrame(weights, index=df.index, columns=columns)
 
     def predict(self, df, batch_size: int = 65536) -> pd.DataFrame:
         """Predict the expected unit phenotype at each position.
 
-        The expected phenotype is the local mixture weights times each component's expected
-        features at that position: the mean of the component's training members whose molecular
-        context resembles the position's, shrunk toward the mean of all its members -- the more so
-        the farther the context lies from the training data, and entirely where the position has
-        no context (the context-local member readout; a release made before it mixes global
-        per-component expectations). Deterministic, and exactly what the published unit-level
-        atlas figures map.
+        The expected phenotype is the local sub-type weights times each sub-type's expected
+        features: the mean features of its training members, weighted by their posterior.
+        Deterministic, and exactly what the published unit-level atlas figures map.
 
         Args:
             df (pd.DataFrame): Carries the coordinate columns the manifest names in
@@ -336,8 +340,6 @@ class UnitEncoder:
             KeyError: If a coordinate column is absent, naming it.
             ValueError: If the manifest's feature list no longer matches its recorded digest.
         """
-        from ephysatlas.unit_level_encoder.pipeline import phenotype_means
-
         features = self.features
         model_registry.validate_feature_order(
             features, self.outputs.get("feature_order_sha256")
@@ -345,8 +347,8 @@ class UnitEncoder:
         self._load()
         xyz = self._coordinates(df)
         chunks = [
-            phenotype_means(pc, w, self._knn, self._component_features, self.cfg)
-            for w, pc in self._weights_and_context(xyz, batch_size)
+            self._readout.expected(self._context_model.weights_from_pc(pc))
+            for pc in self._context_pc(xyz, batch_size)
         ]
         predictions = (
             np.concatenate(chunks, axis=0)
@@ -362,10 +364,9 @@ class UnitEncoder:
     ) -> pd.DataFrame:
         """Draw unit phenotypes at each position from the model's predictive distribution.
 
-        Each draw picks a putative cell type from the local mixture weights, then one of its
-        training members whose molecular context resembles the position's (or, with the
-        shrinkage probability, any of its members): a real training unit. The draws average to
-        :meth:`predict`.
+        Each draw picks a sub-type from the local sub-type weights, then one of its training
+        members with probability proportional to its posterior of that sub-type: a real training
+        unit. The draws average to :meth:`predict`.
 
         Args:
             df (pd.DataFrame): Carries ``x, y, z`` in metres; any index.
@@ -375,44 +376,29 @@ class UnitEncoder:
 
         Returns:
             pd.DataFrame: ``n_samples`` rows per position, indexed like ``df`` with each label
-            repeated (``df.index.repeat(n_samples)``): ``sample`` (draw number), ``component``
-            (the drawn unit's GMM component) and one column per phenotype feature.
-
-        Raises:
-            RuntimeError: If the release predates the context-local member readout (its
-                ``knn_bank.npz`` holds no ``labels_train``/``key_train``); ``predict`` still works.
+            repeated (``df.index.repeat(n_samples)``): ``sample`` (draw number), ``type`` and
+            ``subtype`` (the drawn sub-type, an index into :attr:`subtype_labels`), and one column
+            per phenotype feature.
         """
-        from ephysatlas.unit_level_encoder.pipeline import readout_settings
-
         self._load()
-        if not self._knn.has_context_readout:
-            raise RuntimeError(
-                f"{self.path_model.name} was released before the context-local member readout: "
-                "its knn_bank.npz has no labels_train/key_train, so sample() is unavailable "
-                "(predict() still works)"
-            )
-        cfg = self.cfg
         xyz = self._coordinates(df)
         rng = np.random.default_rng(seed)
-        chunks = [
-            self._knn.sample_context_local(
-                pc,
-                w,
-                n_samples,
-                rng,
-                **readout_settings(cfg),
+        subtypes, rows = [], []
+        for pc in self._context_pc(xyz, batch_size):
+            s, r = self._readout.draw(
+                self._context_model.weights_from_pc(pc), n_samples, rng
             )
-            for w, pc in self._weights_and_context(xyz, batch_size)
-        ]
-        rows = (
-            np.concatenate(chunks, axis=0).ravel() if chunks else np.zeros(0, np.int64)
-        )
+            subtypes.append(s.ravel())
+            rows.append(r.ravel())
+        subtypes = np.concatenate(subtypes) if subtypes else np.zeros(0, np.int64)
+        rows = np.concatenate(rows) if rows else np.zeros(0, np.int64)
         out = pd.DataFrame(
-            self._knn.feature_train[rows],
+            self._readout.features[rows],
             index=df.index.repeat(int(n_samples)),
             columns=self.features,
         )
-        out.insert(0, "component", self._knn.labels_train[rows])
+        out.insert(0, "subtype", subtypes)
+        out.insert(0, "type", self._mixture.parent[subtypes])
         out.insert(0, "sample", np.tile(np.arange(int(n_samples)), len(xyz)))
         return out
 
@@ -435,8 +421,8 @@ class UnitEncoder:
                 when the model uses the ACG modality.
             stpc (np.ndarray, optional): ``[N, n_lags]`` population coupling;
                 required when the model uses the population-coupling (stPC) modality.
-            standardize (bool, optional): Apply the released latent scaler (the space the GMM
-                and the kNN bank live in). Defaults to True.
+            standardize (bool, optional): Apply the released latent scaler (the space the mixture
+                lives in). Defaults to True.
             batch_size (int, optional): Units per forward pass.
 
         Returns:
@@ -477,28 +463,50 @@ class UnitEncoder:
             z = self._scaler.transform(z).astype(np.float32)
         return z
 
+    def latent_dims(self, modalities) -> np.ndarray:
+        """Indices of the latent dimensions of ``modalities`` (e.g. ``("waveform", "acg")``)."""
+        cfg = self.cfg
+        d = int(cfg.modality_latent_dim)
+        active = cfg.active_modalities()
+        return np.concatenate(
+            [
+                np.arange(i * d, (i + 1) * d)
+                for i, m in enumerate(active)
+                if m in modalities
+            ]
+        )
+
     def components(self) -> dict:
-        """The putative cell types: global GMM ``weights``, ``means`` and ``covariances``."""
-        self._load()
+        """The types and sub-types: weights, means and covariances, and each sub-type's type."""
+        mixture = self.mixture
+
+        def block(gmm):
+            return {
+                "weights": np.asarray(gmm.weights_, np.float32),
+                "means": np.asarray(gmm.means_, np.float32),
+                "covariances": np.asarray(gmm.covariances_, np.float32),
+            }
+
         return {
-            "weights": np.asarray(self._gmm.weights_, np.float32),
-            "means": np.asarray(self._gmm.means_, np.float32),
-            "covariances": np.asarray(self._gmm.covariances_, np.float32),
+            "types": block(mixture.types),
+            "subtypes": block(mixture.subtypes),
+            "parent": mixture.parent.copy(),
         }
 
-    def assign(self, standardized_latents) -> np.ndarray:
-        """Hard-assign each standardized latent to its most likely GMM component."""
-        self._load()
-        return self._gmm.predict(np.asarray(standardized_latents, np.float64))
+    def posterior(self, standardized_latents, dims=None):
+        """Top-down posteriors ``(P(type | z) [N, K], P(type, sub-type | z) [N, L])``.
 
-    def expected_features(self, standardized_latents) -> np.ndarray:
-        """kNN-projected phenotype features of standardized latents, ``[N, n_features]``.
-
-        The distance-weighted projection of a latent onto its k nearest training exemplars; it
-        does not involve position (``predict`` does).
+        Args:
+            standardized_latents: ``[N, latent_dim]`` latents from :meth:`encode`.
+            dims: Optional latent dimensions to marginalize onto, e.g.
+                ``latent_dims(("waveform", "acg"))`` for units without population coupling.
         """
-        self._load()
-        return self._knn.expected_features(np.asarray(standardized_latents, np.float32))
+        return self.mixture.posterior(standardized_latents, dims)
+
+    def assign(self, standardized_latents, dims=None):
+        """Top-down hard assignment ``(type [N], sub-type [N])``: the most likely type, then its
+        most likely sub-type (an index into :attr:`subtype_labels`)."""
+        return self.mixture.assign(standardized_latents, dims)
 
     # -- the dataset-level view used by training diagnostics and figures --------------------
 
@@ -508,7 +516,6 @@ class UnitEncoder:
         Args:
             data: Prepared unit dataset (``UnitData``), e.g. from ``prepare_unit_data``.
         """
-        from ephysatlas.unit_level_encoder.gmm_models import ContextWeightModel
         from ephysatlas.unit_level_encoder.pipeline import UnitModelBundle
         from ephysatlas.unit_level_encoder.train import encode_all
 
@@ -526,32 +533,25 @@ class UnitEncoder:
                     f"expects {tuple(shape)}"
                 )
         # Figures index the model's features and the data's by the same positions.
-        if list(data.waveform_feature_names) != list(self._knn.feature_names):
+        if list(data.waveform_feature_names) != list(self._readout.feature_names):
             raise ValueError(
                 f"the prepared unit data describes units by {list(data.waveform_feature_names)}, "
-                f"the released model predicts {list(self._knn.feature_names)}; use a model "
+                f"the released model predicts {list(self._readout.feature_names)}; use a model "
                 "trained with the current unit waveform features"
             )
-        context_model = ContextWeightModel(
-            self._context_model.net,
-            self._context_model.transform.transform(data.context),
-            cfg.device,
-            transform=self._context_model.transform,
-        )
         latents = encode_all(self._ae, data, cfg)
         z_scaled = self._scaler.transform(latents["joint"]).astype(np.float32)
         return UnitModelBundle(
             cfg=cfg,
             autoencoder=self._ae,
             latent_scaler=self._scaler,
-            gmm=self._gmm,
-            context_model=context_model,
-            knn_decoder=self._knn,
+            mixture=self._mixture,
+            context_model=self._context_model.over(data.context),
+            readout=self._readout,
             data=data,
             latents=latents,
             z_scaled=z_scaled,
             model_root=self.path_model,
-            component_features=self._component_features,
         )
 
     # -- integrity --------------------------------------------------------------------------
@@ -560,8 +560,8 @@ class UnitEncoder:
         """Reproduce the shipped golden outputs.
 
         Checks both halves of the model: phenotype predictions at a sample of positions (context
-        sampling, mixture weights and the component expectations), and the latents of a small
-        sample of synthetic units (the autoencoder and the scaler). Neither needs IBL data access.
+        sampling, sub-type weights and the members readout), and the latents of a small sample of
+        synthetic units (the autoencoder and the scaler). Neither needs IBL data access.
         Tolerances allow the ~1e-4 relative float32 drift between BLAS/library versions; real
         corruption or the wrong model differ by orders of magnitude more.
 

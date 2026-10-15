@@ -1,11 +1,11 @@
 """Tests for the UnitEncoder serving wrapper (the unit-level encoder family).
 
-Self-contained: a tiny random-init release (autoencoder, latent scaler, K=3 GMM, context-weight
-net, kNN bank) is written to a temp directory in the published layout and loaded through
-``load_pretrained``. Context sampling is replaced by a deterministic stand-in, so neither the Allen
-atlas download nor IBL data is needed. This verifies the wrapper's mechanics -- dispatch, the
-predict / mixture_weights / encode / assign contract, determinism and the selftest -- not learned
-quality.
+Self-contained: a tiny release (random-init autoencoder, latent scaler, hierarchical mixture
+fitted on random latents, random-init context networks, members readout) is written to a temp
+directory in the published layout and loaded through ``load_pretrained``. Context sampling is
+replaced by a deterministic stand-in, so neither the Allen atlas download nor IBL data is needed.
+This verifies the wrapper's mechanics -- dispatch, the predict / mixture_weights / sample / encode /
+assign contract, the top-down hierarchy, determinism and the selftest -- not learned quality.
 
 In its own file with a setUpModule guard: the wrapper pulls in torch, which segfaults on macOS
 arm64 if xgboost is already imported in the same process. The guard is macOS arm64-only -- Linux
@@ -74,15 +74,31 @@ class TestUnitEncoderWrapper(unittest.TestCase):
         self.assertTrue(out.index.equals(self.positions.index))
         self.assertTrue(np.isfinite(out.to_numpy()).all())
 
-    def test_predict_mixes_component_expectations_with_local_weights(self):
+    def test_predict_mixes_subtype_member_means_with_local_weights(self):
         encoder = self._encoder()
         weights = encoder.mixture_weights(self.positions)
         np.testing.assert_allclose(weights.sum(axis=1).to_numpy(), 1.0, rtol=1e-5)
-        expected = weights.to_numpy(np.float64) @ encoder.component_features.astype(
+        expected = weights.to_numpy(np.float64) @ encoder.readout.means.astype(
             np.float64
         )
         np.testing.assert_allclose(
-            encoder.predict(self.positions).to_numpy(), expected, rtol=1e-5
+            encoder.predict(self.positions).to_numpy(), expected, rtol=1e-5, atol=1e-6
+        )
+
+    def test_subtype_weights_add_up_to_the_type_weights(self):
+        encoder = self._encoder()
+        types = encoder.mixture_weights(self.positions, level="type").to_numpy(
+            np.float64
+        )
+        subtypes = encoder.mixture_weights(self.positions).to_numpy(np.float64)
+        parent = encoder.mixture.parent
+        summed = np.stack(
+            [subtypes[:, parent == k].sum(axis=1) for k in range(types.shape[1])], 1
+        )
+        np.testing.assert_allclose(summed, types, rtol=1e-5, atol=1e-6)
+        self.assertEqual(
+            list(encoder.mixture_weights(self.positions).columns),
+            [f"subtype_{label}" for label in encoder.subtype_labels],
         )
 
     def test_bundle_refuses_data_described_by_other_features(self):
@@ -141,230 +157,124 @@ class TestUnitEncoderWrapper(unittest.TestCase):
         with self.assertRaises(ValueError):
             encoder.encode(waveform, acg)
 
-    def test_assign_and_expected_features_cover_every_unit(self):
+    def test_assign_is_top_down_and_components_describe_the_hierarchy(self):
         encoder = self._encoder()
         z = encoder.encode(*synthetic_units(encoder.cfg))
-        labels = encoder.assign(z)
-        self.assertTrue(set(labels.tolist()) <= set(range(encoder.cfg.gmm_components)))
-        self.assertEqual(
-            encoder.expected_features(z).shape, (len(z), len(UNIT_FEATURES))
-        )
-        self.assertEqual(
-            encoder.components()["means"].shape[0], encoder.cfg.gmm_components
-        )
+        types, subtypes = encoder.assign(z)
+        parent = encoder.mixture.parent
+        np.testing.assert_array_equal(parent[subtypes], types)
+        p_type, _ = encoder.posterior(z)
+        np.testing.assert_array_equal(types, p_type.argmax(axis=1))
+        components = encoder.components()
+        self.assertEqual(components["types"]["means"].shape[0], encoder.cfg.n_types)
+        self.assertEqual(len(components["subtypes"]["means"]), len(parent))
+        self.assertTrue(np.all(np.diff(parent) >= 0))
 
     def test_split_is_read_from_the_release(self):
         self.assertEqual(self._encoder().split()["test"], ["c"])
 
-    def test_sample_needs_a_release_with_the_context_local_readout(self):
+    def test_sample_draws_training_members_averaging_to_predict(self):
         encoder = self._encoder()
-        self.assertFalse(encoder.knn_decoder.has_context_readout)
-        with self.assertRaisesRegex(RuntimeError, "context-local member readout"):
-            encoder.sample(self.positions)
-
-
-class TestUnitEncoderContextLocalReadout(unittest.TestCase):
-    """A release whose kNN bank carries the context-local member readout."""
-
-    @classmethod
-    def setUpClass(cls):
-        cls.tmp = Path(tempfile.mkdtemp())
-        cls.path_model = make_unit_model_dir(cls.tmp, readout=True)
-        cls.positions = unit_positions(n=30)
-
-    @classmethod
-    def tearDownClass(cls):
-        shutil.rmtree(cls.tmp, ignore_errors=True)
-
-    def _encoder(self):
-        return TestUnitEncoderWrapper._encoder(self)
-
-    def _context(self, encoder):
-        xyz = encoder._coordinates(self.positions)
-        return encoder.context_model.transform.transform(encoder._raw_context(xyz))
-
-    def test_bank_round_trips_the_readout_and_components_are_member_means(self):
-        encoder = self._encoder()
-        knn = encoder.knn_decoder
-        self.assertTrue(knn.has_context_readout)
-        self.assertEqual(len(knn.labels_train), len(knn.z_train))
-        self.assertEqual(knn.key_train.shape, (len(knn.z_train), 2))
-        np.testing.assert_allclose(
-            encoder.component_features,
-            knn.member_means(encoder.cfg.gmm_components),
-            rtol=1e-6,
-        )
-
-    def test_predict_mixes_context_local_member_means(self):
-        from ephysatlas.unit_level_encoder.pipeline import readout_settings
-
-        encoder = self._encoder()
-        weights = encoder.mixture_weights(self.positions).to_numpy(np.float64)
-        expected = encoder.knn_decoder.context_local_means(
-            self._context(encoder), weights, **readout_settings(encoder.cfg)
-        )
-        out = encoder.predict(self.positions).to_numpy()
-        np.testing.assert_allclose(out, expected, rtol=1e-5, atol=1e-6)
-        global_mix = weights @ encoder.component_features.astype(np.float64)
-        self.assertGreater(np.abs(out - global_mix).max(), 1e-3)
-        # Infinite shrinkage falls back to the global member means.
-        encoder.cfg.readout_shrinkage = 1e9
-        np.testing.assert_allclose(
-            encoder.predict(self.positions).to_numpy(), global_mix, rtol=1e-4, atol=1e-5
-        )
-
-    def test_sample_draws_real_members_averaging_to_predict(self):
-        encoder = self._encoder()
-        knn = encoder.knn_decoder
         positions = self.positions.iloc[:3]
         draws = encoder.sample(positions, n_samples=4000, seed=1)
-        self.assertEqual(list(draws.columns), ["sample", "component", *UNIT_FEATURES])
+        self.assertEqual(
+            list(draws.columns), ["sample", "type", "subtype", *UNIT_FEATURES]
+        )
         self.assertTrue(draws.index.equals(positions.index.repeat(4000)))
+        np.testing.assert_array_equal(
+            encoder.mixture.parent[draws["subtype"].to_numpy()],
+            draws["type"].to_numpy(),
+        )
         features = draws.loc[:, UNIT_FEATURES].to_numpy()
-        rows = np.flatnonzero(np.isin(knn.feature_train[:, 0], features[:, 0]))
-        self.assertEqual(
-            len(np.unique(features[:, 0])), len(np.unique(knn.feature_train[rows, 0]))
-        )
-        lookup = dict(zip(knn.feature_train[:, 0].tolist(), knn.labels_train.tolist()))
-        self.assertEqual(
-            draws["component"].tolist(), [lookup[v] for v in features[:, 0].tolist()]
-        )
+        self.assertTrue(np.isin(features[:, 0], encoder.readout.features[:, 0]).all())
         means = features.reshape(3, 4000, -1).mean(axis=1)
         np.testing.assert_allclose(
             means, encoder.predict(positions).to_numpy(), atol=0.1
         )
-        again = encoder.sample(positions, n_samples=4000, seed=1)
-        self.assertTrue(draws.equals(again))
-
-    def test_positions_without_context_get_the_global_member_means(self):
-        encoder = self._encoder()
-        n_context = encoder.cfg.n_cell_pcs + encoder.cfg.n_gene_pcs
-        encoder._raw_context = lambda xyz: np.zeros((len(xyz), n_context), np.float32)
-        weights = encoder.mixture_weights(self.positions).to_numpy(np.float64)
-        np.testing.assert_allclose(
-            encoder.predict(self.positions).to_numpy(),
-            weights @ encoder.component_features.astype(np.float64),
-            rtol=1e-5,
-            atol=1e-6,
-        )
-        # Draws come from all of the drawn component's members, not only local ones.
-        draws = encoder.sample(self.positions.iloc[:1], n_samples=6000, seed=2)
-        np.testing.assert_allclose(
-            draws.loc[:, UNIT_FEATURES].to_numpy().mean(axis=0),
-            encoder.predict(self.positions.iloc[:1]).to_numpy()[0],
-            atol=0.1,
-        )
+        self.assertTrue(draws.equals(encoder.sample(positions, n_samples=4000, seed=1)))
 
 
-class TestContextLocalReadoutMath(unittest.TestCase):
-    """EmpiricalKNNDecoder's readout against its formula, computed by hand."""
+class TestHierarchicalMixture(unittest.TestCase):
+    """The top-down hierarchy and the members readout, on well-separated synthetic data."""
 
-    def test_means_and_draws_follow_the_shrunk_local_member_means(self):
-        from ephysatlas.unit_level_encoder.knn_decoder import EmpiricalKNNDecoder
+    @classmethod
+    def setUpClass(cls):
+        from ephysatlas.unit_level_encoder.hierarchy import fit_hierarchical_mixture
+        from tests._model_fixtures import unit_test_config
 
         rng = np.random.default_rng(0)
-        n, n_components, neighbours, shrinkage = 300, 3, 40, 3.0
-        features = rng.normal(size=(n, 2))
-        labels = rng.integers(0, n_components, n)
-        context = rng.normal(size=(n, 4))
-        knn = EmpiricalKNNDecoder.from_bank(rng.normal(size=(n, 3)), features, k=5)
-        knn.set_context_readout(labels, np.eye(2, 4), np.zeros(2), context)
-        # Queries in and beyond the data: the farthest are shrunk toward the global means.
-        query = rng.normal(size=(6, 4)) * np.linspace(0.5, 4.0, 6)[:, None]
-        weights = rng.dirichlet(np.ones(n_components), size=len(query))
-        got = knn.context_local_means(
-            query,
-            weights,
-            neighbours=neighbours,
-            shrinkage=shrinkage,
-            off_data_quantile=0.9,
-        )
+        cls.cfg = unit_test_config()
+        centres = rng.normal(size=(3, 4)) * 8.0
+        cls.z = centres[np.arange(240) % 3] + rng.normal(size=(240, 4))
+        cls.mixture = fit_hierarchical_mixture(cls.z, cls.cfg)
 
-        def kernel_scale(key):
-            dist = np.linalg.norm(context[:, :2] - key, axis=1)
-            return np.median(np.sort(dist)[:neighbours])
-
-        h_ref = np.quantile([kernel_scale(key) for key in context[:, :2]], 0.9)
-        expected = np.zeros((len(query), 2))
-        for i in range(len(query)):
-            dist = np.linalg.norm(context[:, :2] - query[i, :2], axis=1)
-            near = np.argsort(dist)[:neighbours]
-            kernel = np.exp(-0.5 * (dist[near] / np.median(dist[near])) ** 2)
-            kernel /= kernel.sum()
-            in_data = min(1.0, (h_ref / np.median(dist[near])) ** 2)
-            n_total = 1.0 / np.sum(kernel**2)
-            for k in range(n_components):
-                member = labels[near] == k
-                weight_k = kernel[member].sum()
-                local = kernel[member] @ features[near][member] / max(weight_k, 1e-300)
-                n_k = weight_k * n_total
-                mean_k = features[labels == k].mean(axis=0)
-                shrunk = (n_k * local + shrinkage * mean_k) / (n_k + shrinkage)
-                expected[i] += weights[i, k] * (
-                    in_data * shrunk + (1.0 - in_data) * mean_k
-                )
-        np.testing.assert_allclose(got, expected, rtol=1e-4, atol=1e-5)
-
-        for i in (0, len(query) - 1):  # in and far beyond the data
-            rows = knn.sample_context_local(
-                query[i : i + 1],
-                weights[i : i + 1],
-                40000,
-                rng,
-                neighbours=neighbours,
-                shrinkage=shrinkage,
-                off_data_quantile=0.9,
-            )
+    def test_subtypes_nest_in_their_types(self):
+        m = self.mixture
+        self.assertEqual(m.n_types, 3)
+        # 80 units per type: 3 sub-types of at least 8 units each.
+        self.assertEqual(m.n_subtypes, 9)
+        np.testing.assert_allclose(m.subtypes.weights_.sum(), 1.0)
+        for k in range(m.n_types):
+            np.testing.assert_allclose(m.within_weights[m.parent == k].sum(), 1.0)
             np.testing.assert_allclose(
-                features[rows[0]].mean(axis=0), got[i], atol=0.03
+                m.subtypes.weights_[m.parent == k].sum(), m.types.weights_[k]
             )
 
-    def test_far_from_the_data_the_readout_tends_to_the_global_member_means(self):
-        from ephysatlas.unit_level_encoder.knn_decoder import EmpiricalKNNDecoder
+    def test_posteriors_are_top_down(self):
+        m = self.mixture
+        p_type, p_subtype = m.posterior(self.z)
+        np.testing.assert_allclose(p_type, m.types.predict_proba(self.z), atol=1e-8)
+        summed = np.stack(
+            [p_subtype[:, m.parent == k].sum(axis=1) for k in range(m.n_types)], 1
+        )
+        np.testing.assert_allclose(summed, p_type, atol=1e-10)
+        types, subtypes = m.assign(self.z)
+        np.testing.assert_array_equal(m.parent[subtypes], types)
 
-        rng = np.random.default_rng(3)
-        n, n_components = 400, 3
-        features = rng.normal(size=(n, 2))
-        labels = rng.integers(0, n_components, n)
-        context = rng.normal(size=(n, 4))
-        knn = EmpiricalKNNDecoder.from_bank(rng.normal(size=(n, 3)), features, k=5)
-        knn.set_context_readout(labels, np.eye(2, 4), np.zeros(2), context)
-        weights = rng.dirichlet(np.ones(n_components), size=3)
-        global_mix = weights @ knn.member_means(n_components).astype(np.float64)
-        settings = {"neighbours": 50, "shrinkage": 2.0}
-        errors, errors_without = [], []
-        for distance in (3.0, 30.0, 300.0):
-            query = np.zeros((3, 4))
-            query[:, 0] = distance
-            without = knn.context_local_means(query, weights, **settings)
-            errors_without.append(np.abs(without - global_mix).max())
-            shrunk = knn.context_local_means(
-                query, weights, off_data_quantile=0.99, **settings
-            )
-            errors.append(np.abs(shrunk - global_mix).max())
-        # Without the off-data rule the edge of the data speaks for any far query; with it the
-        # readout tends to the global member means as the query moves away, and is unchanged
-        # within the range of the data (distance 3 of a standard normal cloud).
-        self.assertGreater(min(errors_without), 0.1)
-        self.assertEqual(errors[0], errors_without[0])
-        self.assertTrue(errors[0] > 10 * errors[1] > 10 * errors[2])
-        self.assertLess(errors[2], 1e-3)
+    def test_marginal_log_densities_use_the_chosen_dimensions(self):
+        from scipy.stats import multivariate_normal
 
-    def test_a_bank_saved_without_the_readout_loads_without_it(self):
-        from ephysatlas.unit_level_encoder.knn_decoder import EmpiricalKNNDecoder
+        from ephysatlas.unit_level_encoder.hierarchy import gaussian_log_prob
+
+        m, dims = self.mixture, np.array([0, 2])
+        got = gaussian_log_prob(m.types.means_, m.types.covariances_, self.z[:5], dims)
+        for k in range(m.n_types):
+            expected = multivariate_normal(
+                m.types.means_[k, dims], m.types.covariances_[k][np.ix_(dims, dims)]
+            ).logpdf(self.z[:5, dims])
+            np.testing.assert_allclose(got[:, k], expected, rtol=1e-10)
+
+    def test_members_readout_means_and_draws(self):
+        from ephysatlas.unit_level_encoder.hierarchy import MemberReadout
 
         rng = np.random.default_rng(1)
-        knn = EmpiricalKNNDecoder.from_bank(
-            rng.normal(size=(30, 3)), rng.normal(size=(30, 2)), k=4
-        )
-        with tempfile.TemporaryDirectory() as tmp:
-            loaded = EmpiricalKNNDecoder.load_bank(
-                knn.save_bank(Path(tmp) / "bank.npz")
+        _, p_subtype = self.mixture.posterior(self.z)
+        features = rng.normal(size=(len(self.z), 2))
+        readout = MemberReadout.fit(p_subtype, features, ["a", "b"])
+        expected = (p_subtype.T @ features) / p_subtype.sum(axis=0)[:, None]
+        np.testing.assert_allclose(readout.means, expected, rtol=1e-5, atol=1e-6)
+        weights = rng.dirichlet(np.ones(self.mixture.n_subtypes), size=2)
+        subtypes, rows = readout.draw(weights, 40000, rng)
+        for i in range(2):
+            freq = np.bincount(subtypes[i], minlength=self.mixture.n_subtypes) / 40000
+            np.testing.assert_allclose(freq, weights[i], atol=0.01)
+            np.testing.assert_allclose(
+                readout.features[rows[i]].mean(axis=0),
+                readout.expected(weights[i : i + 1])[0],
+                atol=0.03,
             )
-        self.assertFalse(loaded.has_context_readout)
-        with self.assertRaisesRegex(RuntimeError, "context-local member readout"):
-            loaded.context_local_means(
-                np.zeros((1, 4)), np.ones((1, 2)) / 2, neighbours=5, shrinkage=1.0
+        with tempfile.TemporaryDirectory() as tmp:
+            loaded = MemberReadout.load(readout.save(Path(tmp) / "members.npz"))
+        np.testing.assert_array_equal(loaded.rows, readout.rows)
+        np.testing.assert_allclose(loaded.means, readout.means)
+
+    def test_mixture_round_trips(self):
+        from ephysatlas.unit_level_encoder.hierarchy import HierarchicalMixture
+
+        with tempfile.TemporaryDirectory() as tmp:
+            loaded = HierarchicalMixture.load(self.mixture.save(tmp))
+            np.testing.assert_allclose(
+                loaded.posterior(self.z)[1], self.mixture.posterior(self.z)[1]
             )
 
 

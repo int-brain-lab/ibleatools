@@ -186,7 +186,7 @@ def make_model_dir(
 
 # ---- unit-level encoder ---------------------------------------------------------------------
 
-# The phenotype features the released unit model's kNN stage projects (the order of
+# The phenotype features the released unit model reads out (the order of
 # ``waveform_feature_names.json`` in the prepared unit data).
 # Spelled out rather than imported: the unit package pulls in torch, which this module must not
 # (see test_unit_encoder). test_unit_waveform_features checks it against FEATURE_NAMES.
@@ -205,24 +205,22 @@ UNIT_FEATURES = [
 
 
 def unit_test_config():
-    """A shrunk unit-model ``Config``: tiny modalities, few components, CPU."""
+    """A shrunk unit-model ``Config``: tiny modalities, 3 types of up to 3 sub-types, CPU."""
     from ephysatlas.unit_level_encoder.config import Config
 
     return Config(
         device="cpu",
-        vintage="2026_W39",
+        vintage="2026_W41",
         waveform_shape=(4, 16),
         acg_shape=(2, 8),
         stpc_shape=(6,),
         modality_latent_dim=3,
-        gmm_components=3,
-        knn_decoder_k=5,
+        n_types=3,
+        max_subtypes=3,
+        min_units_per_subtype=8,
         context_hidden_dim=16,
         context_layers=2,
         context_dropout=0.0,
-        feature_slice_component_mc_samples=16,
-        readout_neighbours=20,
-        readout_shrinkage=2.0,
     )
 
 
@@ -247,39 +245,34 @@ class FakeContextManager:
         }
 
 
-def make_unit_model_dir(
-    path_models: Path, *, checksums: bool = True, readout: bool = False
-) -> Path:
+def make_unit_model_dir(path_models: Path, *, checksums: bool = True) -> Path:
     """Write a tiny random-init unit model in the published release layout, with its manifest.
 
-    Every stage is real but small: a random-init :class:`UnitAutoencoder`, a latent scaler and a
-    3-component full-covariance GMM fitted on random latents, a random-init context-weight net,
-    and a kNN bank of random exemplars -- with a random context-local member readout when
-    ``readout``, else without one, like a release made before it. No golden example is written;
-    see :func:`write_unit_golden_example`.
+    Every stage is real but small: a random-init :class:`UnitAutoencoder`, a latent scaler, the
+    hierarchical mixture fitted on random latents of 90 "training units", two random-init context
+    networks, and the members readout of those units with random features. No golden example is
+    written; see :func:`write_unit_golden_example`.
     """
     import joblib
     import torch
-    from sklearn.mixture import GaussianMixture
     from sklearn.preprocessing import StandardScaler
 
-    from ephysatlas.unit_level_encoder.data import ContextTransform
-    from ephysatlas.unit_level_encoder.gmm_models import (
+    from ephysatlas.unit_level_encoder.context_weights import (
         ContextWeightModel,
         ContextWeightNet,
-        save_context_weight_bundle,
+        HierarchicalWeightModel,
     )
-    from ephysatlas.unit_level_encoder.knn_decoder import EmpiricalKNNDecoder
+    from ephysatlas.unit_level_encoder.data import ContextTransform
+    from ephysatlas.unit_level_encoder.hierarchy import (
+        MemberReadout,
+        fit_hierarchical_mixture,
+    )
     from ephysatlas.unit_level_encoder.model import UnitAutoencoder
-    from ephysatlas.unit_level_encoder.pipeline import (
-        compute_component_features,
-        save_component_features,
-    )
 
     torch.manual_seed(0)
     rng = np.random.default_rng(0)
     cfg = unit_test_config()
-    path_model = Path(path_models).joinpath("2026_W39_unit_test")
+    path_model = Path(path_models).joinpath("2026_W42_unit_test")
     path_model.mkdir(parents=True, exist_ok=True)
 
     ae = UnitAutoencoder(cfg).eval()
@@ -298,47 +291,35 @@ def make_unit_model_dir(
     latent_dim = cfg.latent_dim()
     scaler = StandardScaler().fit(rng.normal(size=(64, latent_dim)))
     joblib.dump(scaler, path_model.joinpath(model_registry.UNIT_SCALER_FILE))
-    z_train = rng.normal(size=(60, latent_dim)).astype(np.float32)
-    gmm = GaussianMixture(
-        n_components=cfg.gmm_components, covariance_type="full", random_state=0
-    ).fit(z_train)
-    joblib.dump(gmm, path_model.joinpath(model_registry.UNIT_GMM_FILE))
+    centres = rng.normal(size=(3, latent_dim)) * 4.0
+    z_train = (centres[np.arange(90) % 3] + rng.normal(size=(90, latent_dim))).astype(
+        np.float32
+    )
+    mixture = fit_hierarchical_mixture(z_train, cfg)
+    mixture.save(path_model)
 
     n_context = cfg.n_cell_pcs + cfg.n_gene_pcs
     transform = ContextTransform(StandardScaler().fit(rng.normal(size=(64, n_context))))
-    net = ContextWeightNet(
-        n_context,
-        cfg.context_hidden_dim,
-        cfg.context_layers,
-        cfg.context_dropout,
-        cfg.gmm_components,
-    ).eval()
-    save_context_weight_bundle(
-        ContextWeightModel(net, np.zeros((0, n_context), np.float32), "cpu"),
-        transform,
-        path_model,
-        cfg,
-    )
-
-    features = rng.normal(size=(60, len(UNIT_FEATURES))).astype(np.float32)
-    knn = EmpiricalKNNDecoder.from_bank(
-        z_train, features, k=cfg.knn_decoder_k, feature_names=UNIT_FEATURES
-    )
-    if readout:
-        knn.set_context_readout(
-            gmm.predict(z_train),
-            rng.normal(size=(2, n_context)) * 0.3,
-            np.zeros(2),
-            rng.normal(size=(len(z_train), n_context)),
-            key_alpha=10.0,
-            void_context_pc=transform.transform(np.zeros((1, n_context))),
+    nets = []
+    for n_out in (mixture.n_types, mixture.n_subtypes):
+        net = ContextWeightNet(
+            n_context,
+            cfg.context_hidden_dim,
+            cfg.context_layers,
+            cfg.context_dropout,
+            n_out,
+        ).eval()
+        nets.append(
+            ContextWeightModel(
+                net, np.zeros((0, n_context), np.float32), "cpu", transform=transform
+            )
         )
-    knn.save_bank(path_model.joinpath(model_registry.UNIT_KNN_BANK_FILE))
-    save_component_features(
-        path_model.joinpath(model_registry.UNIT_COMPONENT_FEATURES_FILE),
-        compute_component_features(gmm, knn, cfg),
-        UNIT_FEATURES,
-        cfg,
+    HierarchicalWeightModel(*nets, mixture.parent).save(path_model, cfg)
+
+    features = rng.normal(size=(len(z_train), len(UNIT_FEATURES))).astype(np.float32)
+    _, p_subtype = mixture.posterior(z_train)
+    MemberReadout.fit(p_subtype, features, UNIT_FEATURES).save(
+        path_model.joinpath(model_registry.UNIT_MEMBERS_FILE)
     )
     path_model.joinpath("split.json").write_text(
         json.dumps({"train": ["a"], "validation": ["b"], "test": ["c"]})
@@ -347,17 +328,19 @@ def make_unit_model_dir(
     index = {
         "task": "unit-encoding",
         "model_class": "UnitAutoencoder",
-        "vintage": cfg.vintage,
+        "vintage": "2026_W42",
         "granularity": "unit",
         "artifacts": {
             "autoencoder": model_registry.UNIT_AE_FILE,
             "config": model_registry.UNIT_CONFIG_FILE,
             "scaler": model_registry.UNIT_SCALER_FILE,
-            "gmm": model_registry.UNIT_GMM_FILE,
+            "types": model_registry.UNIT_TYPES_FILE,
+            "subtypes": model_registry.UNIT_SUBTYPES_FILE,
+            "subtype_parent": model_registry.UNIT_SUBTYPE_PARENT_FILE,
             "context_transform": model_registry.UNIT_CONTEXT_TRANSFORM_FILE,
-            "context_weights": model_registry.UNIT_CONTEXT_WEIGHTS_FILE,
-            "knn_bank": model_registry.UNIT_KNN_BANK_FILE,
-            "component_features": model_registry.UNIT_COMPONENT_FEATURES_FILE,
+            "type_weights": model_registry.UNIT_TYPE_WEIGHTS_FILE,
+            "subtype_weights": model_registry.UNIT_SUBTYPE_WEIGHTS_FILE,
+            "members": model_registry.UNIT_MEMBERS_FILE,
             "split": "split.json",
         },
         "inputs": {"index": ["pid", "cluster"], "columns": ["x", "y", "z"]},

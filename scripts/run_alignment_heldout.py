@@ -21,7 +21,12 @@ Usage::
 import argparse
 from pathlib import Path
 
-from ephysatlas.alignment.models import CHANNEL_MODEL_REPO_ID, UNIT_MODEL_REPO_ID, VINTAGE
+from ephysatlas.alignment.models import (
+    CHANNEL_MODEL_REPO_ID,
+    UNIT_MODEL_REPO_ID,
+    UNIT_MODEL_REVISION,
+    VINTAGE,
+)
 from ephysatlas.alignment.runner import METHODS, TRACES, RunSettings, run_alignments, summarize
 from ephysatlas.unit_level_encoder.config import DEFAULT_RESULTS_DIR
 
@@ -44,7 +49,9 @@ def main():
                         help="output directory (default: OUT_DIR, with a _human suffix for --trace human)")
     parser.add_argument("--vintage", default=VINTAGE)
     parser.add_argument("--channel-model", default=CHANNEL_MODEL_REPO_ID)
-    parser.add_argument("--unit-model", default=UNIT_MODEL_REPO_ID)
+    parser.add_argument("--unit-model", default=UNIT_MODEL_REPO_ID,
+                        help="unit-level model: Hub repo id or local release directory")
+    parser.add_argument("--unit-revision", default=UNIT_MODEL_REVISION)
     parser.add_argument("--figures", action="store_true", default=SAVE_FIGURES)
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--limit", type=int, default=None, help="only the first N insertions")
@@ -65,6 +72,7 @@ def main():
             vintage=args.vintage,
             channel_repo_id=args.channel_model,
             unit_repo_id=args.unit_model,
+            unit_revision=args.unit_revision,
             save_figures=args.figures,
             overwrite=args.overwrite,
             limit=args.limit,

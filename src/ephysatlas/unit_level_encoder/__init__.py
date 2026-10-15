@@ -1,9 +1,9 @@
 """Unit-level Ephys Atlas model.
 
-Released model: multimodal waveform/ACG/stPC autoencoder -> standardized 60-D
-joint latent -> K=25 full-covariance GMM with global component geometry and
-molecular-context-conditioned mixture weights -> k=20 empirical TRAIN-neighbor
-projection for phenotype features.
+Multimodal waveform/ACG/population-coupling autoencoder -> standardized 60-D joint latent ->
+hierarchical Gaussian mixture of putative cell types and their sub-types (top-down assignment),
+with sub-type weights conditioned on the molecular context of the position -> phenotypes read out
+through each sub-type's TRAIN members.
 """
 
 from .config import Config

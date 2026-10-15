@@ -20,7 +20,7 @@ import numpy as np
 import pandas as pd
 
 from .metrics import alignment_metrics
-from .models import CHANNEL_MODEL_REPO_ID, UNIT_MODEL_REPO_ID, VINTAGE
+from .models import CHANNEL_MODEL_REPO_ID, UNIT_MODEL_REPO_ID, UNIT_MODEL_REVISION, VINTAGE
 from .progress import print_progress
 
 METHODS = ("histology", "histology_unit", "ephys_only")
@@ -38,8 +38,9 @@ class RunSettings:
         out_dir: Output directory.
         methods: Any of :data:`METHODS`.
         trace: Histology trace for the histology methods, one of :data:`TRACES`.
-        vintage: Feature release and model tag.
+        vintage: Feature release and channel-model tag.
         channel_repo_id, unit_repo_id: Released models (Hub repo ids or local release dirs).
+        unit_revision: Tag of the unit-level model on the Hub (ignored for a local release dir).
         save_results: Write each result's ``.npz``.
         save_figures: Draw each result's figure (slower).
         overwrite: Recompute rows already in the CSV.
@@ -53,6 +54,7 @@ class RunSettings:
     vintage: str = VINTAGE
     channel_repo_id: str = CHANNEL_MODEL_REPO_ID
     unit_repo_id: str = UNIT_MODEL_REPO_ID
+    unit_revision: str = UNIT_MODEL_REVISION
     save_results: bool = True
     save_figures: bool = False
     overwrite: bool = False
@@ -107,8 +109,8 @@ def run_alignments(pids: Sequence[str], settings: RunSettings, split_of: Optiona
     channel_model = ChannelModel(settings.channel_repo_id, settings.vintage)
     unit_model = None
     if "histology_unit" in settings.methods:
-        print(f"[alignment] loading {settings.unit_repo_id}@{settings.vintage} and its unit data ...")
-        unit_model = UnitModel.load(settings.unit_repo_id, settings.vintage)
+        print(f"[alignment] loading {settings.unit_repo_id}@{settings.unit_revision} and its unit data ...")
+        unit_model = UnitModel.load(settings.unit_repo_id, settings.unit_revision)
     dataset = ChannelDataset.load(settings.vintage)
     brain_atlas = AllenAtlas()
     traces = HistologyTraces()

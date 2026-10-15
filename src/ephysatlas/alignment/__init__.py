@@ -19,7 +19,14 @@ All return an :class:`AlignmentResult`, scored against a reference alignment by
 from .ephys_only import EphysOnlyLocalizer, PlannedTrajectoryUnavailable, localize_ephys_only
 from .histology import align_histology
 from .metrics import alignment_metrics, result_metrics
-from .models import CHANNEL_MODEL_REPO_ID, UNIT_MODEL_REPO_ID, VINTAGE, ChannelModel, UnitModel
+from .models import (
+    CHANNEL_MODEL_REPO_ID,
+    UNIT_MODEL_REPO_ID,
+    UNIT_MODEL_REVISION,
+    VINTAGE,
+    ChannelModel,
+    UnitModel,
+)
 from .plotting import plot_alignment_result
 from .progress import ProgressCallback, print_progress
 from .result import METHOD_LABELS, AlignmentResult
@@ -34,6 +41,7 @@ __all__ = [
     "PlannedTrajectoryUnavailable",
     "ProgressCallback",
     "UNIT_MODEL_REPO_ID",
+    "UNIT_MODEL_REVISION",
     "UnitModel",
     "VINTAGE",
     "align_histology",

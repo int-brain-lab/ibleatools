@@ -19,6 +19,8 @@ import numpy as np
 CHANNEL_MODEL_REPO_ID = "int-brain-lab/ea-encoder-channel"
 UNIT_MODEL_REPO_ID = "int-brain-lab/ea-encoder-unit"
 VINTAGE = "2026_W41"
+# The unit-level release, trained on the units, split and context volumes of VINTAGE.
+UNIT_MODEL_REVISION = "2026_W42"
 
 
 def default_device() -> str:
@@ -180,7 +182,7 @@ class UnitModel:
     def load(
         cls,
         repo_id: str = UNIT_MODEL_REPO_ID,
-        revision: str = VINTAGE,
+        revision: str = UNIT_MODEL_REVISION,
         device: Optional[str] = None,
         prepared_data_dir: Optional[Path] = None,
     ) -> "UnitModel":
@@ -191,7 +193,7 @@ class UnitModel:
         """
         from ephysatlas.unit_level_encoder import Config, load_unit_model
 
-        cfg = Config(vintage=revision, device=device or default_device())
+        cfg = Config(device=device or default_device())
         if prepared_data_dir is not None:
             cfg.prepared_data_dir = Path(prepared_data_dir)
         if Path(str(repo_id)).is_dir():
@@ -218,6 +220,6 @@ class UnitModel:
         return self.z_scaled[idx], self.axial_um[idx]
 
     def log_mixture_weights(self, context_raw: np.ndarray) -> np.ndarray:
-        """``[N, K]`` log mixture weights gamma_k(x) at raw contexts."""
+        """``[N, S]`` log sub-type weights gamma_k(x) gamma_j|k(x) at raw contexts."""
         w = self.bundle.context_model.weights_for_context(np.asarray(context_raw, np.float32))
         return np.log(np.maximum(np.asarray(w, dtype=np.float64), 1e-12))

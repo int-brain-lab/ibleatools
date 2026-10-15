@@ -46,17 +46,20 @@ ENCODER_CONTEXT_FILES = ("agea_vol_pca.npy", "merfish_vol_pca.npy")
 ENCODER_STATS_FILE = "preprocessing/channel_stats.npz"
 
 # Unit-level encoder: the canonical filenames of a published release. Unlike the other families
-# it ships no recorded unit data -- only the fitted model and the train-split kNN exemplar bank.
-# The per-unit atlas arrays stay on IBL S3 and are prepared locally when needed.
+# it ships no recorded unit data -- only the fitted model and, for the members readout, the
+# waveform features of the TRAIN units with their sub-type posteriors. The per-unit atlas arrays
+# stay on IBL S3 and are prepared locally when needed.
 UNIT_AE_FILE = "autoencoder.pt"
 UNIT_CONFIG_FILE = "config.json"
 UNIT_SCALER_FILE = "shared_latent_scaler.joblib"
-UNIT_GMM_FILE = "global_gmm.joblib"
+UNIT_TYPES_FILE = "types_gmm.joblib"
+UNIT_SUBTYPES_FILE = "subtypes_gmm.joblib"
+UNIT_SUBTYPE_PARENT_FILE = "subtype_parent.npy"
 UNIT_CONTEXT_TRANSFORM_FILE = "context_transform.joblib"
-UNIT_CONTEXT_WEIGHTS_FILE = "context_weight_model_bundle.pt"
-UNIT_KNN_BANK_FILE = "knn_bank.npz"
-# E[feature | GMM component], K x F: what predict() mixes with the local component weights.
-UNIT_COMPONENT_FEATURES_FILE = "component_feature_expectations.npz"
+UNIT_TYPE_WEIGHTS_FILE = "context_weights_types.pt"
+UNIT_SUBTYPE_WEIGHTS_FILE = "context_weights_subtypes.pt"
+# Sub-type phenotypes: the TRAIN units' features, posteriors and each sub-type's expected features.
+UNIT_MEMBERS_FILE = "members.npz"
 UNIT_STATS_FILE = "preprocessing/unit_stats.npz"
 
 

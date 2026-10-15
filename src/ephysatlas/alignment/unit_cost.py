@@ -2,10 +2,11 @@
 
 For every recorded channel row, the units the spike sorter placed within ``half_width_um`` of that
 channel's physical axial position are scored at every trace sample under the unit-level model:
-the log-likelihood of their 60-d latents under the context-conditioned mixture
-``sum_k gamma_k(x) N(z; mu_k, Sigma_k)`` at the sample's molecular context. The row cost is their
-mean negative log-likelihood per latent dimension, minus the row's minimum (only the variation
-along the trace matters). Rows without units stay empty -- nothing is interpolated.
+the log-likelihood of their 60-d latents under the sub-type mixture
+``sum_kj w_kj(x) N(z; mu_kj, Sigma_kj)`` with the weights ``w_kj(x) = gamma_k(x) gamma_j|k(x)`` of
+the sample's molecular context. The row cost is their mean negative log-likelihood per latent
+dimension, minus the row's minimum (only the variation along the trace matters). Rows without
+units stay empty -- nothing is interpolated.
 
 The channel cost is calibrated to a Gaussian NLL per feature (0.5 x squared standardised error /
 n_features, row-relative), the unit cost is matched to its contrast with one factor per probe
@@ -62,11 +63,9 @@ def unit_cost_matrix(
     if len(z) == 0:
         info["unit_reason"] = "no prepared units on this probe"
         return None, info
-    from ephysatlas.unit_level_encoder.gmm_models import component_log_prob
-
     channel_axial = np1_axial_um_in_row_order(len(valid))[np.asarray(valid, dtype=bool)]
-    log_w = unit_model.log_mixture_weights(channel_model.context_raw(trace_xyz))  # [L, K]
-    component_lp = component_log_prob(unit_model.bundle.gmm, z)  # [n_units, K]
+    log_w = unit_model.log_mixture_weights(channel_model.context_raw(trace_xyz))  # [T, S]
+    component_lp = unit_model.bundle.mixture.subtype_log_prob(z)  # [n_units, S]
     latent_dim = max(int(z.shape[1]), 1)
     cost = np.full((len(channel_axial), len(trace_xyz)), np.nan)
     counts = []
