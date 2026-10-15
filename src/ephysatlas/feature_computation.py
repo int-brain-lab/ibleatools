@@ -986,6 +986,7 @@ def destripe_ap_lf(
     ap_k_filter=False,
     lf_k_filter=False,
     nshank=1,
+    skip_lf_destripe=False,
 ):
     """Destripe raw AP and LF snippets with ibldsp.
 
@@ -1004,6 +1005,11 @@ def destripe_ap_lf(
         ap_k_filter (bool): Spatial-filter mode for AP destriping.
         lf_k_filter (bool | None): Spatial-filter mode for LF destriping.
         nshank (int): Number of probe shanks.
+        skip_lf_destripe (bool): Skip ``ibldsp.voltage.destripe_lfp`` and use
+            ``raw_lf`` as-is for ``des_lf``. For an LF source that has already
+            been destriped/CAR'd/decimated upstream, so destriping isn't
+            reapplied with geometry/timing assumptions designed for the native
+            (un-decimated) LF rate.
 
     Returns:
         tuple[np.ndarray | None, np.ndarray | None]: ``(des_ap, des_lf)``.
@@ -1021,15 +1027,18 @@ def destripe_ap_lf(
         )
     des_lf = None
     if raw_lf is not None:
-        des_lf = ibldsp.voltage.destripe_lfp(
-            raw_lf,
-            fs=fs_lf,
-            h=geometry,
-            neuropixel_version=neuropixel_version,
-            channel_labels=channel_labels,
-            k_filter=lf_k_filter,
-            nshank=nshank,
-        )
+        if skip_lf_destripe:
+            des_lf = raw_lf
+        else:
+            des_lf = ibldsp.voltage.destripe_lfp(
+                raw_lf,
+                fs=fs_lf,
+                h=geometry,
+                neuropixel_version=neuropixel_version,
+                channel_labels=channel_labels,
+                k_filter=lf_k_filter,
+                nshank=nshank,
+            )
     return des_ap, des_lf
 
 
@@ -1046,6 +1055,7 @@ def compute_features_from_raw(
     output_dir=Path("."),
     scratch_dir=None,
     lf_k_filter=False,
+    skip_lf_destripe=False,
     feature_params=None,
     **kwargs,
 ):
@@ -1086,6 +1096,10 @@ def compute_features_from_raw(
             :func:`ibldsp.voltage.destripe_lfp`. The default ``False`` preserves
             the current CAR behavior; use ``None`` to bypass LF spatial
             filtering.
+        skip_lf_destripe (bool, optional): Skip ``destripe_lfp`` entirely and
+            use ``raw_lf`` as-is. ``False`` reproduces today's behavior; use
+            ``True`` for LF that has already been destriped/CAR'd/decimated
+            upstream (see :func:`destripe_ap_lf`).
         feature_params (optional): Optional ``FeatureParams``-like object used to
             override the per-feature kwargs. Read duck-typed (``.lf`` / ``.csd``
             attributes) so this module carries no dependency on the
@@ -1139,6 +1153,7 @@ def compute_features_from_raw(
         neuropixel_version=neuropixel_version,
         ap_k_filter=False,
         lf_k_filter=lf_k_filter,
+        skip_lf_destripe=skip_lf_destripe,
     )
 
     # rms_lf_no_car needs a second, no-CAR (k_filter=None) LF destripe of the raw
@@ -1150,7 +1165,10 @@ def compute_features_from_raw(
         lf_p = getattr(feature_params, "lf", None)
         compute_rms_no_car = bool(getattr(lf_p, "compute_rms_no_car", False))
     des_lf_no_car = None
-    if compute_rms_no_car and raw_lf is not None:
+    if compute_rms_no_car and raw_lf is not None and not skip_lf_destripe:
+        # A meaningful "no-CAR" variant only exists when this call is actually
+        # destriping raw_lf; a skip_lf_destripe source has already had CAR
+        # applied upstream (irreversibly), so there is nothing to recompute.
         _, des_lf_no_car = destripe_ap_lf(
             None,
             raw_lf,
@@ -1313,6 +1331,7 @@ def compute_features_from_destriped(
                 "bands": csd_p.bands,
                 "decimate": csd_p.decimate,
                 "scale": csd_p.scale,
+                "denoise": getattr(csd_p, "denoise", True),
             }
         wf_p = getattr(feature_params, "waveforms", None)
         if wf_p is not None:

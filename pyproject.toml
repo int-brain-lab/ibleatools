@@ -4,13 +4,13 @@ description = "Tools for IBL data analysis and processing"
 authors = [
     {name = "International Brain Laboratory", email = "software-devs@internationalbrainlab.org"},
 ]
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 readme = "README.md"
 license = {text = "MIT"}
 classifiers = [
     "Intended Audience :: Science/Research",
     "Topic :: Neuroscience :: Data analysis",
-    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
 ]
 dynamic = ["version"]
 # Lite by default: data download (S3), model download + region inference, lf/csd/ap
@@ -23,7 +23,7 @@ dependencies = [
     # >=1.13.0: ibldsp.waveforms.compute_slowness (new) and compute_spatial_spread fix
     # (wrong dist_chanel_from_peak arg, signed weights fed into the weighted spread
     # average) -- both used by #123's spatial_spread_um/slowness_s_per_m features below.
-    "ibl-neuropixel>=1.13.0", # ibldsp, neuropixel, spikeglx
+    "ibl-neuropixel>=1.14.0", # ibldsp, neuropixel, spikeglx
     "lfpack>=1.0.0",          # data.py read_lfp_features() lazy import (LFPackReader)
     "iblatlas>=1.2.0",        # iblatlas.atlas/regions/genomics (merfish.denoise_volume)
     "xgboost>=3.0.1",         # regionclassifier (top-level import)
@@ -47,7 +47,7 @@ dependencies = [
 # valid. Adds nothing — the base install is already the lite set.
 lite = []
 # Full install: the base (lite) plus the spike/waveform-computation stack AND the
-# SDSC supercomputing-pipeline deps (luigi, iblscripts).
+# SDSC supercomputing-pipeline deps (luigi, iblscripts), plus a Jupyter kernel (ipykernel).
 full = [
     "dartsort>=0.5.25",
     "spikeinterface>=0.104.9",
@@ -65,6 +65,7 @@ full = [
     "fsspec",
     "aiohttp",
     "dandi",
+    "ipykernel",
 ]
 
 [build-system]
@@ -73,7 +74,7 @@ build-backend = "pdm.backend"
 
 [tool.ruff]
 line-length = 88
-target-version = "py311"
+target-version = "py312"
 exclude = [
   ".git",
   ".venv",

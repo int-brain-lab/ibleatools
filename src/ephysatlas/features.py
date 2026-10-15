@@ -117,6 +117,7 @@ from pathlib import Path
 import random
 import shutil
 import string
+import sys
 import tempfile
 from typing_extensions import Annotated, List
 from typing import Optional
@@ -308,6 +309,7 @@ class ChannelDataFrameSchema(pa.DataFrameModel):
         metadata={"raw_unit": "N/A"},
     )
     atlas_id: int = pa.Field(
+        coerce=True,
         description="Atlas region identifier in Allen mapping",
         metadata={"raw_unit": "N/A"},
     )
@@ -1429,7 +1431,7 @@ def lf(data, fs, bands=None, decay_features=True):
     return ModelLfFeatures.validate(df_lf)
 
 
-def csd(data, fs, geometry, bands=None, decimate=10, scale=True):
+def csd(data, fs, geometry, bands=None, decimate=10, scale=True, denoise=True):
     """Compute CSD features from a numpy array.
 
     Computes the current source density (CSD) features from electrophysiological data
@@ -1442,10 +1444,21 @@ def csd(data, fs, geometry, bands=None, decimate=10, scale=True):
         bands (dict, optional): Dictionary with frequency bands to compute.
             Defaults to BANDS constant.
         decimate (int, optional): Decimation factor for CSD calculation.
-            Defaults to 10.
+            Defaults to 10. ``1`` skips ``scipy.signal.decimate`` entirely
+            (passed through unchanged) rather than calling it with a
+            no-op factor: ``scipy.signal.decimate(..., q=1, ...)`` designs an
+            anti-aliasing filter with cutoff exactly at the Nyquist boundary,
+            which ``scipy.signal.firwin`` rejects.
         scale (bool, optional): Forwarded to current_source_density. If True, scale the
             finite difference by the intercontact distance and tissue conductivity;
             if False, return the raw numerical finite difference. Defaults to True.
+        denoise (bool, optional): Apply ``ibldsp.cadzow.cadzow_denoiser`` to the
+            decimated data before the CSD finite difference. Defaults to
+            ``True`` (today's behavior). Set ``False`` when ``data`` has
+            already been Cadzow-denoised upstream (e.g. combined with
+            ``decimate=1`` for a source that is already at the target rate),
+            so it isn't denoised a second time on top of a lossy
+            reconstruction.
 
     Returns:
         pd.DataFrame: DataFrame with columns ['channel', 'rms_lf_csd', 'psd_delta_csd',
@@ -1455,19 +1468,24 @@ def csd(data, fs, geometry, bands=None, decimate=10, scale=True):
         The function applies Cadzow denoising and current source density computation
         before computing the spectral features.
     """
-    data_rs = scipy.signal.decimate(data, decimate, axis=1, ftype="fir")
-    data_rs = ibldsp.cadzow.cadzow_denoiser(
-        data_rs,
-        rank=5,
-        fs=fs / decimate,
-        niter=1,
-        fmax=125,
-        nswx=64,
-        ovx=32,
-        gap_threshold=2.0,
-        ppca_k=2.0,
-        h=geometry,
+    data_rs = (
+        data
+        if decimate == 1
+        else scipy.signal.decimate(data, decimate, axis=1, ftype="fir")
     )
+    if denoise:
+        data_rs = ibldsp.cadzow.cadzow_denoiser(
+            data_rs,
+            rank=5,
+            fs=fs / decimate,
+            niter=1,
+            fmax=125,
+            nswx=64,
+            ovx=32,
+            gap_threshold=2.0,
+            ppca_k=2.0,
+            h=geometry,
+        )
     # Calculate the CSD features
     data_rs_diff2 = ibldsp.voltage.current_source_density(
         data_rs, h=geometry, n=2, scale=scale
@@ -1641,9 +1659,10 @@ def dart_subtraction_numpy(data, fs, geometry, params=None, scratch_dir=None, **
     subtraction_cfg = dartsort.SubtractionConfig(
         subtraction_denoising_cfg=denoising_cfg,
         chunk_length_samples=params.chunk_length_samples,
+        detection_proposal="voltage",
         # This is behaviour change from older version of dartsort
         # In the older version, there was gradual reduction of threshold.
-        # Not it is a fixed threshold
+        # Now it is a fixed threshold
         # sigma deviation; DARTsort >=0.5.25 name for detection_threshold
         voltage_threshold=params.detection_threshold,
         realign_to_denoiser=False,
@@ -1686,17 +1705,28 @@ def dart_subtraction_numpy(data, fs, geometry, params=None, scratch_dir=None, **
     # New version of DARTsort outputs a single object.
     # And has a different keyword arguments for subtract func.
     temp_folder = scratch_dir.joinpath(f"dart_{temp_suffix}")
-    detected_spikes = dartsort.subtract(
-        output_dir=temp_folder,
-        recording=rec_np,
-        waveform_cfg=waveform_cfg,
-        featurization_cfg=featurization_cfg,
-        subtraction_cfg=subtraction_cfg,
-        computation_cfg=dartsort.ComputationConfig.from_n_jobs(params.n_jobs),
-        show_progress=True,
-    )
+    # TEMPORARY FIX to allow spike/waveform feature computation on macOS machines.
+    # DARTsort 0.5.31 crashes on Apple Silicon even on CPU
+    # Should be removed with new release of DARTsort (>=0.5.32) which fixes the issue.
+    import torch
+
+    mps_is_available = torch.backends.mps.is_available
+    if sys.platform == "darwin":
+        torch.backends.mps.is_available = lambda: False
+    try:
+        detected_spikes = dartsort.subtract(
+            output_dir=temp_folder,
+            recording=rec_np,
+            waveform_cfg=waveform_cfg,
+            featurization_cfg=featurization_cfg,
+            subtraction_cfg=subtraction_cfg,
+            computation_cfg=dartsort.ComputationConfig.from_n_jobs(params.n_jobs),
+            show_progress=True,
+        )
+    finally:
+        torch.backends.mps.is_available = mps_is_available
     if detected_spikes is None or detected_spikes.parent_h5_path is None:
-        raise RuntimeError("DARTsort subtraction did not produce a feature file")
+        raise RuntimeError("DARTsort subtraction did not produce a feature file.")
 
     # denoised_ptp_amplitudes is evaluated at each spike's detection channel, so a
     # single per-spike RMS-normalised amplitude, exactly un-scaled here.

@@ -154,11 +154,18 @@ class CsdParams:
         decimate (int): Temporal decimation factor applied before the CSD.
         scale (bool): Whether ``ibldsp.voltage.current_source_density`` scales the
             CSD.
+        denoise (bool): Whether the CSD step applies its internal
+            ``ibldsp.cadzow.cadzow_denoiser`` pass before the finite difference.
+            ``True`` reproduces today's behavior. Set ``False`` when the input
+            data has already been Cadzow-denoised upstream (e.g. a pre-denoised
+            LF source), so it isn't denoised a second time on top of a lossy
+            reconstruction.
     """
 
     bands: Mapping | None = None
     decimate: int = 10
     scale: bool = True
+    denoise: bool = True
 
 
 @dataclass(frozen=True)
@@ -259,6 +266,14 @@ class FeatureComputationOptions:
             missing.
         lf_k_filter (bool | None): Spatial filter mode forwarded to LF
             destriping in ``compute_features_from_raw``.
+        skip_lf_destripe (bool): Skip ``ibldsp.voltage.destripe_lfp`` entirely
+            and use the raw LF snippet as-is for feature computation. ``False``
+            reproduces today's behavior. Set ``True`` for a source whose LF has
+            already been destriped/CAR'd/decimated upstream (e.g. a
+            pre-processed compressed or checkpoint source), where re-running
+            destriping would reapply CAR/highpass/bad-channel-interpolation
+            with geometry/timing assumptions designed for the native
+            (un-decimated) LF rate.
         channel_labels (np.ndarray | None): Explicit per-channel bad-channel
             labels. When provided, this overrides the calculator's automatic
             label resolution (stored labels / cbin / snippet detection) -- e.g.
@@ -282,6 +297,7 @@ class FeatureComputationOptions:
     include_trajectory: bool = True
     require_trajectory: bool = False
     lf_k_filter: bool | None = False
+    skip_lf_destripe: bool = False
     channel_labels: np.ndarray | None = None
     feature_params: FeatureParams | Mapping | None = None
     extra_kwargs: Mapping[str, Any] = field(default_factory=dict)
