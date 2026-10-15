@@ -40,14 +40,27 @@ ENCODER_WEIGHTS_FILE = "spatial_encoder.pt"
 ENCODER_CONFIDENCE_FILE = "confidence_model.pt"
 ENCODER_BANK_FILE = "neighbor_bank.npz"
 ENCODER_CONTEXT_FILES = ("agea_vol_pca.npy", "merfish_vol_pca.npy")
+# Training-data statistics the encoder was fitted with: the per-feature clipping percentiles and
+# the feature/context standardisation. The means and stds also ride inside the weights as buffers;
+# the clipping thresholds do not, and are needed to preprocess new recordings the way training did.
+ENCODER_STATS_FILE = "preprocessing/channel_stats.npz"
 
-# Unit-level encoder: the canonical filenames a published release stages its checkpoints under.
-# Unlike the other families it ships no recorded data -- only weights. The per-unit atlas
-# arrays are read from a local cache prepared outside this package.
+# Unit-level encoder: the canonical filenames of a published release. Unlike the other families
+# it ships no recorded unit data -- only the fitted model and, for the members readout, the
+# waveform features of the TRAIN units with their sub-type posteriors. The per-unit atlas arrays
+# stay on IBL S3 and are prepared locally when needed.
 UNIT_AE_FILE = "autoencoder.pt"
-UNIT_GMM_FILE = "point_transformer_gmm.pt"
+UNIT_CONFIG_FILE = "config.json"
 UNIT_SCALER_FILE = "shared_latent_scaler.joblib"
-UNIT_UNCOND_GMM_FILE = "unconditional_gmm_train_only.joblib"
+UNIT_TYPES_FILE = "types_gmm.joblib"
+UNIT_SUBTYPES_FILE = "subtypes_gmm.joblib"
+UNIT_SUBTYPE_PARENT_FILE = "subtype_parent.npy"
+UNIT_CONTEXT_TRANSFORM_FILE = "context_transform.joblib"
+UNIT_TYPE_WEIGHTS_FILE = "context_weights_types.pt"
+UNIT_SUBTYPE_WEIGHTS_FILE = "context_weights_subtypes.pt"
+# Sub-type phenotypes: the TRAIN units' features, posteriors and each sub-type's expected features.
+UNIT_MEMBERS_FILE = "members.npz"
+UNIT_STATS_FILE = "preprocessing/unit_stats.npz"
 
 
 class HFModelSource:

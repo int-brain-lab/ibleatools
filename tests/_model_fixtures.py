@@ -182,3 +182,206 @@ def make_model_dir(
     if checksums:
         write_checksums(path_model)
     return path_model
+
+
+# ---- unit-level encoder ---------------------------------------------------------------------
+
+# The phenotype features the released unit model reads out (the order of
+# ``waveform_feature_names.json`` in the prepared unit data).
+# Spelled out rather than imported: the unit package pulls in torch, which this module must not
+# (see test_unit_encoder). test_unit_waveform_features checks it against FEATURE_NAMES.
+UNIT_FEATURES = [
+    "depolarisation_slope",
+    "recovery_slope",
+    "repolarisation_slope",
+    "spatial_spread_um",
+    "tip_val",
+    "spike_width_secs",
+    "predepolarisation_width_secs",
+    "spike_amplitude",
+    "peak_to_trough_ratio_log",
+    "polarity",
+]
+
+
+def unit_test_config():
+    """A shrunk unit-model ``Config``: tiny modalities, 3 types of up to 3 sub-types, CPU."""
+    from ephysatlas.unit_level_encoder.config import Config
+
+    return Config(
+        device="cpu",
+        vintage="2026_W41",
+        waveform_shape=(4, 16),
+        acg_shape=(2, 8),
+        stpc_shape=(6,),
+        modality_latent_dim=3,
+        n_types=3,
+        max_subtypes=3,
+        min_units_per_subtype=8,
+        context_hidden_dim=16,
+        context_layers=2,
+        context_dropout=0.0,
+    )
+
+
+class FakeContextManager:
+    """Deterministic stand-in for ``ContextAtlasManager``: no Allen atlas download.
+
+    Maps a position to a smooth 50 + 50 dimensional "context", so predictions vary with position
+    the way they do over the real PCA volumes.
+    """
+
+    def __init__(self, n_cell_pcs=50, n_gene_pcs=50):
+        rng = np.random.default_rng(3)
+        self.w_cell = rng.normal(size=(3, n_cell_pcs)) * 400.0
+        self.w_gene = rng.normal(size=(3, n_gene_pcs)) * 400.0
+
+    def sample_context_numpy_m(self, xyz_m, mode="clip"):
+        xyz = np.asarray(xyz_m, np.float64)
+        xyz = np.column_stack([-np.abs(xyz[:, 0]), xyz[:, 1], xyz[:, 2]])
+        return {
+            "cell_pc": np.sin(xyz @ self.w_cell).astype(np.float32),
+            "gene_pc": np.cos(xyz @ self.w_gene).astype(np.float32),
+        }
+
+
+def make_unit_model_dir(path_models: Path, *, checksums: bool = True) -> Path:
+    """Write a tiny random-init unit model in the published release layout, with its manifest.
+
+    Every stage is real but small: a random-init :class:`UnitAutoencoder`, a latent scaler, the
+    hierarchical mixture fitted on random latents of 90 "training units", two random-init context
+    networks, and the members readout of those units with random features. No golden example is
+    written; see :func:`write_unit_golden_example`.
+    """
+    import joblib
+    import torch
+    from sklearn.preprocessing import StandardScaler
+
+    from ephysatlas.unit_level_encoder.context_weights import (
+        ContextWeightModel,
+        ContextWeightNet,
+        HierarchicalWeightModel,
+    )
+    from ephysatlas.unit_level_encoder.data import ContextTransform
+    from ephysatlas.unit_level_encoder.hierarchy import (
+        MemberReadout,
+        fit_hierarchical_mixture,
+    )
+    from ephysatlas.unit_level_encoder.model import UnitAutoencoder
+
+    torch.manual_seed(0)
+    rng = np.random.default_rng(0)
+    cfg = unit_test_config()
+    path_model = Path(path_models).joinpath("2026_W42_unit_test")
+    path_model.mkdir(parents=True, exist_ok=True)
+
+    ae = UnitAutoencoder(cfg).eval()
+    torch.save(
+        {
+            "model_state_dict": ae.state_dict(),
+            "config": cfg.to_json_dict(),
+            "polarity_values": None,
+        },
+        path_model.joinpath(model_registry.UNIT_AE_FILE),
+    )
+    path_model.joinpath(model_registry.UNIT_CONFIG_FILE).write_text(
+        json.dumps(cfg.to_release_dict(), indent=2)
+    )
+
+    latent_dim = cfg.latent_dim()
+    scaler = StandardScaler().fit(rng.normal(size=(64, latent_dim)))
+    joblib.dump(scaler, path_model.joinpath(model_registry.UNIT_SCALER_FILE))
+    centres = rng.normal(size=(3, latent_dim)) * 4.0
+    z_train = (centres[np.arange(90) % 3] + rng.normal(size=(90, latent_dim))).astype(
+        np.float32
+    )
+    mixture = fit_hierarchical_mixture(z_train, cfg)
+    mixture.save(path_model)
+
+    n_context = cfg.n_cell_pcs + cfg.n_gene_pcs
+    transform = ContextTransform(StandardScaler().fit(rng.normal(size=(64, n_context))))
+    nets = []
+    for n_out in (mixture.n_types, mixture.n_subtypes):
+        net = ContextWeightNet(
+            n_context,
+            cfg.context_hidden_dim,
+            cfg.context_layers,
+            cfg.context_dropout,
+            n_out,
+        ).eval()
+        nets.append(
+            ContextWeightModel(
+                net, np.zeros((0, n_context), np.float32), "cpu", transform=transform
+            )
+        )
+    HierarchicalWeightModel(*nets, mixture.parent).save(path_model, cfg)
+
+    features = rng.normal(size=(len(z_train), len(UNIT_FEATURES))).astype(np.float32)
+    _, p_subtype = mixture.posterior(z_train)
+    MemberReadout.fit(p_subtype, features, UNIT_FEATURES).save(
+        path_model.joinpath(model_registry.UNIT_MEMBERS_FILE)
+    )
+    path_model.joinpath("split.json").write_text(
+        json.dumps({"train": ["a"], "validation": ["b"], "test": ["c"]})
+    )
+
+    index = {
+        "task": "unit-encoding",
+        "model_class": "UnitAutoencoder",
+        "vintage": "2026_W42",
+        "granularity": "unit",
+        "artifacts": {
+            "autoencoder": model_registry.UNIT_AE_FILE,
+            "config": model_registry.UNIT_CONFIG_FILE,
+            "scaler": model_registry.UNIT_SCALER_FILE,
+            "types": model_registry.UNIT_TYPES_FILE,
+            "subtypes": model_registry.UNIT_SUBTYPES_FILE,
+            "subtype_parent": model_registry.UNIT_SUBTYPE_PARENT_FILE,
+            "context_transform": model_registry.UNIT_CONTEXT_TRANSFORM_FILE,
+            "type_weights": model_registry.UNIT_TYPE_WEIGHTS_FILE,
+            "subtype_weights": model_registry.UNIT_SUBTYPE_WEIGHTS_FILE,
+            "members": model_registry.UNIT_MEMBERS_FILE,
+            "split": "split.json",
+        },
+        "inputs": {"index": ["pid", "cluster"], "columns": ["x", "y", "z"]},
+        "outputs": {
+            "kind": "continuous",
+            "columns": list(UNIT_FEATURES),
+            "feature_order_sha256": model_registry.feature_order_sha256(UNIT_FEATURES),
+            "latent_dim": latent_dim,
+        },
+    }
+    path_model.joinpath(model_registry.MODEL_MANIFEST_FILE).write_text(
+        json.dumps(index, indent=2)
+    )
+    if checksums:
+        write_checksums(path_model)
+    return path_model
+
+
+def unit_positions(n=12, seed=1):
+    """Positions (metres, IBL frame) spread over both hemispheres of a mouse brain."""
+    rng = np.random.default_rng(seed)
+    import pandas as pd
+
+    xyz = np.column_stack(
+        [
+            rng.uniform(-4e-3, 4e-3, n),
+            rng.uniform(-7e-3, 3e-3, n),
+            rng.uniform(-6e-3, 0, n),
+        ]
+    )
+    index = pd.MultiIndex.from_arrays(
+        [["pid"] * n, np.arange(n)], names=["pid", "cluster"]
+    )
+    return pd.DataFrame(xyz, index=index, columns=["x", "y", "z"])
+
+
+def synthetic_units(cfg, n=8, seed=2):
+    """Max-abs normalized random waveforms plus random ACG/stPC, shaped as the config expects."""
+    rng = np.random.default_rng(seed)
+    waveform = rng.normal(size=(n, *cfg.waveform_shape)).astype(np.float32)
+    waveform /= np.abs(waveform).max(axis=(1, 2), keepdims=True)
+    acg = np.abs(rng.normal(size=(n, *cfg.acg_shape))).astype(np.float32)
+    stpc = rng.normal(size=(n, *cfg.stpc_shape)).astype(np.float32)
+    return waveform, acg, stpc
