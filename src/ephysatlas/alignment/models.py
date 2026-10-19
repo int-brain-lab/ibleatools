@@ -18,8 +18,10 @@ import numpy as np
 
 CHANNEL_MODEL_REPO_ID = "int-brain-lab/ea-encoder-channel"
 UNIT_MODEL_REPO_ID = "int-brain-lab/ea-encoder-unit"
-VINTAGE = "2026_W41"
-# The unit-level release, trained on the units, split and context volumes of VINTAGE.
+# The channel-level release and the feature release it was trained on.
+VINTAGE = "2026_W42"
+# The unit-level release, trained on the units, split and context volumes of 2026_W41 (the
+# channel-level release 2026_W42 reuses that split and those volumes).
 UNIT_MODEL_REVISION = "2026_W42"
 
 
