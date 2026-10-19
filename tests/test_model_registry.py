@@ -591,7 +591,7 @@ class TestUnitEncoderDispatch(unittest.TestCase):
 
         # Dispatch is on model_class -- the bare class the unit manifest records.
         builder = models._resolve_wrapper(
-            Path("/does/not/matter"), {"model_class": "MultimodalAutoencoder"}
+            Path("/does/not/matter"), {"model_class": "UnitAutoencoder"}
         )
         self.assertIs(builder, models._unit_encoder)
 

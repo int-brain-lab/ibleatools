@@ -60,7 +60,7 @@ MODEL_WRAPPERS = {
     "xgboost.sklearn.XGBClassifier": _region_classifier,
     "NeighborInpaintingModel": _spatial_encoder,
     # The unit encoder dispatches on its entry checkpoint's class; UnitEncoder loads the rest.
-    "MultimodalAutoencoder": _unit_encoder,
+    "UnitAutoencoder": _unit_encoder,
     # The channel-region transformer ensemble (one seed per artifacts.seeds entry).
     "ProbeTransformer": _probe_transformer,
 }
