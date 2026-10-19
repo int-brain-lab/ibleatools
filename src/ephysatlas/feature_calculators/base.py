@@ -28,6 +28,7 @@ from filelock import FileLock
 from ephysatlas.feature_computation import compute_features_from_raw, destripe_ap_lf
 from ephysatlas.utils import setup_output_directory
 
+from .aggregate import compute_aggregated_features, get_snippet_start_times
 from .provenance import collect_ibleatools_provenance, log_reproduction_command
 from .types import (
     DestripeOptions,
@@ -330,6 +331,36 @@ class BaseFeatureCalculator(abc.ABC):
             snippet_level_dir=snippet_level_dir,
             manifest_record=manifest_record,
         )
+
+    def compute_denoised_features(
+        self,
+        n_snippets: int = 5,
+        duration_ap: float = 5.0,
+        duration_lf: float = 5.0,
+        options: FeatureComputationOptions | None = None,
+        n_jobs: int = 1,
+    ) -> pd.DataFrame:
+        """Compute features on snippets spread over the recording, then aggregate and denoise them.
+
+        The start times come from ``get_snippet_start_times`` with its defaults; use it and
+        ``compute_aggregated_features`` directly to choose the margin, method or windows.
+
+        Args:
+            n_snippets (int): Number of snippets.
+            duration_ap (float): AP duration of each snippet in seconds.
+            duration_lf (float): LF duration of each snippet in seconds.
+            options (FeatureComputationOptions, optional): Options of every snippet computation.
+            n_jobs (int): Snippets computed in parallel.
+
+        Returns:
+            pd.DataFrame: Aggregated and denoised features indexed by ``(pid, channel)``.
+        """
+        recording_duration = min(d for d in self.available_duration() if d is not None)
+        t_starts = get_snippet_start_times(
+            recording_duration, n_snippets, max(duration_ap, duration_lf)
+        )
+        windows = [SnippetWindow(t, duration_ap, duration_lf) for t in t_starts]
+        return compute_aggregated_features(self, windows, options, n_jobs=n_jobs)
 
     def _validate_window(self, window: SnippetWindow) -> None:
         """Validate a snippet window against available stream durations."""

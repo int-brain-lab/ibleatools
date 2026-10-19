@@ -38,8 +38,21 @@ Examples
 ...     SnippetWindow(t_start=300.0, duration_ap=5.0, duration_lf=25.0),
 ...     FeatureComputationOptions(features_to_compute=["lf", "csd"]),
 ... )
+
+Features aggregated over several snippets (per-channel median, denoised):
+
+>>> df = calculator.compute_denoised_features(n_snippets=5, duration_ap=5.0, duration_lf=5.0)
+>>> # or choose the windows
+>>> t_starts = get_snippet_start_times(3600.0, n_snippets=5, snippet_duration=5.0, margin=300.0)
+>>> windows = [SnippetWindow(t, 5.0, 5.0) for t in t_starts]
+>>> df = compute_aggregated_features(calculator, windows)
 """
 
+from .aggregate import (
+    check_snippet_overlap,
+    compute_aggregated_features,
+    get_snippet_start_times,
+)
 from .base import BaseFeatureCalculator
 from .ibl import IBLPIDFeatureCalculator
 from .lfpack import LFPackFeatureCalculator
@@ -83,4 +96,7 @@ __all__ = [
     "SpikeInterfaceFeatureCalculator",
     "SpikeInterfaceZarrFeatureCalculator",
     "WaveformParams",
+    "check_snippet_overlap",
+    "compute_aggregated_features",
+    "get_snippet_start_times",
 ]
