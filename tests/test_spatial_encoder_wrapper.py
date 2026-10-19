@@ -42,11 +42,12 @@ def setUpModule():
 
 
 def make_spatial_model_dir(
-    path_models: Path, *, stats_offset: float = 0.0, bank: dict = None
+    path_models: Path, *, stats_offset: float = 0.0, bank: dict = None, features=FEATURES
 ) -> Path:
     """A tiny spatial-encoder release: weights, confidence model, stats, split, bank, manifest.
 
-    ``bank`` (``xyz``, ``feat``, ``pid``) replaces the default three channels at the origin.
+    ``bank`` (``xyz``, ``feat``, ``pid``) replaces the default three channels at the origin;
+    ``features`` is the manifest's ordered output list.
     """
     import torch
 
@@ -58,7 +59,7 @@ def make_spatial_model_dir(
     torch.manual_seed(0)
     path_model = Path(path_models).joinpath("2026_W39_encoder")
     path_model.mkdir(parents=True)
-    f_e = len(FEATURES)
+    f_e = len(features)
     e_mean = torch.arange(f_e, dtype=torch.float32)
     e_std = torch.full((f_e,), 2.0)
     ctx_mean = torch.zeros(100)
@@ -112,8 +113,8 @@ def make_spatial_model_dir(
         "inputs": {"index": ["pid", "channel"], "columns": ["x", "y", "z"]},
         "outputs": {
             "kind": "continuous",
-            "columns": FEATURES,
-            "feature_order_sha256": model_registry.feature_order_sha256(FEATURES),
+            "columns": list(features),
+            "feature_order_sha256": model_registry.feature_order_sha256(list(features)),
         },
         "config": {
             "architecture": architecture,
@@ -289,3 +290,35 @@ class TestSpatialEncoderPredictHemispheres(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestSpatialEncoderLegacyFeatureNames(unittest.TestCase):
+    """Releases trained before the bipolar-referencing rename list ``*_csd_diff1``: they load,
+    pass their digest check, and report and predict the features under the ``*_bpr`` names."""
+
+    LEGACY = ["rms_lf", "rms_lf_csd_diff1", "psd_alpha_csd_diff1", "rms_ap"]
+    CURRENT = ["rms_lf", "rms_lf_bpr", "psd_alpha_bpr", "rms_ap"]
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_legacy_release_reports_and_predicts_the_current_names(self):
+        from unittest import mock
+
+        import pandas as pd
+
+        from ephysatlas import load_pretrained
+        from ephysatlas.models.encoder_inpainting import SpatialEncoder
+
+        path_model = make_spatial_model_dir(self.tmp, features=self.LEGACY)
+        fake = _FakeContextManager()
+        with mock.patch.object(SpatialEncoder, "_context_manager", lambda self: fake):
+            encoder = load_pretrained(path_model, device="cpu")
+            self.assertEqual(encoder.features, self.CURRENT)
+            index = pd.MultiIndex.from_tuples([("query", 0), ("query", 1)], names=["pid", "channel"])
+            df = pd.DataFrame(np.zeros((2, 3)), index=index, columns=["x", "y", "z"])
+            out = encoder.predict(df)
+        self.assertEqual(list(out.columns), [f"pred_{f}" for f in self.CURRENT])

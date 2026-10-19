@@ -21,6 +21,22 @@ import pandas as pd
 
 from ephysatlas import model_registry
 
+
+def current_feature_names(names) -> list:
+    """Feature names under their current spelling.
+
+    Releases trained before the bipolar-referencing rename (vintage 2026_W41 and earlier) list the
+    first spatial difference of the LFP as ``*_csd_diff1``; they are reported as ``*_bpr``, the
+    names the feature tables are read with (``ephysatlas.data.LEGACY_FEATURE_RENAMES``). The
+    release's own list, and its digest, are unchanged.
+    """
+    names = list(names)
+    if not any(str(n).endswith("_csd_diff1") for n in names):
+        return names
+    from ephysatlas.data import LEGACY_FEATURE_RENAMES
+
+    return [LEGACY_FEATURE_RENAMES.get(n, n) for n in names]
+
 logger = logging.getLogger(__name__)
 
 # Roles this family reads out of the manifest's `artifacts` block.
@@ -173,6 +189,11 @@ def build_neighbor_bank(path_model: Path, df, manifest: dict, model=None) -> Pat
     """
     path_model = Path(path_model)
     features = list((manifest.get("outputs") or {}).get("columns") or [])
+    # A table read with the current names serves a release that lists the legacy ones.
+    features = [
+        c if c in df.columns else n
+        for c, n in zip(features, current_feature_names(features))
+    ]
     missing = [c for c in features + ["x", "y", "z"] if c not in df.columns]
     if missing:
         raise KeyError(
@@ -242,8 +263,8 @@ class SpatialEncoder:
 
     @property
     def features(self) -> list:
-        """Ordered names of the features this model predicts (``outputs.columns``)."""
-        return list(self.outputs.get("columns") or [])
+        """Ordered names of the features this model predicts (``outputs.columns``, current names)."""
+        return current_feature_names(self.outputs.get("columns") or [])
 
     def preprocessing_stats(self) -> dict:
         """Return the training-data statistics the model was fitted with.
@@ -557,7 +578,9 @@ class SpatialEncoder:
             batch_size=batch_size,
         )
         return pd.DataFrame(
-            predictions, index=df.index, columns=[f"pred_{f}" for f in features]
+            predictions,
+            index=df.index,
+            columns=[f"pred_{f}" for f in current_feature_names(features)],
         )
 
     def predict_xyz(
@@ -643,6 +666,14 @@ class SpatialEncoder:
             raise FileNotFoundError(f"no example/golden files under {example}")
         got = self.predict(pd.read_parquet(sample_file))
         expected = pd.read_parquet(expected_file)
+        # Golden files of releases from before the rename hold the legacy names.
+        expected = expected.rename(
+            columns={
+                c: "pred_" + current_feature_names([c.removeprefix("pred_")])[0]
+                for c in expected.columns
+                if c.startswith("pred_")
+            }
+        )
         np.testing.assert_allclose(
             got.to_numpy(),
             expected.loc[:, got.columns].to_numpy(),
