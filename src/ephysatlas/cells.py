@@ -600,9 +600,7 @@ def display_stpc(
         brain_regions=br,
         ax=ax[-1],
     )
-    ax[0].set(
-        xlim=(tscale[0], tscale[-1]), xlabel="Population coupling lag (s)"
-    )
+    ax[0].set(xlim=(tscale[0], tscale[-1]), xlabel="Population coupling lag (s)")
     if label is not None:
         fig.suptitle(label)
     if save_file is not None:
