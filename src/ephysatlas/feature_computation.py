@@ -1078,7 +1078,10 @@ def compute_features_from_raw(
         fs_lf (float, optional): Sampling frequency (Hz) for the LF stream. Must
             be positive when ``raw_lf`` is provided.
         geometry (dict): Mapping containing at least ``"x"`` and ``"y"`` arrays
-            describing channel coordinates.
+            describing channel coordinates. Assumed to be a single shank (as IBL
+            pids are): the CSD/BPR, Cadzow denoising and spike/waveform features
+            use the channels' x, y only, so shanks sharing (x, y) positions get
+            mixed. Split multi-shank recordings per shank first.
         channel_labels (np.ndarray, optional): Per-channel label array used to
             mask bad channels during destriping. Defaults to zeros matching the
             available data.
