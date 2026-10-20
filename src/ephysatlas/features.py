@@ -465,8 +465,16 @@ class ModelCsdFeatures(BaseChannelFeatures):
     density (CSD) features including RMS values and power spectral density
     across different frequency bands.
 
+    The `*_csd` columns derive from the second spatial difference of the LFP
+    (the CSD proper, A/m**3) and the `*_csd_diff1` columns from the first
+    spatial difference (a current density, A/m**2). Both are scaled by the
+    tissue conductivity and the intercontact distance in
+    `ibldsp.voltage.current_source_density`. The units documented here assume
+    the default `scale=True` of `csd`; with `scale=False` the values are the
+    raw finite differences in V and these units do not apply.
+
     Attributes:
-        rms_lf_csd (Series[float]): Root mean square of CSD signal in dB.
+        rms_lf_csd (Series[float]): Root mean square of CSD signal (A/m**3).
         psd_delta_csd (Series[float]): CSD power spectral density in delta band (0-4 Hz).
         psd_theta_csd (Series[float]): CSD power spectral density in theta band (4-10 Hz).
         psd_alpha_csd (Series[float]): CSD power spectral density in alpha band (8-12 Hz).
@@ -477,88 +485,88 @@ class ModelCsdFeatures(BaseChannelFeatures):
 
     rms_lf_csd: float = pa.Field(
         coerce=True,
-        description="Root mean square of CSD signal in V. The value is transformed to dB using 20 * np.log10(x)",
+        description="Root mean square of CSD signal in A/m**3. The value is transformed to dB using 20 * np.log10(x)",
         metadata={
-            "raw_unit": "V",
-            "transformed_unit": "dB rel. V",
+            "raw_unit": "A/m**3",
+            "transformed_unit": "dB rel. A/m**3",
             "transform": lambda x: 20 * np.log10(x),
         },
     )
     psd_delta_csd: float = pa.Field(
         coerce=True,
-        description="Power in the band 0 - 4 Hz after current source density estimation in decibels relative to V ** 2 / Hz",
-        metadata={"raw_unit": "dB rel. V**2/Hz"},
+        description="Power in the band 0 - 4 Hz after current source density estimation in decibels relative to (A/m**3) ** 2 / Hz",
+        metadata={"raw_unit": "dB rel. (A/m**3)**2/Hz"},
     )
     psd_theta_csd: float = pa.Field(
         coerce=True,
-        description="Power in the band 4 - 10 Hz after current source density estimation in decibels relative to V ** 2 / Hz",
-        metadata={"raw_unit": "dB rel. V**2/Hz"},
+        description="Power in the band 4 - 10 Hz after current source density estimation in decibels relative to (A/m**3) ** 2 / Hz",
+        metadata={"raw_unit": "dB rel. (A/m**3)**2/Hz"},
     )
     psd_alpha_csd: float = pa.Field(
         coerce=True,
-        description="Power in the band 8 - 12 Hz after current source density estimation in decibels relative to V ** 2 / Hz",
-        metadata={"raw_unit": "dB rel. V**2/Hz"},
+        description="Power in the band 8 - 12 Hz after current source density estimation in decibels relative to (A/m**3) ** 2 / Hz",
+        metadata={"raw_unit": "dB rel. (A/m**3)**2/Hz"},
     )
     psd_beta_csd: float = pa.Field(
         coerce=True,
-        description="Power in the band 15 - 30 Hz after current source density estimation in decibels relative to V ** 2 / Hz",
-        metadata={"raw_unit": "dB rel. V**2/Hz"},
+        description="Power in the band 15 - 30 Hz after current source density estimation in decibels relative to (A/m**3) ** 2 / Hz",
+        metadata={"raw_unit": "dB rel. (A/m**3)**2/Hz"},
     )
     psd_gamma_csd: float = pa.Field(
         coerce=True,
-        description="Power in the band 30 - 90 Hz after current source density estimation in decibels relative to V ** 2 / Hz",
-        metadata={"raw_unit": "dB rel. V**2/Hz"},
+        description="Power in the band 30 - 90 Hz after current source density estimation in decibels relative to (A/m**3) ** 2 / Hz",
+        metadata={"raw_unit": "dB rel. (A/m**3)**2/Hz"},
     )
     psd_lfp_csd: float = pa.Field(
         coerce=True,
-        description="Power in the band 0 - 90 Hz after current source density estimation in decibels relative to V ** 2 / Hz",
-        metadata={"raw_unit": "dB rel. V**2/Hz"},
+        description="Power in the band 0 - 90 Hz after current source density estimation in decibels relative to (A/m**3) ** 2 / Hz",
+        metadata={"raw_unit": "dB rel. (A/m**3)**2/Hz"},
     )
 
     rms_lf_csd_diff1: Optional[float] = pa.Field(
         coerce=True,
-        description="Root mean square of Diff1 CSD signal in V. The value is transformed to dB using 20 * np.log10(x)",
+        description="Root mean square of Diff1 CSD signal in A/m**2. The value is transformed to dB using 20 * np.log10(x)",
         metadata={
-            "raw_unit": "V",
-            "transformed_unit": "dB rel. V",
+            "raw_unit": "A/m**2",
+            "transformed_unit": "dB rel. A/m**2",
             "transform": lambda x: 20 * np.log10(x),
         },
     )
 
     psd_delta_csd_diff1: Optional[float] = pa.Field(
         coerce=True,
-        description="Power in the band 0 - 4 Hz after Diff1 current source density estimation in decibels relative to V ** 2 / Hz",
-        metadata={"raw_unit": "dB rel. V**2/Hz"},
+        description="Power in the band 0 - 4 Hz after Diff1 current source density estimation in decibels relative to (A/m**2) ** 2 / Hz",
+        metadata={"raw_unit": "dB rel. (A/m**2)**2/Hz"},
     )
 
     psd_theta_csd_diff1: Optional[float] = pa.Field(
         coerce=True,
-        description="Power in the band 4 - 10 Hz after Diff1 current source density estimation in decibels relative to V ** 2 / Hz",
-        metadata={"raw_unit": "dB rel. V**2/Hz"},
+        description="Power in the band 4 - 10 Hz after Diff1 current source density estimation in decibels relative to (A/m**2) ** 2 / Hz",
+        metadata={"raw_unit": "dB rel. (A/m**2)**2/Hz"},
     )
 
     psd_alpha_csd_diff1: Optional[float] = pa.Field(
         coerce=True,
-        description="Power in the band 8 - 12 Hz after Diff1 current source density estimation in decibels relative to V ** 2 / Hz",
-        metadata={"raw_unit": "dB rel. V**2/Hz"},
+        description="Power in the band 8 - 12 Hz after Diff1 current source density estimation in decibels relative to (A/m**2) ** 2 / Hz",
+        metadata={"raw_unit": "dB rel. (A/m**2)**2/Hz"},
     )
 
     psd_beta_csd_diff1: Optional[float] = pa.Field(
         coerce=True,
-        description="Power in the band 15 - 30 Hz after Diff1 current source density estimation in decibels relative to V ** 2 / Hz",
-        metadata={"raw_unit": "dB rel. V**2/Hz"},
+        description="Power in the band 15 - 30 Hz after Diff1 current source density estimation in decibels relative to (A/m**2) ** 2 / Hz",
+        metadata={"raw_unit": "dB rel. (A/m**2)**2/Hz"},
     )
 
     psd_gamma_csd_diff1: Optional[float] = pa.Field(
         coerce=True,
-        description="Power in the band 30 - 90 Hz after Diff1 current source density estimation in decibels relative to V ** 2 / Hz",
-        metadata={"raw_unit": "dB rel. V**2/Hz"},
+        description="Power in the band 30 - 90 Hz after Diff1 current source density estimation in decibels relative to (A/m**2) ** 2 / Hz",
+        metadata={"raw_unit": "dB rel. (A/m**2)**2/Hz"},
     )
 
     psd_lfp_csd_diff1: Optional[float] = pa.Field(
         coerce=True,
-        description="Power in the band 0 - 90 Hz after Diff1 current source density estimation in decibels relative to V ** 2 / Hz",
-        metadata={"raw_unit": "dB rel. V**2/Hz"},
+        description="Power in the band 0 - 90 Hz after Diff1 current source density estimation in decibels relative to (A/m**2) ** 2 / Hz",
+        metadata={"raw_unit": "dB rel. (A/m**2)**2/Hz"},
     )
 
 
