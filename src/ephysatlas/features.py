@@ -117,6 +117,7 @@ from pathlib import Path
 import random
 import shutil
 import string
+import sys
 import tempfile
 from typing_extensions import Annotated, List
 from typing import Optional
@@ -1666,9 +1667,10 @@ def dart_subtraction_numpy(data, fs, geometry, params=None, scratch_dir=None, **
     subtraction_cfg = dartsort.SubtractionConfig(
         subtraction_denoising_cfg=denoising_cfg,
         chunk_length_samples=params.chunk_length_samples,
+        detection_proposal="voltage",
         # This is behaviour change from older version of dartsort
         # In the older version, there was gradual reduction of threshold.
-        # Not it is a fixed threshold
+        # Now it is a fixed threshold
         # sigma deviation; DARTsort >=0.5.25 name for detection_threshold
         voltage_threshold=params.detection_threshold,
         realign_to_denoiser=False,
@@ -1711,17 +1713,28 @@ def dart_subtraction_numpy(data, fs, geometry, params=None, scratch_dir=None, **
     # New version of DARTsort outputs a single object.
     # And has a different keyword arguments for subtract func.
     temp_folder = scratch_dir.joinpath(f"dart_{temp_suffix}")
-    detected_spikes = dartsort.subtract(
-        output_dir=temp_folder,
-        recording=rec_np,
-        waveform_cfg=waveform_cfg,
-        featurization_cfg=featurization_cfg,
-        subtraction_cfg=subtraction_cfg,
-        computation_cfg=dartsort.ComputationConfig.from_n_jobs(params.n_jobs),
-        show_progress=True,
-    )
+    # TEMPORARY FIX to allow spike/waveform feature computation on macOS machines.
+    # DARTsort 0.5.31 crashes on Apple Silicon even on CPU
+    # Should be removed with new release of DARTsort (>=0.5.32) which fixes the issue.
+    import torch
+
+    mps_is_available = torch.backends.mps.is_available
+    if sys.platform == "darwin":
+        torch.backends.mps.is_available = lambda: False
+    try:
+        detected_spikes = dartsort.subtract(
+            output_dir=temp_folder,
+            recording=rec_np,
+            waveform_cfg=waveform_cfg,
+            featurization_cfg=featurization_cfg,
+            subtraction_cfg=subtraction_cfg,
+            computation_cfg=dartsort.ComputationConfig.from_n_jobs(params.n_jobs),
+            show_progress=True,
+        )
+    finally:
+        torch.backends.mps.is_available = mps_is_available
     if detected_spikes is None or detected_spikes.parent_h5_path is None:
-        raise RuntimeError("DARTsort subtraction did not produce a feature file")
+        raise RuntimeError("DARTsort subtraction did not produce a feature file.")
 
     # denoised_ptp_amplitudes is evaluated at each spike's detection channel, so a
     # single per-spike RMS-normalised amplitude, exactly un-scaled here.

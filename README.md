@@ -13,7 +13,7 @@ For detailed documentation, installation instructions, usage examples, and API r
 
 ## Quick Installation
 
-ibleatools requires Python 3.11 or newer.
+ibleatools requires Python 3.12 or newer.
 
 ```bash
 git clone https://github.com/int-brain-lab/ibleatools.git
