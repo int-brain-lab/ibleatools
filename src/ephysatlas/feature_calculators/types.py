@@ -156,16 +156,22 @@ class CsdParams:
             CSD.
         denoise (bool): Whether the CSD step applies its internal
             ``ibldsp.cadzow.cadzow_denoiser`` pass before the finite difference.
-            ``True`` reproduces today's behavior. Set ``False`` when the input
+            Defaults to ``True``. Set ``False`` when the input
             data has already been Cadzow-denoised upstream (e.g. a pre-denoised
             LF source), so it isn't denoised a second time on top of a lossy
             reconstruction.
+        cadzow_kwargs (Mapping | None): Overrides of the Cadzow parameters
+            (e.g. ``{"shrinkage": None, "gap_threshold": 2.0}``). ``None`` uses
+            the geometry-dependent defaults of
+            :func:`ephysatlas.features.cadzow_lfp_kwargs`. ``fs`` and ``h`` are
+            set by :func:`ephysatlas.features.csd` and cannot be overridden.
     """
 
     bands: Mapping | None = None
     decimate: int = 10
     scale: bool = True
     denoise: bool = True
+    cadzow_kwargs: Mapping | None = None
 
 
 @dataclass(frozen=True)
