@@ -2024,14 +2024,14 @@ def spikes(
 
     Returns:
         pd.DataFrame or tuple: If return_waveforms is False, returns DataFrame with
-            aggregated spike features per channel. If True, returns tuple of
+            aggregated waveform features per channel. If True, returns tuple of
             (DataFrame, waveforms_dict).
 
     Raises:
         ValueError: If an unknown backend is specified.
 
     Note:
-        The function aggregates spike features by channel and computes various
+        The function aggregates waveform features by channel and computes various
         waveform characteristics including timing, amplitude, and slope features.
         Both backends produce compatible output formats for further processing.
     """

@@ -329,6 +329,17 @@ def download_tables(
     local_path = Path(local_path).joinpath(project).joinpath(label).joinpath(agg_level)
     local_path.mkdir(parents=True, exist_ok=True)
 
+    # A release derived locally from a published one (e.g. with refreshed alignments, see the
+    # refresh manifest written next to its tables) is not on S3: use it as it is.
+    if (
+        not overwrite
+        and not extended
+        and local_path.joinpath("refresh_manifest.json").exists()
+        and any(local_path.glob("*.pqt"))
+    ):
+        _logger.info(f"using the locally derived feature release {local_path}")
+        return local_path
+
     # Get AWS credentials
     s3, bucket_name = aws.get_s3_from_alyx(alyx=one.alyx)
 

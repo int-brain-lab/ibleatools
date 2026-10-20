@@ -131,7 +131,7 @@ def spike_triggered_population_coupling(
     lowpass_hz=20.0,
 ):
     """
-    Spike-triggered population coupling of each cluster to its local, spatially-restricted
+    Population coupling of each cluster to its local, spatially-restricted
     population, as defined in Bimbard, Harris & Carandini, "Invariant activity sequences
     across the mouse brain" (bioRxiv 2025.12.20.695676), Methods section "Population
     coupling", itself an extension of Okun et al. 2015 (Nature 521, 511-515).
@@ -411,7 +411,7 @@ def get_neighbours_members_windowed(df_clusters, radius_um):
 
 def spike_triggered_population_coupling_windowed(spikes, df_clusters, file_stpc=None):
     """
-    Alternative, windowed estimator of spike-triggered population coupling, kept
+    Alternative, windowed estimator of population coupling, kept
     alongside :func:`spike_triggered_population_coupling_df` as a distinct method rather
     than a straight reproduction of it. Relative to the Methods of Bimbard et al. 2025,
     this implementation:
@@ -530,7 +530,7 @@ def display_stpc(
     **_unused,
 ):
     """
-    Display spike-triggered population coupling results.
+    Display population coupling results.
 
     This function visualizes the STPC traces of the reported units, sorted by probe
     depth, and shows a compact summary alongside the matrix plot. Intended to be called
@@ -600,9 +600,7 @@ def display_stpc(
         brain_regions=br,
         ax=ax[-1],
     )
-    ax[0].set(
-        xlim=(tscale[0], tscale[-1]), xlabel="Spike-triggered population average (s)"
-    )
+    ax[0].set(xlim=(tscale[0], tscale[-1]), xlabel="Population coupling lag (s)")
     if label is not None:
         fig.suptitle(label)
     if save_file is not None:
