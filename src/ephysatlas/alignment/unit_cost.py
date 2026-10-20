@@ -45,7 +45,9 @@ def row_relative(cost: np.ndarray) -> np.ndarray:
 
 def calibrated_channel_cost(feature_cost: np.ndarray, n_features: int) -> np.ndarray:
     """Squared standardised error as a row-relative Gaussian NLL per feature."""
-    return row_relative(0.5 * np.asarray(feature_cost, dtype=np.float64) / max(int(n_features), 1))
+    return row_relative(
+        0.5 * np.asarray(feature_cost, dtype=np.float64) / max(int(n_features), 1)
+    )
 
 
 def unit_cost_matrix(
@@ -64,7 +66,9 @@ def unit_cost_matrix(
         info["unit_reason"] = "no prepared units on this probe"
         return None, info
     channel_axial = np1_axial_um_in_row_order(len(valid))[np.asarray(valid, dtype=bool)]
-    log_w = unit_model.log_mixture_weights(channel_model.context_raw(trace_xyz))  # [T, S]
+    log_w = unit_model.log_mixture_weights(
+        channel_model.context_raw(trace_xyz)
+    )  # [T, S]
     component_lp = unit_model.bundle.mixture.subtype_log_prob(z)  # [n_units, S]
     latent_dim = max(int(z.shape[1]), 1)
     cost = np.full((len(channel_axial), len(trace_xyz)), np.nan)
@@ -124,8 +128,14 @@ def fuse_costs(
     fused = (1.0 - unit_weight) * channel_cost
     ok = np.isfinite(unit_scaled)
     fused[ok] += unit_weight * unit_scaled[ok]
-    return row_relative(fused), unit_scaled, dict(
-        unit_scale_factor=scale, unit_weight=float(unit_weight), fused_rows_with_units=int(rows.sum())
+    return (
+        row_relative(fused),
+        unit_scaled,
+        dict(
+            unit_scale_factor=scale,
+            unit_weight=float(unit_weight),
+            fused_rows_with_units=int(rows.sum()),
+        ),
     )
 
 
@@ -154,12 +164,20 @@ def align_histology_with_units(
     """
     if channel_result is None:
         channel_result = align_histology(
-            channel_model, recorded, trace_xyz, pid=pid, progress=sub_progress(progress, 0.0, 0.6)
+            channel_model,
+            recorded,
+            trace_xyz,
+            pid=pid,
+            progress=sub_progress(progress, 0.0, 0.6),
         )
-    report(progress, 0.6, "Scoring the units under the unit-level model along the trace")
+    report(
+        progress, 0.6, "Scoring the units under the unit-level model along the trace"
+    )
     valid = valid_channels(recorded)
     n_features = len(channel_model.features)
-    channel_cost = calibrated_channel_cost(channel_result.diagnostics["feature_cost"], n_features)
+    channel_cost = calibrated_channel_cost(
+        channel_result.diagnostics["feature_cost"], n_features
+    )
     unit_cost, info = unit_cost_matrix(
         channel_model, unit_model, pid, trace_xyz, valid, half_width_um=half_width_um
     )
@@ -167,7 +185,9 @@ def align_histology_with_units(
         report(progress, 1.0, "No unit evidence on this probe")
         channel_result.diagnostics.update(info)
         return channel_result, None
-    fused, unit_scaled, fusion = fuse_costs(channel_cost, unit_cost, unit_weight=unit_weight)
+    fused, unit_scaled, fusion = fuse_costs(
+        channel_cost, unit_cost, unit_weight=unit_weight
+    )
     info.update(fusion)
     report(progress, 0.8, "Warping the fused channel + unit cost")
     combined = align_histology(

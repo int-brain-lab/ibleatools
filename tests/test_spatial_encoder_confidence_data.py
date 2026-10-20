@@ -18,7 +18,11 @@ import numpy as np
 
 
 def setUpModule():
-    if "xgboost" in sys.modules and sys.platform == "darwin" and platform.machine() == "arm64":
+    if (
+        "xgboost" in sys.modules
+        and sys.platform == "darwin"
+        and platform.machine() == "arm64"
+    ):
         raise RuntimeError(
             "xgboost is already imported in this process; loading torch as well segfaults on "
             "macOS arm64. Run this file in its own pytest process."

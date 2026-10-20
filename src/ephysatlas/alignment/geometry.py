@@ -126,6 +126,10 @@ def extend_trace_to_brain(
             break
         after.append(cur.copy())
     return np.concatenate(
-        [np.asarray(before[::-1]).reshape(-1, 3), xyz, np.asarray(after).reshape(-1, 3)],
+        [
+            np.asarray(before[::-1]).reshape(-1, 3),
+            xyz,
+            np.asarray(after).reshape(-1, 3),
+        ],
         axis=0,
     ).astype(np.float32)

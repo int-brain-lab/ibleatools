@@ -12,8 +12,13 @@ CONFIDENCE_THRESHOLD = 0.5
 
 
 def _subset_metrics(true_xyz, est_xyz, mask, brain_atlas) -> dict:
-    out = {"n_channels": int(mask.sum()), "mean_distance_um": np.nan,
-           "median_distance_um": np.nan, "cosmos_acc": np.nan, "beryl_acc": np.nan}
+    out = {
+        "n_channels": int(mask.sum()),
+        "mean_distance_um": np.nan,
+        "median_distance_um": np.nan,
+        "cosmos_acc": np.nan,
+        "beryl_acc": np.nan,
+    }
     if not mask.any():
         return out
     d = np.linalg.norm(est_xyz[mask] - true_xyz[mask], axis=1) * 1e6
@@ -61,7 +66,9 @@ def alignment_metrics(
         high = scored & (p_good >= threshold)
         low = scored & (p_good < threshold)
         for suffix, subset in (("high_conf", high), ("low_conf", low)):
-            for key, value in _subset_metrics(true_xyz, est_xyz, subset, brain_atlas).items():
+            for key, value in _subset_metrics(
+                true_xyz, est_xyz, subset, brain_atlas
+            ).items():
                 out[f"{key}_{suffix}"] = value
         out["high_conf_fraction"] = float(high.sum() / max(scored.sum(), 1))
     return out
@@ -70,6 +77,10 @@ def alignment_metrics(
 def result_metrics(result, true_xyz, brain_atlas, prefix: str = "") -> dict:
     """:func:`alignment_metrics` of an :class:`~.result.AlignmentResult`, keys prefixed."""
     m = alignment_metrics(
-        true_xyz, result.channel_xyz, brain_atlas, p_good=result.p_good, valid=result.valid
+        true_xyz,
+        result.channel_xyz,
+        brain_atlas,
+        p_good=result.p_good,
+        valid=result.valid,
     )
     return {f"{prefix}{k}": v for k, v in m.items()}

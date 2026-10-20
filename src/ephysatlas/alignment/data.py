@@ -62,7 +62,10 @@ class ChannelDataset:
         from ephysatlas.spatial_encoder.utils import LoadInsertionData
 
         pids, features, human, planned = LoadInsertionData(
-            project=project, agg=agg, VINTAGE=vintage, path_data=data_dir or default_data_dir()
+            project=project,
+            agg=agg,
+            VINTAGE=vintage,
+            path_data=data_dir or default_data_dir(),
         )
         return cls(
             pids=np.asarray(pids).astype(str),
@@ -121,12 +124,16 @@ def load_probe(
             from one.api import ONE
 
             one = ONE(base_url="https://alyx.internationalbrainlab.org")
-            path = download_tables(root, label=vintage, project=project, agg_level=agg, one=one)
+            path = download_tables(
+                root, label=vintage, project=project, agg_level=agg, one=one
+            )
         _TABLE_CACHE[key] = read_features_from_disk(path, strict=False)
     df = _TABLE_CACHE[key]
     if str(pid) not in df.index.get_level_values("pid"):
         return None
-    d = df.loc[str(pid)].sort_index().iloc[::-1]  # highest channel (top of the probe) first
+    d = (
+        df.loc[str(pid)].sort_index().iloc[::-1]
+    )  # highest channel (top of the probe) first
     features = d[list(FEATURE_LIST)].to_numpy(dtype=np.float32).copy()
     features[~np.isfinite(features)] = 0.0
     return dict(
@@ -185,7 +192,9 @@ class HistologyTraces:
         picks = picks[valid_xyz_mask(picks)]
         return picks if len(picks) >= 2 else None
 
-    def trace(self, pid: str, brain_atlas, step_um: float = 10.0) -> Optional[np.ndarray]:
+    def trace(
+        self, pid: str, brain_atlas, step_um: float = 10.0
+    ) -> Optional[np.ndarray]:
         """The histology trace of an insertion: picks ordered dorsal to ventral, resampled every
         ``step_um`` and extended to the brain boundary at both ends (None without picks)."""
         picks = self.picks(pid)
@@ -198,5 +207,7 @@ class HistologyTraces:
 def split_pids(channel_model, split: str = "test") -> list[str]:
     """The insertions of one split of the channel model's release (``train``/``validation``/``test``)."""
     manifest = channel_model.split()
-    key = {"train": "train_pids", "validation": "validation_pids", "test": "test_pids"}[split]
+    key = {"train": "train_pids", "validation": "validation_pids", "test": "test_pids"}[
+        split
+    ]
     return sorted(str(p) for p in manifest[key])

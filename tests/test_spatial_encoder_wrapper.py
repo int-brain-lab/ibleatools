@@ -42,7 +42,11 @@ def setUpModule():
 
 
 def make_spatial_model_dir(
-    path_models: Path, *, stats_offset: float = 0.0, bank: dict = None, features=FEATURES
+    path_models: Path,
+    *,
+    stats_offset: float = 0.0,
+    bank: dict = None,
+    features=FEATURES,
 ) -> Path:
     """A tiny spatial-encoder release: weights, confidence model, stats, split, bank, manifest.
 
@@ -204,7 +208,9 @@ class TestSpatialEncoderPredictHemispheres(unittest.TestCase):
         rng = np.random.default_rng(0)
         n = 40
         bank = dict(
-            xyz=(self.CENTRE + rng.uniform(-2e-4, 2e-4, size=(n, 3))).astype(np.float32),
+            xyz=(self.CENTRE + rng.uniform(-2e-4, 2e-4, size=(n, 3))).astype(
+                np.float32
+            ),
             feat=rng.normal(size=(n, len(FEATURES))).astype(np.float32),
             pid=np.array(["a", "b"] * (n // 2)),
         )
@@ -246,7 +252,10 @@ class TestSpatialEncoderPredictHemispheres(unittest.TestCase):
         self.assertTrue(mask.all(axis=1).all())
 
         np.testing.assert_allclose(
-            self._predict(right).to_numpy(), self._predict(left).to_numpy(), rtol=1e-6, atol=1e-6
+            self._predict(right).to_numpy(),
+            self._predict(left).to_numpy(),
+            rtol=1e-6,
+            atol=1e-6,
         )
 
     def test_output_keeps_the_input_index_and_order(self):
@@ -285,7 +294,9 @@ class TestSpatialEncoderPredictHemispheres(unittest.TestCase):
         out.mkdir()
         build_neighbor_bank(out, df, encoder.index, model=encoder.model)
         with np.load(out.joinpath(model_registry.ENCODER_BANK_FILE)) as bank:
-            np.testing.assert_allclose(bank["xyz"][:, 0], -np.abs(df["x"].to_numpy()), rtol=1e-6)
+            np.testing.assert_allclose(
+                bank["xyz"][:, 0], -np.abs(df["x"].to_numpy()), rtol=1e-6
+            )
 
 
 if __name__ == "__main__":
@@ -318,7 +329,9 @@ class TestSpatialEncoderLegacyFeatureNames(unittest.TestCase):
         with mock.patch.object(SpatialEncoder, "_context_manager", lambda self: fake):
             encoder = load_pretrained(path_model, device="cpu")
             self.assertEqual(encoder.features, self.CURRENT)
-            index = pd.MultiIndex.from_tuples([("query", 0), ("query", 1)], names=["pid", "channel"])
+            index = pd.MultiIndex.from_tuples(
+                [("query", 0), ("query", 1)], names=["pid", "channel"]
+            )
             df = pd.DataFrame(np.zeros((2, 3)), index=index, columns=["x", "y", "z"])
             out = encoder.predict(df)
         self.assertEqual(list(out.columns), [f"pred_{f}" for f in self.CURRENT])

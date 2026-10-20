@@ -69,7 +69,9 @@ TUNING_FILE = "temperature_tuning.csv"
 def robust_sd(x) -> float:
     x = np.asarray(x, dtype=np.float64)
     x = x[np.isfinite(x)]
-    return float(1.4826 * np.median(np.abs(x - np.median(x)))) if x.size else float("nan")
+    return (
+        float(1.4826 * np.median(np.abs(x - np.median(x)))) if x.size else float("nan")
+    )
 
 
 def _inv_sqrt_psd(S: np.ndarray) -> np.ndarray:
@@ -91,7 +93,9 @@ def _fit_nu(m: np.ndarray, F: int) -> tuple[float, dict]:
     return float(max(ll, key=ll.get)), {str(k): v for k, v in ll.items()}
 
 
-def _fit_radial_t2(r: np.ndarray, nu_grid=(2, 3, 4, 5, 6, 8, 10, 15, 20, 30, 50)) -> dict:
+def _fit_radial_t2(
+    r: np.ndarray, nu_grid=(2, 3, 4, 5, 6, 8, 10, 15, 20, 30, 50)
+) -> dict:
     """ML isotropic bivariate t (``nu``, scale ``s``) from the norms ``r`` of 2-D vectors."""
     from scipy.optimize import minimize_scalar
 
@@ -103,10 +107,16 @@ def _fit_radial_t2(r: np.ndarray, nu_grid=(2, 3, 4, 5, 6, 8, 10, 15, 20, 30, 50)
         def nll(log_s, nu=nu):
             s2 = np.exp(2.0 * log_s)
             return -float(
-                np.sum(np.log(r) - np.log(s2) - 0.5 * (nu + 2.0) * np.log1p(r * r / (nu * s2)))
+                np.sum(
+                    np.log(r)
+                    - np.log(s2)
+                    - 0.5 * (nu + 2.0) * np.log1p(r * r / (nu * s2))
+                )
             )
 
-        res = minimize_scalar(nll, bounds=(np.log(0.05), np.log(200.0)), method="bounded")
+        res = minimize_scalar(
+            nll, bounds=(np.log(0.05), np.log(200.0)), method="bounded"
+        )
         if best is None or res.fun < best[2]:
             best = (float(nu), float(np.exp(res.x)), float(res.fun))
     return dict(nu=best[0], s=best[1], nll=best[2], n=int(r.size))
@@ -117,7 +127,8 @@ def _split_pids(localizer, dataset) -> dict:
     split = localizer.channel_model.split()
     have = set(dataset.pids.astype(str))
     out = {
-        k: sorted(set(map(str, split[f"{k}_pids"])) & have) for k in ("train", "validation", "test")
+        k: sorted(set(map(str, split[f"{k}_pids"])) & have)
+        for k in ("train", "validation", "test")
     }
     out["counts"] = {
         k: dict(split=len(split[f"{k}_pids"]), in_dataset=len(out[k]))
@@ -130,14 +141,20 @@ def probe_inputs(localizer, dataset, pid: str, test: set) -> dict:
     """Bins, clipped bin means and binned reference / planned positions of a TRAIN or
     VALIDATION probe (µm, left hemisphere)."""
     if pid in test:
-        raise RuntimeError(f"{pid} is a test probe; the ephys-only fit never reads test probes")
+        raise RuntimeError(
+            f"{pid} is a test probe; the ephys-only fit never reads test probes"
+        )
     p = dataset.probe(pid)
     used = np.asarray(p["features"], dtype=np.float64)[:, localizer.feature_idx]
     bins = DepthBins.from_valid(signal_channels(used), localizer.score_cfg)
     st = localizer._stats
     x = bins.means(
         clip_standardize(
-            used, st["rec_ephys_low_pctl"], st["rec_ephys_high_pctl"], st["e_mean"], st["e_std"]
+            used,
+            st["rec_ephys_low_pctl"],
+            st["rec_ephys_high_pctl"],
+            st["e_mean"],
+            st["e_std"],
         )
     )
     return dict(
@@ -145,8 +162,12 @@ def probe_inputs(localizer, dataset, pid: str, test: set) -> dict:
         bins=bins,
         x=x,
         planned_xyz=np.asarray(p["planned_xyz"], dtype=np.float64),
-        true_bins_um=bins.mean_xyz_um(mirror_left(np.asarray(p["human_xyz"], dtype=np.float64))),
-        plan_bins_um=bins.mean_xyz_um(mirror_left(np.asarray(p["planned_xyz"], dtype=np.float64))),
+        true_bins_um=bins.mean_xyz_um(
+            mirror_left(np.asarray(p["human_xyz"], dtype=np.float64))
+        ),
+        plan_bins_um=bins.mean_xyz_um(
+            mirror_left(np.asarray(p["planned_xyz"], dtype=np.float64))
+        ),
     )
 
 
@@ -248,7 +269,9 @@ def fit_residual_model(
         residual_sd_validation_median=float(np.median(Rv.std(axis=0))),
         mahalanobis_over_F_train_mean=float(np.mean(m_tr) / F),
         mahalanobis_over_F_validation_mean=float(np.mean(m_va) / F),
-        effective_features_participation_ratio=float(evals.sum() ** 2 / (evals**2).sum()),
+        effective_features_participation_ratio=float(
+            evals.sum() ** 2 / (evals**2).sum()
+        ),
     )
     return params, rep
 
@@ -270,8 +293,12 @@ def fit_plan_prior(localizer, train_inputs: list) -> tuple[dict, dict]:
         T, P = T[ok], P[ok]
         dc.append(T.mean(axis=0) - P.mean(axis=0))
         at = (T[-1] - T[0]) / max(np.linalg.norm(T[-1] - T[0]), 1e-12)
-        ang.append(float(np.degrees(np.arccos(np.clip(np.dot(at, axis_plan), -1.0, 1.0)))))
-        ratio.append(np.linalg.norm(T[-1] - T[0]) / max(np.linalg.norm(P[-1] - P[0]), 1.0))
+        ang.append(
+            float(np.degrees(np.arccos(np.clip(np.dot(at, axis_plan), -1.0, 1.0))))
+        )
+        ratio.append(
+            np.linalg.norm(T[-1] - T[0]) / max(np.linalg.norm(P[-1] - P[0]), 1.0)
+        )
         sections = section_bin_indices(d["bins"].centers_um[ok], cfg.n_sections)
         bends.append(joint_angles_deg(T[None], sections)[0])
     dc, ang, ratio = np.asarray(dc), np.asarray(ang), np.asarray(ratio)
@@ -308,7 +335,9 @@ def fit_key(localizer) -> str:
     p = localizer.params
     for key in ("mu_r", "W", "nu"):
         h.update(np.ascontiguousarray(np.asarray(p[key], dtype=np.float64)).tobytes())
-    score_cfg = {k: v for k, v in asdict(localizer.score_cfg).items() if k != "temperature_T"}
+    score_cfg = {
+        k: v for k, v in asdict(localizer.score_cfg).items() if k != "temperature_T"
+    }
     h.update(
         json.dumps(
             [
@@ -344,10 +373,16 @@ def tune_temperature(
 
     key = fit_key(localizer)
     path = localizer.fit_dir / TUNING_FILE
-    rows = pd.read_csv(path, dtype={"fit_key": str}) if path.exists() else pd.DataFrame()
+    rows = (
+        pd.read_csv(path, dtype={"fit_key": str}) if path.exists() else pd.DataFrame()
+    )
     if len(rows):
         rows = rows[rows["fit_key"] == key]
-    done = set(zip(rows["T"].astype(float), rows["pid"].astype(str))) if len(rows) else set()
+    done = (
+        set(zip(rows["T"].astype(float), rows["pid"].astype(str)))
+        if len(rows)
+        else set()
+    )
     tasks = [
         (float(T), str(pid))
         for T in temperatures
@@ -369,10 +404,16 @@ def tune_temperature(
         except PlannedTrajectoryUnavailable:
             continue
         t0 = time.time()
-        search = localizer._search(probe["features"], probe["planned_xyz"], pid, T, wg=localizer.wg)
+        search = localizer._search(
+            probe["features"], probe["planned_xyz"], pid, T, wg=localizer.wg
+        )
         est = _to_metres(search.channel_um, search.right_hemisphere)
-        m = alignment_metrics(probe["human_xyz"], est, localizer.brain_atlas, valid=search.valid)
-        plan = alignment_metrics(probe["human_xyz"], probe["planned_xyz"], localizer.brain_atlas)
+        m = alignment_metrics(
+            probe["human_xyz"], est, localizer.brain_atlas, valid=search.valid
+        )
+        plan = alignment_metrics(
+            probe["human_xyz"], probe["planned_xyz"], localizer.brain_atlas
+        )
         new.append(
             dict(
                 fit_key=key,
@@ -380,10 +421,16 @@ def tune_temperature(
                 pid=pid,
                 **{
                     k: m[k]
-                    for k in ("mean_distance_um", "median_distance_um", "cosmos_acc", "beryl_acc")
+                    for k in (
+                        "mean_distance_um",
+                        "median_distance_um",
+                        "cosmos_acc",
+                        "beryl_acc",
+                    )
                 },
                 **{
-                    f"planned_{k}": plan[k] for k in ("mean_distance_um", "cosmos_acc", "beryl_acc")
+                    f"planned_{k}": plan[k]
+                    for k in ("mean_distance_um", "cosmos_acc", "beryl_acc")
                 },
                 score=search.diagnostics["score"],
                 c_p=search.diagnostics["c_p"],
@@ -410,7 +457,10 @@ def temperature_table(rows: pd.DataFrame) -> pd.DataFrame:
     table = rows.groupby("T").agg(
         n=("pid", "nunique"),
         mean_distance_um=("mean_distance_um", "mean"),
-        sem_distance_um=("mean_distance_um", lambda x: float(np.std(x, ddof=1) / np.sqrt(len(x)))),
+        sem_distance_um=(
+            "mean_distance_um",
+            lambda x: float(np.std(x, ddof=1) / np.sqrt(len(x))),
+        ),
         median_distance_um=("mean_distance_um", "median"),
         cosmos_acc=("cosmos_acc", "mean"),
         beryl_acc=("beryl_acc", "mean"),
@@ -441,7 +491,9 @@ def _write_fit(localizer, params: dict, T: float) -> None:
     )
 
 
-def fit_residual_and_prior(localizer, dataset, progress: Optional[ProgressCallback] = None) -> dict:
+def fit_residual_and_prior(
+    localizer, dataset, progress: Optional[ProgressCallback] = None
+) -> dict:
     """Steps 1-3: residual model, kappa and plan prior. Sets them on ``localizer`` and writes
     ``fit.npz`` with T = NaN; returns the split, the parameters and the fit reports."""
     t0 = time.time()
@@ -463,7 +515,9 @@ def fit_residual_and_prior(localizer, dataset, progress: Optional[ProgressCallba
             except ValueError:  # fewer than 2 depth bins with a signal
                 no_signal.append(pid)
     t1 = time.time()
-    patches = leave_probe_out_patches(localizer, split["train"], sub_progress(progress, 0.05, 0.9))
+    patches = leave_probe_out_patches(
+        localizer, split["train"], sub_progress(progress, 0.05, 0.9)
+    )
     t_loo = time.time() - t1
     report(progress, 0.9, "Fitting the residual model")
     residual, residual_report = fit_residual_model(
@@ -501,8 +555,12 @@ def fit_localizer(
     t0 = time.time()
     if dataset is None:
         report(progress, 0.0, "Loading the channel features")
-        dataset = ChannelDataset.load(getattr(localizer.channel_model, "revision", VINTAGE))
-    stage = fit_residual_and_prior(localizer, dataset, sub_progress(progress, 0.0, 0.25))
+        dataset = ChannelDataset.load(
+            getattr(localizer.channel_model, "revision", VINTAGE)
+        )
+    stage = fit_residual_and_prior(
+        localizer, dataset, sub_progress(progress, 0.0, 0.25)
+    )
     params = stage["params"]
     t1 = time.time()
     rows = tune_temperature(
@@ -544,7 +602,9 @@ def fit_localizer(
         score_config=asdict(localizer.score_cfg),
         anneal_config=asdict(localizer.anneal_cfg),
         timings=dict(
-            stage["timings"], temperature_tuning_s=time.time() - t1, total_s=time.time() - t0
+            stage["timings"],
+            temperature_tuning_s=time.time() - t1,
+            total_s=time.time() - t0,
         ),
     )
     (localizer.fit_dir / SUMMARY_FILE).write_text(

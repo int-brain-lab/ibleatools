@@ -40,14 +40,34 @@ DEFAULT_STRIPE_FEATURES = (
 )
 # Thick semi-transparent lines, drawn in this order (widest underneath).
 TRACE_STYLES = {
-    "histology": dict(color="#4c72b0", lw=10, alpha=0.45, solid_capstyle="round",
-                      label="Histology trace"),
-    "planned": dict(color="#dd8452", lw=7, alpha=0.55, solid_capstyle="round",
-                    label="Planned trajectory"),
-    "human": dict(color="#55a868", lw=6, alpha=0.6, solid_capstyle="round",
-                  label="Reference alignment"),
-    "inferred": dict(color="#c44e52", lw=5, alpha=0.9, solid_capstyle="butt",
-                     label="Inferred alignment"),
+    "histology": dict(
+        color="#4c72b0",
+        lw=10,
+        alpha=0.45,
+        solid_capstyle="round",
+        label="Histology trace",
+    ),
+    "planned": dict(
+        color="#dd8452",
+        lw=7,
+        alpha=0.55,
+        solid_capstyle="round",
+        label="Planned trajectory",
+    ),
+    "human": dict(
+        color="#55a868",
+        lw=6,
+        alpha=0.6,
+        solid_capstyle="round",
+        label="Reference alignment",
+    ),
+    "inferred": dict(
+        color="#c44e52",
+        lw=5,
+        alpha=0.9,
+        solid_capstyle="butt",
+        label="Inferred alignment",
+    ),
 }
 SLICE_MARGIN_UM = 600.0
 STRIPE_BACKGROUND = "0.92"  # where a stripe has no value (outside the inferred probe)
@@ -70,8 +90,9 @@ def trace_depth_mm(trace_xyz: np.ndarray) -> np.ndarray:
     return np.r_[0.0, np.cumsum(seg)]
 
 
-def values_on_trace(values: np.ndarray, channel_to_trace: np.ndarray, valid: np.ndarray,
-                    n_samples: int) -> np.ndarray:
+def values_on_trace(
+    values: np.ndarray, channel_to_trace: np.ndarray, valid: np.ndarray, n_samples: int
+) -> np.ndarray:
     """Per-channel ``values`` placed on the trace samples the alignment mapped them to.
 
     Samples several channels map to get their mean; samples skipped between two aligned channels
@@ -108,8 +129,14 @@ def _stripe_frame(ax, title):
 
 def _image_stripe(ax, image, depth_mm, title, **kwargs):
     """A stripe image whose rows span ``depth_mm`` (top of the brain at the top)."""
-    extent = (0.0, 1.0, float(depth_mm[-1]), float(depth_mm[0])) if depth_mm is not None else None
-    im = ax.imshow(image, aspect="auto", interpolation="nearest", extent=extent, **kwargs)
+    extent = (
+        (0.0, 1.0, float(depth_mm[-1]), float(depth_mm[0]))
+        if depth_mm is not None
+        else None
+    )
+    im = ax.imshow(
+        image, aspect="auto", interpolation="nearest", extent=extent, **kwargs
+    )
     _stripe_frame(ax, title)
     return im
 
@@ -119,15 +146,27 @@ def _region_stripe(ax, brain_atlas, ids, title, depth_mm=None):
     _image_stripe(ax, np.repeat(rgb[:, None, :], 8, axis=1), depth_mm, title)
 
 
-def _value_stripe(ax, values, title, *, depth_mm=None, cmap="viridis", vmin=None, vmax=None):
+def _value_stripe(
+    ax, values, title, *, depth_mm=None, cmap="viridis", vmin=None, vmax=None
+):
     v = np.asarray(values, dtype=float).reshape(-1, 1)
-    return _image_stripe(ax, np.repeat(v, 8, axis=1), depth_mm, title, cmap=cmap, vmin=vmin, vmax=vmax)
+    return _image_stripe(
+        ax, np.repeat(v, 8, axis=1), depth_mm, title, cmap=cmap, vmin=vmin, vmax=vmax
+    )
 
 
 def _group_label(ax, label, pair=True):
     """A bold label centred over a stripe, or over it and its right neighbour (``pair``)."""
-    ax.text(1.06 if pair else 0.5, 1.07, label, transform=ax.transAxes, ha="center",
-            va="bottom", fontsize=7, fontweight="bold")
+    ax.text(
+        1.06 if pair else 0.5,
+        1.07,
+        label,
+        transform=ax.transAxes,
+        ha="center",
+        va="bottom",
+        fontsize=7,
+        fontweight="bold",
+    )
 
 
 def _limits(*arrays):
@@ -147,14 +186,23 @@ def _slice_window(traces: dict) -> tuple[np.ndarray, float]:
     return centre, float(half)
 
 
-def _slice_panel(ax, brain_atlas, traces: dict, view: str, centre_um: np.ndarray, half_um: float):
+def _slice_panel(
+    ax, brain_atlas, traces: dict, view: str, centre_um: np.ndarray, half_um: float
+):
     """Traces over the atlas slice through ``centre_um`` (``view`` coronal or sagittal), in a
     square window of half-width ``half_um`` so both views have the same size."""
     from iblatlas.plots import plot_points_on_slice
 
     axis = 1 if view == "coronal" else 0
-    plot_points_on_slice(np.zeros((0, 3)), coord=float(centre_um[axis]), slice=view, ax=ax,
-                         brain_atlas=brain_atlas, background="boundary", show_cbar=False)
+    plot_points_on_slice(
+        np.zeros((0, 3)),
+        coord=float(centre_um[axis]),
+        slice=view,
+        ax=ax,
+        brain_atlas=brain_atlas,
+        background="boundary",
+        show_cbar=False,
+    )
     h = 0 if view == "coronal" else 1
     for name in TRACE_STYLES:
         xyz = traces.get(name)
@@ -165,8 +213,12 @@ def _slice_panel(ax, brain_atlas, traces: dict, view: str, centre_um: np.ndarray
     ax.set_xlim(centre_um[h] - half_um, centre_um[h] + half_um)
     ax.set_ylim(centre_um[2] - half_um, centre_um[2] + half_um)
     ax.set_aspect("equal", adjustable="box")
-    ax.set_title(f"{view.capitalize()} ({'AP' if view == 'coronal' else 'ML'} "
-                 f"{centre_um[axis]:.0f} µm)", fontsize=8, pad=2)
+    ax.set_title(
+        f"{view.capitalize()} ({'AP' if view == 'coronal' else 'ML'} "
+        f"{centre_um[axis]:.0f} µm)",
+        fontsize=8,
+        pad=2,
+    )
     ax.set_xticks([])
     ax.set_yticks([])
 
@@ -176,10 +228,18 @@ def _cost_panel(ax, result):
     cost = np.asarray(result.cost_matrix, dtype=float)
     finite = cost[np.isfinite(cost)]
     vmax = np.percentile(finite, 95) if finite.size else 1.0
-    im = ax.imshow(cost, aspect="equal", cmap="inferno", vmin=0, vmax=vmax, interpolation="nearest")
+    im = ax.imshow(
+        cost, aspect="equal", cmap="inferno", vmin=0, vmax=vmax, interpolation="nearest"
+    )
     if result.path is not None and len(result.path):
-        ax.plot(result.path[:, 1], result.path[:, 0], color="#4dd2ff", lw=3, alpha=0.85,
-                solid_capstyle="round")
+        ax.plot(
+            result.path[:, 1],
+            result.path[:, 0],
+            color="#4dd2ff",
+            lw=3,
+            alpha=0.85,
+            solid_capstyle="round",
+        )
     ax.set_xlabel("Histology trace sample (top → bottom)", fontsize=8)
     ax.set_ylabel("Recorded channel (top → bottom)", fontsize=8)
     title = "Alignment cost matrix"
@@ -202,16 +262,32 @@ def _score_panel(ax, result):
     ok = np.isfinite(dist) & np.isfinite(score)
     if ok.any():
         stage = np.asarray(d.get("candidate_stage", np.zeros(len(dist))), dtype=float)
-        sc = ax.scatter(dist[ok], score[ok], c=stage[ok], s=6, cmap="viridis", alpha=0.7, lw=0)
+        sc = ax.scatter(
+            dist[ok], score[ok], c=stage[ok], s=6, cmap="viridis", alpha=0.7, lw=0
+        )
         best = int(np.nanargmin(np.where(ok, score, np.inf)))
-        ax.scatter([dist[best]], [score[best]], marker="*", s=90, color="tab:red", zorder=5,
-                   label="Selected")
+        ax.scatter(
+            [dist[best]],
+            [score[best]],
+            marker="*",
+            s=90,
+            color="tab:red",
+            zorder=5,
+            label="Selected",
+        )
         if np.ptp(stage[ok]) > 0:
             cbar = ax.figure.colorbar(sc, ax=ax, fraction=0.05, pad=0.02)
             cbar.set_label("Search stage", fontsize=7)
         ax.legend(frameon=False, fontsize=7)
     else:
-        ax.text(0.5, 0.5, "No candidate scores", ha="center", va="center", transform=ax.transAxes)
+        ax.text(
+            0.5,
+            0.5,
+            "No candidate scores",
+            ha="center",
+            va="center",
+            transform=ax.transAxes,
+        )
     ax.set_xlabel("Distance from the inferred trajectory (µm)", fontsize=8)
     ax.set_ylabel("Score (lower is better)", fontsize=8)
     ax.set_title("Candidate trajectories", fontsize=8, pad=2)
@@ -233,7 +309,9 @@ def _trace_stripes(fig, spec, result, brain_atlas, features):
 
     # Columns: atlas, a gap for its labels, confidence, then a (recorded, predicted) pair per feature.
     widths = [1.0, 0.9, 1.0] + [1.0] * (2 * len(features))
-    stripes = GridSpecFromSubplotSpec(1, len(widths), subplot_spec=spec, wspace=0.12, width_ratios=widths)
+    stripes = GridSpecFromSubplotSpec(
+        1, len(widths), subplot_spec=spec, wspace=0.12, width_ratios=widths
+    )
     axes = []
 
     ax_atlas = fig.add_subplot(stripes[0])
@@ -261,7 +339,9 @@ def _trace_stripes(fig, spec, result, brain_atlas, features):
 
     ax_conf = fig.add_subplot(stripes[2])
     p_good = values_on_trace(result.p_good, j_map, result.valid, n)
-    _value_stripe(ax_conf, p_good, "p(good)", depth_mm=depth, cmap="RdYlGn", vmin=0, vmax=1)
+    _value_stripe(
+        ax_conf, p_good, "p(good)", depth_mm=depth, cmap="RdYlGn", vmin=0, vmax=1
+    )
     _group_label(ax_conf, "Conf.", pair=False)
     axes.append(ax_conf)
 
@@ -283,9 +363,16 @@ def _trace_stripes(fig, spec, result, brain_atlas, features):
     for ax in axes:
         for y in (top_mm, tip_mm):
             ax.axhline(y, color="k", lw=0.7, ls="--")
-    axes[-1].annotate("inferred\nprobe", xy=(1.0, 0.5 * (top_mm + tip_mm)),
-                      xycoords=("axes fraction", "data"), xytext=(4, 0), textcoords="offset points",
-                      fontsize=6.5, va="center", ha="left")
+    axes[-1].annotate(
+        "inferred\nprobe",
+        xy=(1.0, 0.5 * (top_mm + tip_mm)),
+        xycoords=("axes fraction", "data"),
+        xytext=(4, 0),
+        textcoords="offset points",
+        fontsize=6.5,
+        va="center",
+        ha="left",
+    )
 
 
 def _channel_stripes(fig, spec, result, brain_atlas, features):
@@ -295,8 +382,12 @@ def _channel_stripes(fig, spec, result, brain_atlas, features):
     n_cols = 2 + 2 * len(features)
     stripes = GridSpecFromSubplotSpec(1, n_cols, subplot_spec=spec, wspace=0.12)
     ax = fig.add_subplot(stripes[0])
-    _region_stripe(ax, brain_atlas, region_ids(brain_atlas, np.nan_to_num(result.channel_xyz), "Beryl"),
-                   "Beryl")
+    _region_stripe(
+        ax,
+        brain_atlas,
+        region_ids(brain_atlas, np.nan_to_num(result.channel_xyz), "Beryl"),
+        "Beryl",
+    )
     _group_label(ax, "Inferred", pair=False)
     ax_conf = fig.add_subplot(stripes[1])
     _value_stripe(ax_conf, result.p_good, "p(good)", cmap="RdYlGn", vmin=0, vmax=1)
@@ -309,7 +400,9 @@ def _channel_stripes(fig, spec, result, brain_atlas, features):
         lo, hi = _limits(rec_j, pred_j)
         ax_rec = fig.add_subplot(stripes[col])
         _value_stripe(ax_rec, rec_j, "rec.", vmin=lo, vmax=hi)
-        _value_stripe(fig.add_subplot(stripes[col + 1]), pred_j, "pred.", vmin=lo, vmax=hi)
+        _value_stripe(
+            fig.add_subplot(stripes[col + 1]), pred_j, "pred.", vmin=lo, vmax=hi
+        )
         _group_label(ax_rec, label)
         col += 2
 
@@ -349,27 +442,56 @@ def plot_alignment_result(
 
     if fig is None:
         fig = plt.figure(figsize=(17, 8.5))
-    features = [(name, label) for name, label in features if name in result.feature_names]
+    features = [
+        (name, label) for name, label in features if name in result.feature_names
+    ]
     if histology_trace_xyz is None and result.method.startswith("histology"):
         histology_trace_xyz = result.trace_xyz
-    inferred = np.where(valid_xyz_mask(result.channel_xyz)[:, None], result.channel_xyz, np.nan)
+    inferred = np.where(
+        valid_xyz_mask(result.channel_xyz)[:, None], result.channel_xyz, np.nan
+    )
     traces = {
         "histology": histology_trace_xyz,
-        "planned": None if planned_xyz is None else np.asarray(planned_xyz)[valid_xyz_mask(planned_xyz)],
-        "human": None if human_xyz is None else np.asarray(human_xyz)[valid_xyz_mask(human_xyz)],
+        "planned": None
+        if planned_xyz is None
+        else np.asarray(planned_xyz)[valid_xyz_mask(planned_xyz)],
+        "human": None
+        if human_xyz is None
+        else np.asarray(human_xyz)[valid_xyz_mask(human_xyz)],
         "inferred": inferred[np.isfinite(inferred).all(axis=1)],
     }
 
-    outer = GridSpec(1, 3, figure=fig, width_ratios=[1.0, 1.55, 2.25], wspace=0.2,
-                     left=0.03, right=0.97, top=0.87, bottom=0.07)
+    outer = GridSpec(
+        1,
+        3,
+        figure=fig,
+        width_ratios=[1.0, 1.55, 2.25],
+        wspace=0.2,
+        left=0.03,
+        right=0.97,
+        top=0.87,
+        bottom=0.07,
+    )
     slices = GridSpecFromSubplotSpec(2, 1, subplot_spec=outer[0], hspace=0.12)
     centre, half = _slice_window(traces)
     for k, view in enumerate(("coronal", "sagittal")):
-        _slice_panel(fig.add_subplot(slices[k]), brain_atlas, traces, view, centre, half)
-    handles = [Line2D([], [], **TRACE_STYLES[k]) for k in TRACE_STYLES
-               if traces.get(k) is not None and len(traces[k])]
-    fig.legend(handles=handles, loc="upper left", bbox_to_anchor=(0.02, 0.965), ncol=2,
-               frameon=False, fontsize=8, handlelength=2.5)
+        _slice_panel(
+            fig.add_subplot(slices[k]), brain_atlas, traces, view, centre, half
+        )
+    handles = [
+        Line2D([], [], **TRACE_STYLES[k])
+        for k in TRACE_STYLES
+        if traces.get(k) is not None and len(traces[k])
+    ]
+    fig.legend(
+        handles=handles,
+        loc="upper left",
+        bbox_to_anchor=(0.02, 0.965),
+        ncol=2,
+        frameon=False,
+        fontsize=8,
+        handlelength=2.5,
+    )
 
     ax_decision = fig.add_subplot(outer[1])
     if result.cost_matrix is not None:
@@ -377,7 +499,10 @@ def plot_alignment_result(
     else:
         _score_panel(ax_decision, result)
 
-    on_trace = "channel_to_trace" in result.diagnostics and "predicted_trace_std" in result.diagnostics
+    on_trace = (
+        "channel_to_trace" in result.diagnostics
+        and "predicted_trace_std" in result.diagnostics
+    )
     if on_trace:
         _trace_stripes(fig, outer[2], result, brain_atlas, features)
     else:
@@ -386,9 +511,12 @@ def plot_alignment_result(
     title = f"{result.label}" + (f" -- {result.pid}" if result.pid else "")
     if metrics:
         parts = []
-        for key, fmt in (("cosmos_acc", "Cosmos {:.0%}"), ("beryl_acc", "Beryl {:.0%}"),
-                         ("mean_distance_um", "distance {:.0f} µm"),
-                         ("cosmos_acc_high_conf", "high-confidence Cosmos {:.0%}")):
+        for key, fmt in (
+            ("cosmos_acc", "Cosmos {:.0%}"),
+            ("beryl_acc", "Beryl {:.0%}"),
+            ("mean_distance_um", "distance {:.0f} µm"),
+            ("cosmos_acc_high_conf", "high-confidence Cosmos {:.0%}"),
+        ):
             if key in metrics and np.isfinite(metrics[key]):
                 parts.append(fmt.format(metrics[key]))
         if parts:

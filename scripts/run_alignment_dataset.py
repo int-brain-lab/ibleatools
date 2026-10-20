@@ -22,7 +22,13 @@ from ephysatlas.alignment.models import (
     UNIT_MODEL_REVISION,
     VINTAGE,
 )
-from ephysatlas.alignment.runner import METHODS, TRACES, RunSettings, run_alignments, summarize
+from ephysatlas.alignment.runner import (
+    METHODS,
+    TRACES,
+    RunSettings,
+    run_alignments,
+    summarize,
+)
 from ephysatlas.unit_level_encoder.config import DEFAULT_RESULTS_DIR
 
 # %% User settings (each can also be given on the command line; see --help) ----------------------
@@ -34,25 +40,39 @@ SAVE_FIGURES = False
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--methods", nargs="+", default=list(METHODS_TO_RUN), choices=METHODS)
+    parser.add_argument(
+        "--methods", nargs="+", default=list(METHODS_TO_RUN), choices=METHODS
+    )
     parser.add_argument("--trace", default=TRACE, choices=TRACES)
     parser.add_argument("--out-dir", type=Path, default=OUT_DIR)
     parser.add_argument("--vintage", default=VINTAGE)
     parser.add_argument("--channel-model", default=CHANNEL_MODEL_REPO_ID)
-    parser.add_argument("--unit-model", default=UNIT_MODEL_REPO_ID,
-                        help="unit-level model: Hub repo id or local release directory")
+    parser.add_argument(
+        "--unit-model",
+        default=UNIT_MODEL_REPO_ID,
+        help="unit-level model: Hub repo id or local release directory",
+    )
     parser.add_argument("--unit-revision", default=UNIT_MODEL_REVISION)
     parser.add_argument("--figures", action="store_true", default=SAVE_FIGURES)
     parser.add_argument("--overwrite", action="store_true")
-    parser.add_argument("--limit", type=int, default=None, help="only the first N insertions")
+    parser.add_argument(
+        "--limit", type=int, default=None, help="only the first N insertions"
+    )
     args = parser.parse_args()
 
     from ephysatlas.alignment.data import ChannelDataset
     from ephysatlas.alignment.models import ChannelModel
 
     split = ChannelModel(args.channel_model, args.vintage).split()
-    split_of = {str(p): name for name, key in (("train", "train_pids"), ("validation", "validation_pids"),
-                                               ("test", "test_pids")) for p in split[key]}
+    split_of = {
+        str(p): name
+        for name, key in (
+            ("train", "train_pids"),
+            ("validation", "validation_pids"),
+            ("test", "test_pids"),
+        )
+        for p in split[key]
+    }
     pids = ChannelDataset.load(args.vintage).pids.tolist()
     print(f"[alignment] {len(pids)} insertions -> {args.out_dir}")
     csv_path = run_alignments(

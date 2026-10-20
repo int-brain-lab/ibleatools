@@ -153,8 +153,12 @@ class NeighborInpaintingModel(nn.Module):
     ):
         super().__init__()
         self.use_positions = bool(use_positions)
-        self.qenc = QueryEncoder(f_ctx, d_model, drop=drop, use_positions=self.use_positions)
-        self.nenc = NeighborEncoder(f_ephys, d_model, drop=drop, use_positions=self.use_positions)
+        self.qenc = QueryEncoder(
+            f_ctx, d_model, drop=drop, use_positions=self.use_positions
+        )
+        self.nenc = NeighborEncoder(
+            f_ephys, d_model, drop=drop, use_positions=self.use_positions
+        )
         self.blocks = nn.ModuleList(
             [CrossBlock(d_model, nhead=nhead, drop=drop) for _ in range(depth)]
         )

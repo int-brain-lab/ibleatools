@@ -51,7 +51,9 @@ class ChannelModel:
         self.repo_id = str(repo_id)
         self.revision = str(revision)
         self.device = device or default_device()
-        self.encoder = load_pretrained(self.repo_id, revision=self.revision, device=self.device)
+        self.encoder = load_pretrained(
+            self.repo_id, revision=self.revision, device=self.device
+        )
         self.model = self.encoder.model.to(self.device).eval()
         self.features = list(self.encoder.features)
         self.e_mean = self.model.e_mean.detach().cpu().numpy().astype(np.float64)
@@ -74,14 +76,21 @@ class ChannelModel:
 
     def standardize(self, features: np.ndarray) -> np.ndarray:
         """Recorded features in model units (NaN/inf set to 0), float64."""
-        x = np.nan_to_num(np.asarray(features, dtype=np.float64), nan=0.0, posinf=0.0, neginf=0.0)
+        x = np.nan_to_num(
+            np.asarray(features, dtype=np.float64), nan=0.0, posinf=0.0, neginf=0.0
+        )
         return (x - self.e_mean) / (self.e_std + 1e-8)
 
     def unstandardize(self, features_std: np.ndarray) -> np.ndarray:
         """Model units back to feature units."""
-        return np.asarray(features_std, dtype=np.float64) * (self.e_std + 1e-8) + self.e_mean
+        return (
+            np.asarray(features_std, dtype=np.float64) * (self.e_std + 1e-8)
+            + self.e_mean
+        )
 
-    def predict(self, xyz_m: np.ndarray, pid: str = "", batch_size: int = 2048) -> np.ndarray:
+    def predict(
+        self, xyz_m: np.ndarray, pid: str = "", batch_size: int = 2048
+    ) -> np.ndarray:
         """``[N, F]`` predicted features (feature units) at ``xyz_m``, through the released model's
         public :meth:`~ephysatlas.models.encoder_inpainting.SpatialEncoder.predict`.
 
@@ -99,27 +108,37 @@ class ChannelModel:
         out = self.encoder.predict(df, batch_size=batch_size)
         return out[[f"pred_{f}" for f in self.features]].to_numpy(dtype=np.float64)
 
-    def predict_std(self, xyz_m: np.ndarray, pid: str = "", batch_size: int = 2048) -> np.ndarray:
+    def predict_std(
+        self, xyz_m: np.ndarray, pid: str = "", batch_size: int = 2048
+    ) -> np.ndarray:
         """``[N, F]`` standardised predictions at ``xyz_m``, excluding ``pid``'s own neighbours.
 
         :meth:`predict` in model units: the exact inverse of the release's ``X * std + mean``.
         """
-        return (self.predict(xyz_m, pid, batch_size=batch_size) - self.e_mean) / self.e_std
+        return (
+            self.predict(xyz_m, pid, batch_size=batch_size) - self.e_mean
+        ) / self.e_std
 
     def context_std(self, xyz_m: np.ndarray) -> np.ndarray:
         """``[N, F_ctx]`` standardised molecular context (all zero outside the atlas)."""
         from ephysatlas.spatial_encoder.utils import mirror_xyz_to_left
 
-        xyz = mirror_xyz_to_left(np.asarray(xyz_m, dtype=np.float32).reshape(-1, 3).copy())
+        xyz = mirror_xyz_to_left(
+            np.asarray(xyz_m, dtype=np.float32).reshape(-1, 3).copy()
+        )
         return self.encoder._standardised_context(xyz)
 
     def context_raw(self, xyz_m: np.ndarray) -> np.ndarray:
         """``[N, F_ctx]`` raw molecular context (MERFISH PCs then AGEA PCs), as the unit model uses."""
         from ephysatlas.spatial_encoder.utils import mirror_xyz_to_left
 
-        xyz = mirror_xyz_to_left(np.asarray(xyz_m, dtype=np.float32).reshape(-1, 3).copy())
+        xyz = mirror_xyz_to_left(
+            np.asarray(xyz_m, dtype=np.float32).reshape(-1, 3).copy()
+        )
         pack = self.encoder._context_manager().sample_context_numpy_m(xyz, mode="clip")
-        return np.concatenate([pack["cell_pc"], pack["gene_pc"]], axis=1).astype(np.float32)
+        return np.concatenate([pack["cell_pc"], pack["gene_pc"]], axis=1).astype(
+            np.float32
+        )
 
     def confidence(
         self, recorded: np.ndarray, channel_xyz: np.ndarray, predicted_std: np.ndarray
@@ -201,7 +220,9 @@ class UnitModel:
         if Path(str(repo_id)).is_dir():
             bundle = load_unit_model(cfg, source="release", release_dir=repo_id)
         else:
-            bundle = load_unit_model(cfg, source="hub", repo_id=repo_id, revision=revision)
+            bundle = load_unit_model(
+                cfg, source="hub", repo_id=repo_id, revision=revision
+            )
         axial = bundle.data.axial_um
         if axial is None or len(axial) != len(bundle.data.pids):
             raise ValueError(
@@ -223,5 +244,7 @@ class UnitModel:
 
     def log_mixture_weights(self, context_raw: np.ndarray) -> np.ndarray:
         """``[N, S]`` log sub-type weights gamma_k(x) gamma_j|k(x) at raw contexts."""
-        w = self.bundle.context_model.weights_for_context(np.asarray(context_raw, np.float32))
+        w = self.bundle.context_model.weights_for_context(
+            np.asarray(context_raw, np.float32)
+        )
         return np.log(np.maximum(np.asarray(w, dtype=np.float64), 1e-12))

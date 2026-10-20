@@ -27,7 +27,13 @@ from ephysatlas.alignment.models import (
     UNIT_MODEL_REVISION,
     VINTAGE,
 )
-from ephysatlas.alignment.runner import METHODS, TRACES, RunSettings, run_alignments, summarize
+from ephysatlas.alignment.runner import (
+    METHODS,
+    TRACES,
+    RunSettings,
+    run_alignments,
+    summarize,
+)
 from ephysatlas.unit_level_encoder.config import DEFAULT_RESULTS_DIR
 
 # %% User settings (each can also be given on the command line; see --help) ----------------------
@@ -42,25 +48,38 @@ SAVE_FIGURES = False  # one figure per insertion and method (slower)
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--methods", nargs="+", default=list(METHODS_TO_RUN), choices=METHODS)
+    parser.add_argument(
+        "--methods", nargs="+", default=list(METHODS_TO_RUN), choices=METHODS
+    )
     parser.add_argument("--trace", default=TRACE, choices=TRACES)
     parser.add_argument("--split", default=SPLIT, choices=("test", "validation"))
-    parser.add_argument("--out-dir", type=Path, default=None,
-                        help="output directory (default: OUT_DIR, with a _human suffix for --trace human)")
+    parser.add_argument(
+        "--out-dir",
+        type=Path,
+        default=None,
+        help="output directory (default: OUT_DIR, with a _human suffix for --trace human)",
+    )
     parser.add_argument("--vintage", default=VINTAGE)
     parser.add_argument("--channel-model", default=CHANNEL_MODEL_REPO_ID)
-    parser.add_argument("--unit-model", default=UNIT_MODEL_REPO_ID,
-                        help="unit-level model: Hub repo id or local release directory")
+    parser.add_argument(
+        "--unit-model",
+        default=UNIT_MODEL_REPO_ID,
+        help="unit-level model: Hub repo id or local release directory",
+    )
     parser.add_argument("--unit-revision", default=UNIT_MODEL_REVISION)
     parser.add_argument("--figures", action="store_true", default=SAVE_FIGURES)
     parser.add_argument("--overwrite", action="store_true")
-    parser.add_argument("--limit", type=int, default=None, help="only the first N insertions")
+    parser.add_argument(
+        "--limit", type=int, default=None, help="only the first N insertions"
+    )
     args = parser.parse_args()
 
     from ephysatlas.alignment.data import split_pids
     from ephysatlas.alignment.models import ChannelModel
 
-    out_dir = args.out_dir or (OUT_DIR if args.trace == "picks" else OUT_DIR.with_name(OUT_DIR.name + "_human"))
+    out_dir = args.out_dir or (
+        OUT_DIR if args.trace == "picks" else OUT_DIR.with_name(OUT_DIR.name + "_human")
+    )
     pids = split_pids(ChannelModel(args.channel_model, args.vintage), args.split)
     print(f"[alignment] {len(pids)} {args.split} insertions -> {out_dir}")
     csv_path = run_alignments(

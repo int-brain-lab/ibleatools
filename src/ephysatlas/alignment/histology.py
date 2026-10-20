@@ -128,7 +128,9 @@ def path_to_channel_map(path, valid: np.ndarray, trace_len: int) -> np.ndarray:
 def valid_channels(recorded: np.ndarray) -> np.ndarray:
     """Channels with a signal: finite and not all-zero features."""
     recorded = np.asarray(recorded, dtype=float)
-    return np.isfinite(recorded).all(axis=1) & ~np.all(np.nan_to_num(recorded) == 0.0, axis=1)
+    return np.isfinite(recorded).all(axis=1) & ~np.all(
+        np.nan_to_num(recorded) == 0.0, axis=1
+    )
 
 
 def align_histology(
@@ -178,19 +180,31 @@ def align_histology(
     trace_xyz = np.asarray(trace_xyz, dtype=np.float32)
     valid = valid_channels(recorded)
     if valid.sum() < 2:
-        raise ValueError("Need at least 2 channels with non-zero features to align a probe.")
-    feats = np.arange(recorded.shape[1]) if feature_indices is None else np.asarray(feature_indices)
+        raise ValueError(
+            "Need at least 2 channels with non-zero features to align a probe."
+        )
+    feats = (
+        np.arange(recorded.shape[1])
+        if feature_indices is None
+        else np.asarray(feature_indices)
+    )
     recorded_std = channel_model.standardize(recorded)
     timings = {}
 
     if predicted_trace_std is None:
-        report(progress, 0.05, f"Predicting features along the trace ({len(trace_xyz)} samples)")
+        report(
+            progress,
+            0.05,
+            f"Predicting features along the trace ({len(trace_xyz)} samples)",
+        )
         predicted_trace_std = channel_model.predict_std(trace_xyz, pid)
         timings["predict_trace"] = time.time() - t0
     predicted_trace_std = np.asarray(predicted_trace_std, dtype=np.float64)
 
     report(progress, 0.55, "Building the channel x trace cost matrix")
-    feature_cost = cost_matrix(recorded_std[valid][:, feats], predicted_trace_std[:, feats])
+    feature_cost = cost_matrix(
+        recorded_std[valid][:, feats], predicted_trace_std[:, feats]
+    )
     c = feature_cost if cost is None else np.asarray(cost, dtype=np.float64)
 
     report(progress, 0.65, "Dynamic time warping")

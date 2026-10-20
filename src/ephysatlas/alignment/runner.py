@@ -20,7 +20,12 @@ import numpy as np
 import pandas as pd
 
 from .metrics import alignment_metrics
-from .models import CHANNEL_MODEL_REPO_ID, UNIT_MODEL_REPO_ID, UNIT_MODEL_REVISION, VINTAGE
+from .models import (
+    CHANNEL_MODEL_REPO_ID,
+    UNIT_MODEL_REPO_ID,
+    UNIT_MODEL_REVISION,
+    VINTAGE,
+)
 from .progress import print_progress
 
 METHODS = ("histology", "histology_unit", "ephys_only")
@@ -73,12 +78,16 @@ def _append(csv_path: Path, row: dict) -> None:
     df = pd.DataFrame([row])
     if csv_path.exists():
         old = pd.read_csv(csv_path)
-        old = old[~((old["pid"].astype(str) == row["pid"]) & (old["method"] == row["method"]))]
+        old = old[
+            ~((old["pid"].astype(str) == row["pid"]) & (old["method"] == row["method"]))
+        ]
         df = pd.concat([old, df], ignore_index=True)
     df.to_csv(csv_path, index=False)
 
 
-def run_alignments(pids: Sequence[str], settings: RunSettings, split_of: Optional[dict] = None) -> Path:
+def run_alignments(
+    pids: Sequence[str], settings: RunSettings, split_of: Optional[dict] = None
+) -> Path:
     """Align every insertion of ``pids`` with every method of ``settings``.
 
     Args:
@@ -105,11 +114,15 @@ def run_alignments(pids: Sequence[str], settings: RunSettings, split_of: Optiona
     csv_path = out_dir / "alignment_metrics.csv"
     done = set() if settings.overwrite else _done(csv_path)
 
-    print(f"[alignment] loading models {settings.channel_repo_id}@{settings.vintage} ...")
+    print(
+        f"[alignment] loading models {settings.channel_repo_id}@{settings.vintage} ..."
+    )
     channel_model = ChannelModel(settings.channel_repo_id, settings.vintage)
     unit_model = None
     if "histology_unit" in settings.methods:
-        print(f"[alignment] loading {settings.unit_repo_id}@{settings.unit_revision} and its unit data ...")
+        print(
+            f"[alignment] loading {settings.unit_repo_id}@{settings.unit_revision} and its unit data ..."
+        )
         unit_model = UnitModel.load(settings.unit_repo_id, settings.unit_revision)
     dataset = ChannelDataset.load(settings.vintage)
     brain_atlas = AllenAtlas()
@@ -117,7 +130,9 @@ def run_alignments(pids: Sequence[str], settings: RunSettings, split_of: Optiona
     if "ephys_only" in settings.methods:
         from .ephys_only import EphysOnlyLocalizer
 
-        localizer = EphysOnlyLocalizer(channel_model, brain_atlas, **settings.ephys_only_kwargs)
+        localizer = EphysOnlyLocalizer(
+            channel_model, brain_atlas, **settings.ephys_only_kwargs
+        )
 
     pids = [str(p) for p in pids]
     if settings.limit:
@@ -129,9 +144,15 @@ def run_alignments(pids: Sequence[str], settings: RunSettings, split_of: Optiona
             continue
         print(f"[alignment] {i}/{n} {pid}: {', '.join(todo)}", flush=True)
         probe = dataset.probe(pid)
-        base = dict(pid=pid, split=(split_of or {}).get(pid, ""), trace=settings.trace,
-                    model_commit=channel_model.model_commit)
-        planned = alignment_metrics(probe["human_xyz"], probe["planned_xyz"], brain_atlas)
+        base = dict(
+            pid=pid,
+            split=(split_of or {}).get(pid, ""),
+            trace=settings.trace,
+            model_commit=channel_model.model_commit,
+        )
+        planned = alignment_metrics(
+            probe["human_xyz"], probe["planned_xyz"], brain_atlas
+        )
         base.update({f"planned_{k}": v for k, v in planned.items()})
         channel_result = None
         for method in todo:
@@ -157,22 +178,40 @@ def run_alignments(pids: Sequence[str], settings: RunSettings, split_of: Optiona
                         from .unit_cost import align_histology_with_units
 
                         _, result = align_histology_with_units(
-                            channel_model, unit_model, probe["features"], trace, pid=pid,
+                            channel_model,
+                            unit_model,
+                            probe["features"],
+                            trace,
+                            pid=pid,
                             channel_result=channel_result,
                         )
                         if result is None:
                             raise RuntimeError("no unit evidence on this probe")
                 else:
                     result = localizer.localize(
-                        probe["features"], probe["planned_xyz"], pid=pid,
+                        probe["features"],
+                        probe["planned_xyz"],
+                        pid=pid,
                         progress=print_progress("    "),
                     )
-                row.update(alignment_metrics(
-                    probe["human_xyz"], result.channel_xyz, brain_atlas,
-                    p_good=result.p_good, valid=result.valid,
-                ))
-                row.update({k: v for k, v in result.diagnostics.items()
-                            if isinstance(v, (int, float, str, bool, np.floating, np.integer))})
+                row.update(
+                    alignment_metrics(
+                        probe["human_xyz"],
+                        result.channel_xyz,
+                        brain_atlas,
+                        p_good=result.p_good,
+                        valid=result.valid,
+                    )
+                )
+                row.update(
+                    {
+                        k: v
+                        for k, v in result.diagnostics.items()
+                        if isinstance(
+                            v, (int, float, str, bool, np.floating, np.integer)
+                        )
+                    }
+                )
                 row["error"] = ""
                 if settings.save_results:
                     result.save(out_dir / "results" / method / f"{pid}.npz")
@@ -182,7 +221,9 @@ def run_alignments(pids: Sequence[str], settings: RunSettings, split_of: Optiona
                     from .plotting import plot_alignment_result
 
                     fig = plot_alignment_result(
-                        result, brain_atlas, human_xyz=probe["human_xyz"],
+                        result,
+                        brain_atlas,
+                        human_xyz=probe["human_xyz"],
                         planned_xyz=probe["planned_xyz"],
                     )
                     fig_path = out_dir / "figures" / method / f"{pid}.png"
@@ -199,7 +240,8 @@ def run_alignments(pids: Sequence[str], settings: RunSettings, split_of: Optiona
                 f"    {method}: cosmos={row.get('cosmos_acc', np.nan):.3f} "
                 f"beryl={row.get('beryl_acc', np.nan):.3f} "
                 f"distance={row.get('mean_distance_um', np.nan):.0f} um "
-                f"({row['seconds']:.1f} s)", flush=True,
+                f"({row['seconds']:.1f} s)",
+                flush=True,
             )
     return csv_path
 
@@ -208,7 +250,17 @@ def summarize(csv_path: Path) -> pd.DataFrame:
     """Mean and median of the main scores per method (successful rows only)."""
     df = pd.read_csv(csv_path)
     df = df[df["error"].fillna("") == ""]
-    cols = [c for c in ("cosmos_acc", "beryl_acc", "mean_distance_um", "cosmos_acc_high_conf",
-                        "beryl_acc_high_conf", "mean_distance_um_high_conf", "high_conf_fraction")
-            if c in df.columns]
+    cols = [
+        c
+        for c in (
+            "cosmos_acc",
+            "beryl_acc",
+            "mean_distance_um",
+            "cosmos_acc_high_conf",
+            "beryl_acc_high_conf",
+            "mean_distance_um_high_conf",
+            "high_conf_fraction",
+        )
+        if c in df.columns
+    ]
     return df.groupby("method")[cols].agg(["mean", "median", "count"])

@@ -206,7 +206,9 @@ def _build_multichannel_waveform_cache(
             cached_rows = cached_keys[keep_mask]
             row_of = pd.Series(np.arange(len(cached_rows)), index=cached_rows)
             keep_mask = np.isin(unit_keys, cached_rows)
-            waveforms_cached = waveforms_cached[row_of.loc[unit_keys[keep_mask]].to_numpy()]
+            waveforms_cached = waveforms_cached[
+                row_of.loc[unit_keys[keep_mask]].to_numpy()
+            ]
             info["subset_of_cache"] = True
             print(f"  {int(keep_mask.sum()):,} of its {len(cached_rows):,} units")
 
@@ -260,7 +262,9 @@ def _build_multichannel_waveform_cache(
     good_cluster_ids = _cluster_ids_from_df(df_good)
     good_keys = _make_unit_keys(df_good[pid_col].to_numpy(), good_cluster_ids)
     # One column read up front: an .iloc on the full table per unit takes ~0.2 s (hours in all).
-    abs_channels = df_w[abs_channel_col].to_numpy() if abs_channel_col is not None else None
+    abs_channels = (
+        df_w[abs_channel_col].to_numpy() if abs_channel_col is not None else None
+    )
 
     extracted = []
     keep_mask = np.zeros(len(df_good), dtype=bool)

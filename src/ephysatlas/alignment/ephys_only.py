@@ -156,7 +156,9 @@ def default_fit_dir(model_commit: str) -> Path:
     """``~/ephys-atlas/results/alignment/ephys_only_fit/<model_commit>``."""
     from ephysatlas.unit_level_encoder.config import DEFAULT_RESULTS_DIR
 
-    return Path(DEFAULT_RESULTS_DIR) / "alignment" / "ephys_only_fit" / str(model_commit)
+    return (
+        Path(DEFAULT_RESULTS_DIR) / "alignment" / "ephys_only_fit" / str(model_commit)
+    )
 
 
 def used_feature_names() -> list[str]:
@@ -175,7 +177,9 @@ def mad(values: np.ndarray) -> float:
     """Normal-consistent median absolute deviation of the finite values (NaN if none)."""
     v = np.asarray(values, dtype=np.float64)
     v = v[np.isfinite(v)]
-    return float(1.4826 * np.median(np.abs(v - np.median(v)))) if v.size else float("nan")
+    return (
+        float(1.4826 * np.median(np.abs(v - np.median(v)))) if v.size else float("nan")
+    )
 
 
 def mirror_left(xyz: np.ndarray) -> np.ndarray:
@@ -233,7 +237,9 @@ class DepthBins:
                 idx.append(rows)
                 centers.append(0.5 * (edges[b] + edges[b + 1]))
         if len(idx) < 2:
-            raise ValueError(f"only {len(idx)} depth bin(s) with signal; at least 2 are needed")
+            raise ValueError(
+                f"only {len(idx)} depth bin(s) with signal; at least 2 are needed"
+            )
         return cls(channel_idx=idx, centers_um=np.asarray(centers, dtype=np.float32))
 
     def __len__(self) -> int:
@@ -242,9 +248,9 @@ class DepthBins:
     def means(self, values: np.ndarray) -> np.ndarray:
         """``[B, F]`` NaN-mean of per-channel ``values`` in each bin."""
         v = np.asarray(values)
-        return np.stack([np.nanmean(v[rows], axis=0) for rows in self.channel_idx]).astype(
-            np.float64
-        )
+        return np.stack(
+            [np.nanmean(v[rows], axis=0) for rows in self.channel_idx]
+        ).astype(np.float64)
 
     def mean_xyz_um(self, xyz_m: np.ndarray) -> np.ndarray:
         """``[B, 3]`` mean valid channel position of each bin (µm), NaN where none is valid."""
@@ -258,9 +264,13 @@ class DepthBins:
         return out
 
 
-def clip_standardize(recorded: np.ndarray, clip_lo, clip_hi, e_mean, e_std) -> np.ndarray:
+def clip_standardize(
+    recorded: np.ndarray, clip_lo, clip_hi, e_mean, e_std
+) -> np.ndarray:
     """The release preprocessing: clip to the release percentiles, then standardise (float32)."""
-    x = np.clip(np.asarray(recorded, dtype=np.float32), clip_lo[None, :], clip_hi[None, :])
+    x = np.clip(
+        np.asarray(recorded, dtype=np.float32), clip_lo[None, :], clip_hi[None, :]
+    )
     return ((x - e_mean[None, :]) / np.maximum(e_std[None, :], 1e-6)).astype(np.float32)
 
 
@@ -278,7 +288,9 @@ def candidate_grid(brain_atlas, cfg: ScoreConfig) -> tuple[np.ndarray, np.ndarra
     from .geometry import region_ids
 
     bc = brain_atlas.bc
-    lims = [np.asarray(lim, dtype=np.float64) * 1e6 for lim in (bc.xlim, bc.ylim, bc.zlim)]
+    lims = [
+        np.asarray(lim, dtype=np.float64) * 1e6 for lim in (bc.xlim, bc.ylim, bc.zlim)
+    ]
     (x0, x1), (y0, y1), (z0, z1) = [(float(np.min(v)), float(np.max(v))) for v in lims]
     step = float(cfg.grid_um)
     xs = np.arange(x0, min(0.0, x1) + 0.5 * step, step)
@@ -286,13 +298,17 @@ def candidate_grid(brain_atlas, cfg: ScoreConfig) -> tuple[np.ndarray, np.ndarra
     ys = np.arange(y0, y1 + 0.5 * step, step)
     zs = np.arange(z0, z1 + 0.5 * step, step)
     X, Y, Z = np.meshgrid(xs, ys, zs, indexing="ij")
-    xyz_m = (np.column_stack([X.ravel(), Y.ravel(), Z.ravel()]) * 1e-6).astype(np.float32)
+    xyz_m = (np.column_stack([X.ravel(), Y.ravel(), Z.ravel()]) * 1e-6).astype(
+        np.float32
+    )
     rids = region_ids(brain_atlas, xyz_m, cfg.grid_mapping)
     keep = rids >= int(cfg.valid_rid_min)
     return xyz_m[keep], rids[keep].astype(np.int64)
 
 
-_CORNERS = np.array([[i, j, k] for i in (0, 1) for j in (0, 1) for k in (0, 1)], dtype=np.int64)
+_CORNERS = np.array(
+    [[i, j, k] for i in (0, 1) for j in (0, 1) for k in (0, 1)], dtype=np.int64
+)
 
 
 class DenseGrid:
@@ -334,7 +350,9 @@ class DenseGrid:
         inside = np.all((c >= 0) & (c < self.shape[None, None, :]), axis=2)
         cc = np.clip(c, 0, self.shape[None, None, :] - 1)
         vid = np.where(inside, self.index[cc[..., 0], cc[..., 1], cc[..., 2]], -1)
-        wf = np.where(_CORNERS[None, :, :] == 1, f[:, None, :], 1.0 - f[:, None, :]).prod(axis=2)
+        wf = np.where(
+            _CORNERS[None, :, :] == 1, f[:, None, :], 1.0 - f[:, None, :]
+        ).prod(axis=2)
         w = np.where(vid >= 0, wf, 0.0)
         tot = w.sum(axis=1)
         d_nn, nearest = self.tree.query(q, k=1)
@@ -395,7 +413,11 @@ def clip_joint_bend(bend_uv_deg, max_joint_angle_deg: float) -> np.ndarray:
 def _cross3(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     """``np.cross`` of two 3-vectors: the same products and differences, without its overhead."""
     return np.array(
-        [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+        [
+            a[1] * b[2] - a[2] * b[1],
+            a[2] * b[0] - a[0] * b[2],
+            a[0] * b[1] - a[1] * b[0],
+        ]
     )
 
 
@@ -448,14 +470,18 @@ def trace_points(
     )
     directions = [probe_axis_from_angles(params.theta, params.phi, z_sign)]
     for j in range(n - 1):
-        directions.append(_bend_direction(directions[-1], bends[j], cfg.max_joint_angle_deg))
+        directions.append(
+            _bend_direction(directions[-1], bends[j], cfg.max_joint_angle_deg)
+        )
     directions = np.asarray(directions, dtype=np.float32)
     length = max(float(params.length), 1e-6)
     seg = length / float(n)
     vertices = np.empty((n + 1, 3), dtype=np.float32)
     vertices[0] = np.array([-abs(params.x), params.y, params.z], dtype=np.float32)
     remaining, section = 0.5 * length, 0
-    while remaining > 1e-6 and section < n:  # walk back half the length from the midpoint
+    while (
+        remaining > 1e-6 and section < n
+    ):  # walk back half the length from the midpoint
         step = min(seg, remaining)
         vertices[0] -= step * directions[section]
         remaining -= step
@@ -472,7 +498,9 @@ def trace_points(
     return points.astype(np.float32), bends
 
 
-def planned_seed(planned_xyz_m: np.ndarray, cfg: AnnealConfig) -> tuple[TraceParams, str]:
+def planned_seed(
+    planned_xyz_m: np.ndarray, cfg: AnnealConfig
+) -> tuple[TraceParams, str]:
     """``(params, z_sign)`` of the straight trajectory fitted to the planned channels.
 
     As ``localization_sa._planned_trace_seed``: centre = mean of the planned channels (mirrored
@@ -482,7 +510,9 @@ def planned_seed(planned_xyz_m: np.ndarray, cfg: AnnealConfig) -> tuple[TracePar
     target = mirror_left(np.asarray(planned_xyz_m, dtype=np.float32))
     pts = target[valid_positions(target)] * 1e6
     center = np.nanmean(pts, axis=0).astype(np.float32)
-    axis = np.linalg.svd(pts - center[None, :], full_matrices=False)[2][0].astype(np.float32)
+    axis = np.linalg.svd(pts - center[None, :], full_matrices=False)[2][0].astype(
+        np.float32
+    )
     if float(np.dot(axis, pts[-1] - pts[0])) < 0:
         axis = -axis
     axis /= max(float(np.linalg.norm(axis)), 1e-12)
@@ -490,7 +520,9 @@ def planned_seed(planned_xyz_m: np.ndarray, cfg: AnnealConfig) -> tuple[TracePar
     theta = float(np.rad2deg(np.arccos(np.clip(abs(float(axis[2])), 0.0, 1.0))))
     phi = float(np.rad2deg(np.arctan2(float(axis[1]), float(axis[0]))) % 360.0)
     theta = float(np.clip(theta, cfg.min_angle_deg, cfg.max_angle_deg))
-    length = float(np.clip(cfg.probe_length_um, cfg.min_probe_length_um, cfg.max_probe_length_um))
+    length = float(
+        np.clip(cfg.probe_length_um, cfg.min_probe_length_um, cfg.max_probe_length_um)
+    )
     params = TraceParams(
         x=-abs(float(center[0])),
         y=float(center[1]),
@@ -503,7 +535,9 @@ def planned_seed(planned_xyz_m: np.ndarray, cfg: AnnealConfig) -> tuple[TracePar
     return params, z_sign
 
 
-def check_planned_trajectory(planned_xyz_m: np.ndarray, min_span_um: float = 100.0) -> None:
+def check_planned_trajectory(
+    planned_xyz_m: np.ndarray, min_span_um: float = 100.0
+) -> None:
     """Raise :class:`PlannedTrajectoryUnavailable` for placeholder or too-short plans."""
     xyz = np.asarray(planned_xyz_m, dtype=np.float64)
     ok = valid_positions(xyz)
@@ -522,7 +556,10 @@ def check_planned_trajectory(planned_xyz_m: np.ndarray, min_span_um: float = 100
 
 
 def channel_positions(
-    trace_um: np.ndarray, depth_centers_um: np.ndarray, n_channels: int, spacing_um: float
+    trace_um: np.ndarray,
+    depth_centers_um: np.ndarray,
+    n_channels: int,
+    spacing_um: float,
 ) -> np.ndarray:
     """``[C, 3]`` channel positions (µm) along the bin trace, by channel depth (row x spacing).
 
@@ -536,7 +573,9 @@ def channel_positions(
     out = np.column_stack([np.interp(q, d, tr[:, k]) for k in range(3)])
     top, bottom = q < d[0], q > d[-1]
     out[top] = tr[0] + (q[top] - d[0])[:, None] * (tr[1] - tr[0]) / (d[1] - d[0])
-    out[bottom] = tr[-1] + (q[bottom] - d[-1])[:, None] * (tr[-1] - tr[-2]) / (d[-1] - d[-2])
+    out[bottom] = tr[-1] + (q[bottom] - d[-1])[:, None] * (tr[-1] - tr[-2]) / (
+        d[-1] - d[-2]
+    )
     return out
 
 
@@ -566,7 +605,9 @@ def section_bin_indices(depth_centers_um: np.ndarray, n_sections: int) -> list:
     d = np.asarray(depth_centers_um, dtype=np.float64)
     s = (d - d.min()) / max(float(np.ptp(d)), 1e-6)
     return [
-        np.flatnonzero((s >= k / n_sections - 1e-9) & (s <= (k + 1) / n_sections + 1e-9))
+        np.flatnonzero(
+            (s >= k / n_sections - 1e-9) & (s <= (k + 1) / n_sections + 1e-9)
+        )
         for k in range(n_sections)
     ]
 
@@ -637,7 +678,8 @@ class PlanPrior:
         degenerate = bool(span < self.cfg.plan_min_span_um or okp.sum() < 2)
         if degenerate:  # nominal span of the binned channels
             depth = (
-                np.array([np.mean(rows) for rows in bins.channel_idx]) * self.cfg.channel_spacing_um
+                np.array([np.mean(rows) for rows in bins.channel_idx])
+                * self.cfg.channel_spacing_um
             )
             L_plan = float(np.ptp(depth)) if depth.size > 1 else 3770.0
             c_plan = np.nanmean(P, axis=0) if okp.any() else np.zeros(3)
@@ -671,7 +713,10 @@ class PlanPrior:
         nu_b, s_b = self.p["bend"]
         bends = rho_t2(joint_angles_deg(tr, ref["sections"]), nu_b, s_b).sum(axis=1)
         return (
-            centre + rho_t2(angle, nu_a, s_a * w) + 0.5 * ((ratio - m_l) / (s_l * w)) ** 2 + bends
+            centre
+            + rho_t2(angle, nu_a, s_a * w)
+            + 0.5 * ((ratio - m_l) / (s_l * w)) ** 2
+            + bends
         )
 
 
@@ -684,7 +729,9 @@ def outside_penalty(d_nn_um: np.ndarray, cfg: ScoreConfig) -> np.ndarray:
     """``((d_nn - free)_+ / scale)^2`` (unweighted); 1e6 for non-finite distances."""
     d = np.asarray(d_nn_um, dtype=np.float64)
     return np.where(
-        np.isfinite(d), (np.maximum(0.0, d - cfg.out_free_um) / cfg.out_scale_um) ** 2, 1e6
+        np.isfinite(d),
+        (np.maximum(0.0, d - cfg.out_free_um) / cfg.out_scale_um) ** 2,
+        1e6,
     )
 
 
@@ -724,12 +771,18 @@ class ProbeScore:
         ids, w, d_nn = self.grid.locate(tr.reshape(-1, 3))
         e = self.wx[None] - DenseGrid.interp(self.wg, ids, w).reshape(n, b, -1)
         m = (e * e).sum(axis=2)
-        lik = (0.5 * (self.nu + self.wx.shape[1]) * np.log1p(m / (self.nu - 2.0))).sum(axis=1)
-        outside = self.cfg.lambda_out * outside_penalty(d_nn, self.cfg).reshape(n, b).sum(axis=1)
+        lik = (0.5 * (self.nu + self.wx.shape[1]) * np.log1p(m / (self.nu - 2.0))).sum(
+            axis=1
+        )
+        outside = self.cfg.lambda_out * outside_penalty(d_nn, self.cfg).reshape(
+            n, b
+        ).sum(axis=1)
         lik_over_T = (lik + outside) / self.T
         prior = self.prior.evaluate(tr, self.prior_ref)
         raw = lik_over_T + prior
-        raw = np.where(~np.isfinite(tr).all(axis=(1, 2)) | ~np.isfinite(raw), np.inf, raw)
+        raw = np.where(
+            ~np.isfinite(tr).all(axis=(1, 2)) | ~np.isfinite(raw), np.inf, raw
+        )
         return dict(
             lik_sum=lik,
             outside=outside,
@@ -740,7 +793,9 @@ class ProbeScore:
         )
 
     def __call__(self, trace_um: np.ndarray) -> float:
-        return float(self.components(np.asarray(trace_um, dtype=np.float32)[None])["score"][0])
+        return float(
+            self.components(np.asarray(trace_um, dtype=np.float32)[None])["score"][0]
+        )
 
 
 def _rotation_matrices(omega_deg: np.ndarray) -> np.ndarray:
@@ -754,11 +809,15 @@ def _rotation_matrices(omega_deg: np.ndarray) -> np.ndarray:
     K[:, 0, 1], K[:, 0, 2], K[:, 1, 2] = -ax[:, 2], ax[:, 1], -ax[:, 0]
     K[:, 1, 0], K[:, 2, 0], K[:, 2, 1] = ax[:, 2], -ax[:, 1], ax[:, 0]
     return (
-        np.eye(3)[None] + np.sin(th)[:, None, None] * K + (1 - np.cos(th))[:, None, None] * (K @ K)
+        np.eye(3)[None]
+        + np.sin(th)[:, None, None] * K
+        + (1 - np.cos(th))[:, None, None] * (K @ K)
     )
 
 
-def plan_neighbourhood_traces(base_um: np.ndarray, n: int, rng: np.random.Generator) -> np.ndarray:
+def plan_neighbourhood_traces(
+    base_um: np.ndarray, n: int, rng: np.random.Generator
+) -> np.ndarray:
     """``[n, B, 3]`` rigid + stretch perturbations of the trajectory ``base_um`` (family A).
 
     Shift ~ t3 x (300, 500, 500) µm per axis (norm capped at 2.5 mm); rotation about the centre
@@ -777,7 +836,8 @@ def plan_neighbourhood_traces(base_um: np.ndarray, n: int, rng: np.random.Genera
     om *= (np.abs(rng.standard_t(3, size=n)) * 5.0)[:, None]
     stretch = np.clip(1.0 + rng.normal(0.0, 0.05, n), 0.85, 1.2)
     tr = (
-        np.einsum("nij,bj->nbi", _rotation_matrices(om), base - c) * stretch[:, None, None]
+        np.einsum("nij,bj->nbi", _rotation_matrices(om), base - c)
+        * stretch[:, None, None]
         + (c + shift)[:, None, :]
     )
     return mirror_left(tr)
@@ -865,15 +925,22 @@ def anneal(
     n_reheats, boost = 0, 1.0
     last_reheat, reheat_start, prev_temp = None, np.nan, None
     n_done = 0
-    history = {k: [] for k in ("iteration", "temperature", "score", "best_score", "best_trace_um")}
+    history = {
+        k: []
+        for k in ("iteration", "temperature", "score", "best_score", "best_trace_um")
+    }
     for it in range(n_it):
         base_temp = _exp_schedule(
             cfg.initial_temperature, cfg.final_temperature, min(1.0, it / decay_iters)
         )
         a = it / max(1, n_it - 1)
         sig_xyz = _exp_schedule(cfg.init_xyz_sigma_um, cfg.final_xyz_sigma_um, a)
-        sig_theta = _exp_schedule(cfg.init_angle_sigma_deg, cfg.final_angle_sigma_deg, a)
-        sig_phi = _exp_schedule(cfg.init_azimuth_sigma_deg, cfg.final_azimuth_sigma_deg, a)
+        sig_theta = _exp_schedule(
+            cfg.init_angle_sigma_deg, cfg.final_angle_sigma_deg, a
+        )
+        sig_phi = _exp_schedule(
+            cfg.init_azimuth_sigma_deg, cfg.final_azimuth_sigma_deg, a
+        )
         sig_len = _exp_schedule(cfg.init_length_sigma_um, cfg.final_length_sigma_um, a)
         sig_joint = _exp_schedule(
             cfg.init_joint_angle_sigma_deg, cfg.final_joint_angle_sigma_deg, a
@@ -891,7 +958,9 @@ def anneal(
                     previous * cfg.reheat_temperature_factor, cfg.reheat_min_temperature
                 )
             temp = _exp_schedule(
-                reheat_start, cfg.final_temperature, min(1.0, (it - last_reheat) / decay_iters)
+                reheat_start,
+                cfg.final_temperature,
+                min(1.0, (it - last_reheat) / decay_iters),
             )
         else:
             temp = float(base_temp)
@@ -919,7 +988,9 @@ def anneal(
             )
         elif move == 1:  # inclination or azimuth
             if rng.random() < 0.5:
-                prop.theta = float(np.clip(cur.theta + rng.normal(0.0, sig_theta), lo, hi))
+                prop.theta = float(
+                    np.clip(cur.theta + rng.normal(0.0, sig_theta), lo, hi)
+                )
             else:
                 prop.phi = (cur.phi + rng.normal(0.0, sig_phi)) % 360.0
         elif move == 2:  # length
@@ -947,7 +1018,11 @@ def anneal(
                 last_improve = last_best_improve = it
         prev_temp = temp
         if progress is not None and it % 50 == 0:
-            report(progress, it / n_it, f"Simulated annealing: {label}, iteration {it}/{n_it}")
+            report(
+                progress,
+                it / n_it,
+                f"Simulated annealing: {label}, iteration {it}/{n_it}",
+            )
         stop = (it - last_best_improve) >= cfg.early_stop_patience
         if history_every > 0 and (it % history_every == 0 or stop or it == n_it - 1):
             for k, v in zip(history, (it, temp, cur_score, best_score, best_trace)):
@@ -960,7 +1035,9 @@ def anneal(
         score=float(best_score),
         proposal_scores=prop_scores[:n_done],
         proposal_traces_um=prop_traces[:n_done],
-        history={k: np.asarray(v) for k, v in history.items()} if history_every > 0 else None,
+        history={k: np.asarray(v) for k, v in history.items()}
+        if history_every > 0
+        else None,
     )
 
 
@@ -1015,19 +1092,25 @@ class EphysOnlyLocalizer:
         self.seed = int(seed)
         self.score_cfg, self.anneal_cfg = _configs(overrides)
         self.model_commit = str(channel_model.model_commit)
-        self.fit_dir = Path(fit_dir) if fit_dir is not None else default_fit_dir(self.model_commit)
+        self.fit_dir = (
+            Path(fit_dir) if fit_dir is not None else default_fit_dir(self.model_commit)
+        )
         self.feature_names = used_feature_names()
         missing = [f for f in self.feature_names if f not in channel_model.features]
         if missing:
             raise ValueError(f"the channel model does not predict {missing}")
-        self.feature_idx = np.array([channel_model.features.index(f) for f in self.feature_names])
+        self.feature_idx = np.array(
+            [channel_model.features.index(f) for f in self.feature_names]
+        )
         stats = channel_model.encoder.preprocessing_stats()
         self._stats = {
             k: np.asarray(stats[k], dtype=np.float32)[self.feature_idx]
             for k in ("rec_ephys_low_pctl", "rec_ephys_high_pctl", "e_mean", "e_std")
         }
         self.neighbour_radius_um = float(
-            (channel_model.encoder.config.get("neighbourhood") or {}).get("radius_um", 500.0)
+            (channel_model.encoder.config.get("neighbourhood") or {}).get(
+                "radius_um", 500.0
+            )
         )
         self._bank_um = None
         self._load_or_build_grid(sub_progress(progress, 0.0, 0.1))
@@ -1056,9 +1139,9 @@ class EphysOnlyLocalizer:
         xyz_m, rids = candidate_grid(self.brain_atlas, self.score_cfg)
         report(progress, 0.1, f"Predicting features on {len(xyz_m):,} lattice voxels")
         # A pid in no bank: nothing is excluded from the neighbours of a lattice voxel.
-        pred = self.channel_model.predict_std(xyz_m, "__grid__")[:, self.feature_idx].astype(
-            np.float32
-        )
+        pred = self.channel_model.predict_std(xyz_m, "__grid__")[
+            :, self.feature_idx
+        ].astype(np.float32)
         path.parent.mkdir(parents=True, exist_ok=True)
         np.savez(
             path,
@@ -1069,7 +1152,11 @@ class EphysOnlyLocalizer:
             region_ids=rids,
             pred_std=pred,
         )
-        self.grid_xyz_m, self.grid_region_ids, self.grid_pred = xyz_m, rids, pred.astype(np.float64)
+        self.grid_xyz_m, self.grid_region_ids, self.grid_pred = (
+            xyz_m,
+            rids,
+            pred.astype(np.float64),
+        )
         self.grid = DenseGrid(xyz_m, self.score_cfg.grid_um)
 
     def _load_fit(self) -> bool:
@@ -1116,7 +1203,9 @@ class EphysOnlyLocalizer:
 
         summary = fit_localizer(self, dataset, progress)
         if not self._load_fit():
-            raise RuntimeError(f"the fit in {self.fit_dir} did not produce a temperature")
+            raise RuntimeError(
+                f"the fit in {self.fit_dir} did not produce a temperature"
+            )
         return summary
 
     # -- leave-probe-out lattice for training probes -----------------------------------------
@@ -1129,7 +1218,9 @@ class EphysOnlyLocalizer:
             order = np.argsort(inverse, kind="stable")
             bounds = np.r_[0, np.cumsum(np.bincount(inverse, minlength=len(pids)))]
             xyz = np.asarray(bank["xyz"], dtype=np.float64) * 1e6
-            self._bank_um = {p: xyz[order[bounds[i] : bounds[i + 1]]] for i, p in enumerate(pids)}
+            self._bank_um = {
+                p: xyz[order[bounds[i] : bounds[i + 1]]] for i, p in enumerate(pids)
+            }
         return self._bank_um.get(str(pid), np.zeros((0, 3)))
 
     def loo_voxels(self, pid: str) -> np.ndarray:
@@ -1146,14 +1237,18 @@ class EphysOnlyLocalizer:
         vox = self.loo_voxels(pid)
         if not len(vox):
             return self.wg
-        pred = self.channel_model.predict_std(self.grid_xyz_m[vox], str(pid))[:, self.feature_idx]
+        pred = self.channel_model.predict_std(self.grid_xyz_m[vox], str(pid))[
+            :, self.feature_idx
+        ]
         wg = self.wg.copy()
         wg[vox] = pred @ np.asarray(self.params["W"], dtype=np.float64).T
         return wg
 
     # -- search ----------------------------------------------------------------------------
 
-    def _prepare(self, recorded: np.ndarray, pid: str, wg: Optional[np.ndarray] = None) -> dict:
+    def _prepare(
+        self, recorded: np.ndarray, pid: str, wg: Optional[np.ndarray] = None
+    ) -> dict:
         """Channels with a signal, depth bins, whitened bin means ``wx`` and lattice ``wg``."""
         used = np.asarray(recorded, dtype=np.float64)[:, self.feature_idx]
         valid = signal_channels(used)
@@ -1161,12 +1256,21 @@ class EphysOnlyLocalizer:
         st = self._stats
         x = bins.means(
             clip_standardize(
-                used, st["rec_ephys_low_pctl"], st["rec_ephys_high_pctl"], st["e_mean"], st["e_std"]
+                used,
+                st["rec_ephys_low_pctl"],
+                st["rec_ephys_high_pctl"],
+                st["e_mean"],
+                st["e_std"],
             )
         )
         W = np.asarray(self.params["W"], dtype=np.float64)
         wx = (x - np.asarray(self.params["mu_r"], dtype=np.float64)[None, :]) @ W.T
-        return dict(valid=valid, bins=bins, wx=wx, wg=self.lattice_for(pid) if wg is None else wg)
+        return dict(
+            valid=valid,
+            bins=bins,
+            wx=wx,
+            wg=self.lattice_for(pid) if wg is None else wg,
+        )
 
     def bin_likelihood_maps(
         self, features: np.ndarray, *, pid: str = ""
@@ -1184,7 +1288,11 @@ class EphysOnlyLocalizer:
         """
         prep = self._prepare(np.asarray(features, dtype=np.float64), str(pid))
         wx, wg = prep["wx"], prep["wg"]
-        m = (wx**2).sum(axis=1)[:, None] + (wg**2).sum(axis=1)[None, :] - 2.0 * (wx @ wg.T)
+        m = (
+            (wx**2).sum(axis=1)[:, None]
+            + (wg**2).sum(axis=1)[None, :]
+            - 2.0 * (wx @ wg.T)
+        )
         nu = float(self.params["nu"])
         nll = 0.5 * (nu + wx.shape[1]) * np.log1p(np.maximum(m, 0.0) / (nu - 2.0))
         return self.grid_xyz_m.copy(), nll
@@ -1223,18 +1331,26 @@ class EphysOnlyLocalizer:
         seed, z_sign = planned_seed(planned_xyz, acfg)
         seed_trace, _ = trace_points(seed, bins.centers_um, z_sign, acfg)
         # Search scale c_p = K / MAD(S) over seeded trajectories around the planned seed.
-        rng = np.random.default_rng(stable_seed("sa_scale_pool", cfg.scale_pool_version, pid))
+        rng = np.random.default_rng(
+            stable_seed("sa_scale_pool", cfg.scale_pool_version, pid)
+        )
         pool = plan_neighbourhood_traces(seed_trace, cfg.scale_pool_size, rng)
         mad_s = mad(score.components(pool)["raw"])
         c_p = cfg.scale_K / mad_s if np.isfinite(mad_s) and mad_s > 1e-12 else 1.0
-        score.scale = float(np.clip(c_p, 1e-8, 1e8)) if np.isfinite(c_p) and c_p > 0 else 1.0
+        score.scale = (
+            float(np.clip(c_p, 1e-8, 1e8)) if np.isfinite(c_p) and c_p > 0 else 1.0
+        )
         seed_score = score(seed_trace)
         t_prepare = time.time() - t0
 
         restarts = []
         for r in range(self.n_restarts):
             label = f"restart {r + 1}/{self.n_restarts}"
-            report(progress, 0.05 + 0.95 * r / self.n_restarts, f"Simulated annealing: {label}")
+            report(
+                progress,
+                0.05 + 0.95 * r / self.n_restarts,
+                f"Simulated annealing: {label}",
+            )
             restarts.append(
                 anneal(
                     score,
@@ -1257,18 +1373,29 @@ class EphysOnlyLocalizer:
         restart_scores = np.array([res.score for res in restarts])
         if not np.isfinite(restart_scores).any():
             raise RuntimeError("every annealing restart ended with a non-finite score")
-        best = int(np.argmin(np.where(np.isfinite(restart_scores), restart_scores, np.inf)))
+        best = int(
+            np.argmin(np.where(np.isfinite(restart_scores), restart_scores, np.inf))
+        )
         final = restarts[best]
-        comp = {k: float(v[0]) for k, v in score.components(final.trace_um[None]).items()}
+        comp = {
+            k: float(v[0]) for k, v in score.components(final.trace_um[None]).items()
+        }
 
         # Every trajectory the search scored: the planned seed (stage -1), then each restart's
         # proposals (stage = restart index), with its mean pointwise distance to the result.
-        traces = np.concatenate([seed_trace[None]] + [res.proposal_traces_um for res in restarts])
-        cand_score = np.concatenate([[seed_score]] + [res.proposal_scores for res in restarts])
-        stage = np.concatenate(
-            [[-1]] + [np.full(len(res.proposal_scores), r) for r, res in enumerate(restarts)]
+        traces = np.concatenate(
+            [seed_trace[None]] + [res.proposal_traces_um for res in restarts]
         )
-        dist = np.linalg.norm(traces.astype(np.float64) - final.trace_um[None], axis=2).mean(axis=1)
+        cand_score = np.concatenate(
+            [[seed_score]] + [res.proposal_scores for res in restarts]
+        )
+        stage = np.concatenate(
+            [[-1]]
+            + [np.full(len(res.proposal_scores), r) for r, res in enumerate(restarts)]
+        )
+        dist = np.linalg.norm(
+            traces.astype(np.float64) - final.trace_um[None], axis=2
+        ).mean(axis=1)
         keep = _subsample(cand_score, 5000)
         bin_of_channel = np.full(len(recorded), -1, dtype=np.int32)
         for b, rows in enumerate(bins.channel_idx):
@@ -1312,17 +1439,21 @@ class EphysOnlyLocalizer:
                 history_restart=np.concatenate(
                     [np.full(len(h["iteration"]), r) for r, h in enumerate(hist)]
                 ).astype(np.int32),
-                history_iteration=np.concatenate([h["iteration"] for h in hist]).astype(np.int32),
-                history_temperature=np.concatenate([h["temperature"] for h in hist]).astype(
+                history_iteration=np.concatenate([h["iteration"] for h in hist]).astype(
+                    np.int32
+                ),
+                history_temperature=np.concatenate(
+                    [h["temperature"] for h in hist]
+                ).astype(np.float64),
+                history_score=np.concatenate([h["score"] for h in hist]).astype(
                     np.float64
                 ),
-                history_score=np.concatenate([h["score"] for h in hist]).astype(np.float64),
-                history_best_score=np.concatenate([h["best_score"] for h in hist]).astype(
-                    np.float64
-                ),
-                history_best_xyz=np.concatenate([h["best_trace_um"] for h in hist]).astype(
-                    np.float64
-                )
+                history_best_score=np.concatenate(
+                    [h["best_score"] for h in hist]
+                ).astype(np.float64),
+                history_best_xyz=np.concatenate(
+                    [h["best_trace_um"] for h in hist]
+                ).astype(np.float64)
                 * 1e-6,
             )
         channel_um = channel_positions(

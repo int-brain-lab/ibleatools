@@ -37,6 +37,7 @@ def current_feature_names(names) -> list:
 
     return [LEGACY_FEATURE_RENAMES.get(n, n) for n in names]
 
+
 logger = logging.getLogger(__name__)
 
 # Roles this family reads out of the manifest's `artifacts` block.
@@ -606,7 +607,9 @@ class SpatialEncoder:
         from ephysatlas.spatial_encoder.utils import mirror_xyz_to_left
 
         # Mirrored once, here, for the context, the neighbour search and the position input alike.
-        xyz = mirror_xyz_to_left(np.asarray(xyz_m, dtype=np.float32).reshape(-1, 3).copy())
+        xyz = mirror_xyz_to_left(
+            np.asarray(xyz_m, dtype=np.float32).reshape(-1, 3).copy()
+        )
         if pids is None or isinstance(pids, str):
             pids = np.full(xyz.shape[0], "" if pids is None else pids)
         pids = np.asarray(pids).astype(str)

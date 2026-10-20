@@ -16,7 +16,11 @@ All return an :class:`AlignmentResult`, scored against a reference alignment by
 (:class:`ChannelModel`, :class:`UnitModel`); :mod:`.runner` runs many probes offline.
 """
 
-from .ephys_only import EphysOnlyLocalizer, PlannedTrajectoryUnavailable, localize_ephys_only
+from .ephys_only import (
+    EphysOnlyLocalizer,
+    PlannedTrajectoryUnavailable,
+    localize_ephys_only,
+)
 from .histology import align_histology
 from .metrics import alignment_metrics, result_metrics
 from .models import (
