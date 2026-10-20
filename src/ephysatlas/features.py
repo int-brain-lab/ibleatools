@@ -1516,6 +1516,8 @@ def csd(
             reconstruction.
         cadzow_kwargs (dict, optional): Overrides of the Cadzow parameters, see
             :func:`cadzow_lfp_kwargs` for the defaults. Ignored if ``denoise`` is False.
+            ``fs`` and ``h`` cannot be overridden: they are always ``fs / decimate``
+            and ``geometry``, and passing either raises a ``TypeError``.
 
     Returns:
         pd.DataFrame: DataFrame with columns ['channel', 'rms_lf_csd', 'psd_delta_csd',

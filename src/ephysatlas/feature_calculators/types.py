@@ -163,7 +163,8 @@ class CsdParams:
         cadzow_kwargs (Mapping | None): Overrides of the Cadzow parameters
             (e.g. ``{"shrinkage": None, "gap_threshold": 2.0}``). ``None`` uses
             the geometry-dependent defaults of
-            :func:`ephysatlas.features.cadzow_lfp_kwargs`.
+            :func:`ephysatlas.features.cadzow_lfp_kwargs`. ``fs`` and ``h`` are
+            set by :func:`ephysatlas.features.csd` and cannot be overridden.
     """
 
     bands: Mapping | None = None
