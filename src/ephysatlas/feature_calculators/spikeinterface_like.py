@@ -17,7 +17,6 @@ SpikeInterfaceFeatureCalculator
 
 from __future__ import annotations
 
-import abc
 import logging
 
 import numpy as np
@@ -49,37 +48,25 @@ class SpikeInterfaceFeatureCalculator(BaseFeatureCalculator):
         converts to volts before feature computation.
     """
 
-    def __init__(self, name: str, neuropixel_version: int = 1) -> None:
+    def __init__(self, name: str, neuropixel_version: int = 1, rec_ap=None, rec_lfp=None) -> None:
+        if rec_ap is None and rec_lfp is None:
+            raise ValueError('Either `rec_ap` or ` rec_lfp` must be provided.')
+        
         super().__init__(name=name, neuropixel_version=neuropixel_version)
         self._rec_ap = None
         self._rec_lf = None
         self._geometry: dict[str, np.ndarray] | None = None
-
-    @abc.abstractmethod
-    def _open_recording(self, band: str):
-        """Open and return the SpikeInterface ``BaseRecording`` for a band.
-
-        Args:
-            band (str): Either ``"ap"`` or ``"lf"``.
-
-        Returns:
-            A SpikeInterface ``BaseRecording`` exposing the extractor interface, or
-            ``None`` when the band is not available for this source.
-        """
-        raise NotImplementedError
+        self._rec_ap = rec_ap
+        self._rec_lfp = rec_lfp
 
     @property
     def rec_ap(self):
         """Return the lazily opened AP recording (``None`` if unavailable)."""
-        if self._rec_ap is None:
-            self._rec_ap = self._open_recording("ap")
         return self._rec_ap
 
     @property
     def rec_lf(self):
         """Return the lazily opened LF recording (``None`` if unavailable)."""
-        if self._rec_lf is None:
-            self._rec_lf = self._open_recording("lf")
         return self._rec_lf
 
     @property
