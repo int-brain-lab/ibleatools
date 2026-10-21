@@ -36,6 +36,10 @@ Encoding volumes are versioned independently by **vintage label** (``label``) an
      - 50
      - (228, 264, 160)
      - ``brainwide_ephys_atlas_50um.npz``
+   * - ``2026_W42``
+     - 50
+     - (228, 264, 160)
+     - ``brainwide_ephys_atlas_50um.npz``
 
 Downloading
 -----------
@@ -64,7 +68,7 @@ Loading
 -------
 
 The file contains the following arrays (N = number of features for the vintage, e.g. 41 for
-``2026_W12``/``2026_W26`` and 43 for ``2026_W39`` — the feature set changed between vintages):
+``2026_W12``/``2026_W26`` and 43 for ``2026_W39``/``2026_W42`` — the feature set changed between vintages):
 
 .. list-table::
    :header-rows: 1
