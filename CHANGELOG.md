@@ -31,7 +31,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `ephysatlas.features.ModelCsdFeatures` documents the CSD columns in their actual units instead of Volts. With the default `scale=True`, `current_source_density` scales the finite difference by the tissue conductivity and the intercontact distance, so the `*_csd` (second difference) columns are in A/m**3 and the `*_bpr` (first difference, formerly `*_csd_diff1`) columns in A/m**2: `raw_unit` / `transformed_unit` become `A/m**3` / `dB rel. A/m**3` and `dB rel. (A/m**3)**2/Hz` for the PSDs, and likewise with `A/m**2` for bpr. Only the metadata and descriptions change; computed values are unchanged
 
 ### Removed
-- `ephysatlas.spatial_encoder.model_registry`, `unit_level_encoder.release` and `unit_level_encoder.unit_level_vis`, and the example scripts `examples/figures/`, `examples/run_unit_level_model.py`, `examples/generate_dense_ephys_atlas_50um.py` and `examples/inference_spatial_encoder.py`: training, publishing and figure code for the interpolation models moved to `paper-ephys-atlas` (`scripts/run_channel_model.py`, `scripts/run_unit_model.py`, `scripts/figures/`), which loads the published models from the Hugging Face Hub
+- The example script `examples/inference_spatial_encoder.py`: the supported path is `load_pretrained(...).predict(df)`; training, publishing and figure code for the interpolation models lives in `paper-ephys-atlas`, which loads the published models from the Hugging Face Hub
 
 ## [0.9.0] - 2026-09-20
 
