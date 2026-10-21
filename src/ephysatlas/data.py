@@ -401,8 +401,8 @@ def download_tables(
     return local_path
 
 
-def _list_encoding_volume_resolutions(s3, bucket_name, project, label, stem="atlas"):
-    """List the voxel resolutions (µm) available on S3 for an encoding volume vintage.
+def _list_volume_resolutions(s3, bucket_name, project, label, stem="atlas"):
+    """List the voxel resolutions (µm) of the ``brainwide_ephys_{stem}`` files of a vintage on S3.
 
     ``stem`` selects the file family: "atlas" (encoding volume) or "edges" (ephys edges).
     """
@@ -423,27 +423,29 @@ def _download_volume_file(stem, local_path, label, project, res_um, one, overwri
         project = "ea_active"
     s3, bucket_name = aws.get_s3_from_alyx(alyx=one.alyx)
     if res_um is None:
-        resolutions = _list_encoding_volume_resolutions(
-            s3, bucket_name, project, label, stem
-        )
+        resolutions = _list_volume_resolutions(s3, bucket_name, project, label, stem)
         if not resolutions:
             raise FileNotFoundError(
                 f"No {stem} volume found on S3 for project={project!r}, label={label!r}"
             )
         res_um = resolutions[0]
         _logger.info(
-            f"res_um not specified, using finest available resolution: {res_um} um"
+            f"res_um not specified, using finest available {stem} resolution: {res_um} um"
         )
     filename = f"brainwide_ephys_{stem}_{res_um}um.npz"
     local_file = Path(local_path).joinpath(filename)
     s3_key = f"aggregates/atlas/encoding_volumes/{project}/{label}/{filename}"
-    return aws.s3_download_file(
+    local_file = aws.s3_download_file(
         s3_key, local_file, s3=s3, bucket_name=bucket_name, overwrite=overwrite
     )
+    # s3_download_file function returns None rather than raising for a missing key
+    if local_file is None:
+        raise FileNotFoundError(f"{s3_key} not found on S3")
+    return local_file
 
 
 def download_encoding_volume(
-    local_path, label="2026_W12", project=None, res_um=None, one=None, overwrite=False
+    local_path, label="2026_W42", project=None, res_um=None, one=None, overwrite=False
 ):
     """Download a pre-computed ephys atlas encoding volume from AWS S3.
 
@@ -456,7 +458,7 @@ def download_encoding_volume(
     local_path : Path
         Local directory where the file will be saved.
     label : str, optional
-        Vintage label, e.g. "2026_W12". Defaults to "2026_W12".
+        Vintage label, e.g. "2026_W42". Defaults to "2026_W42".
     project : str, optional
         Project name. Defaults to "ea_active".
     res_um : int, optional

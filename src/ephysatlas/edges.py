@@ -10,6 +10,9 @@ gradient magnitude of each PC is aggregated across PCs by the median (robust to 
 that changes alone), the mean, or the root of the sum of squares (``"rss"``, the
 Mahalanobis norm of the gradient).
 
+The edges of the published vintages (2026_W39 onwards) are precomputed on S3: download
+them with :func:`ephysatlas.data.download_edges_volume` instead of recomputing them.
+
 Functions
 ---------
 load_whitened_pcs

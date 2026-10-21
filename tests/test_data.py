@@ -429,3 +429,13 @@ class TestDownloadVolumes(unittest.TestCase):
                 ephysatlas.data.download_edges_volume,
                 ["brainwide_ephys_atlas_50um.npz"],
             )
+
+    def test_explicit_resolution_missing_on_s3_raises(self):
+        # with res_um given there is no listing: the 404 surfaces as None from s3_download_file
+        with patch("ephysatlas.data.aws") as aws:
+            aws.get_s3_from_alyx.return_value = (self._s3([]), "bucket")
+            aws.s3_download_file.return_value = None
+            with self.assertRaises(FileNotFoundError):
+                ephysatlas.data.download_edges_volume(
+                    Path("local"), label="L", res_um=25, one=MagicMock()
+                )

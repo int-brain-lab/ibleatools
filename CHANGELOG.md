@@ -4,9 +4,15 @@ This file documents the changes to the features for supported feature versions.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
-### Added
 
-- `ephysatlas.data.download_edges_volume` downloads the ephys edges volume (`brainwide_ephys_edges_{res_um}um.npz`) of an encoding volume vintage, with the same `label`, `project`, `res_um` and `overwrite` arguments as `download_encoding_volume`
+### Added
+- `ephysatlas.data.download_edges_volume` downloads the ephys edges volume (`brainwide_ephys_edges_{res_um}um.npz`, published from 2026_W39 onwards) of an encoding volume vintage, with the same `label`, `project`, `res_um` and `overwrite` arguments as `download_encoding_volume`. The file has the encoding volume's layout: `ephys_atlas_vol` of shape `(ML, AP, DV, 1)`, 0 outside the brain mask, with `feature_names = ["ephys_edges"]` (#149)
+
+### Changed
+- **Breaking.** `ephysatlas.data.download_encoding_volume` defaults to `label="2026_W42"` (previously `2026_W12`), the default of `download_edges_volume`, so the two default volumes share the same vintage and 50 um grid. Pass `label="2026_W12"` for the previous 25 um volume (#149)
+
+### Fixed
+- `ephysatlas.data.download_encoding_volume` and `download_edges_volume` raise `FileNotFoundError` when an explicit `res_um` is not on S3, instead of returning `None` (#149)
 
 ## [0.10.0] - 2026-10-21
 
