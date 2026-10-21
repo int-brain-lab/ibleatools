@@ -40,6 +40,10 @@ ENCODER_WEIGHTS_FILE = "spatial_encoder.pt"
 ENCODER_CONFIDENCE_FILE = "confidence_model.pt"
 ENCODER_BANK_FILE = "neighbor_bank.npz"
 ENCODER_CONTEXT_FILES = ("agea_vol_pca.npy", "merfish_vol_pca.npy")
+# Training-data statistics the encoder was fitted with: the per-feature clipping percentiles and
+# the feature/context standardisation. The means and stds also ride inside the weights as buffers;
+# the clipping thresholds do not, and are needed to preprocess new recordings the way training did.
+ENCODER_STATS_FILE = "preprocessing/channel_stats.npz"
 
 # Unit-level encoder: the canonical filenames a published release stages its checkpoints under.
 # Unlike the other families it ships no recorded data -- only weights. The per-unit atlas
