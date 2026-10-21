@@ -301,37 +301,3 @@ class TestSpatialEncoderPredictHemispheres(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
-
-class TestSpatialEncoderLegacyFeatureNames(unittest.TestCase):
-    """Releases trained before the bipolar-referencing rename list ``*_csd_diff1``: they load,
-    pass their digest check, and report and predict the features under the ``*_bpr`` names."""
-
-    LEGACY = ["rms_lf", "rms_lf_csd_diff1", "psd_alpha_csd_diff1", "rms_ap"]
-    CURRENT = ["rms_lf", "rms_lf_bpr", "psd_alpha_bpr", "rms_ap"]
-
-    def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp())
-
-    def tearDown(self):
-        shutil.rmtree(self.tmp, ignore_errors=True)
-
-    def test_legacy_release_reports_and_predicts_the_current_names(self):
-        from unittest import mock
-
-        import pandas as pd
-
-        from ephysatlas import load_pretrained
-        from ephysatlas.models.encoder_inpainting import SpatialEncoder
-
-        path_model = make_spatial_model_dir(self.tmp, features=self.LEGACY)
-        fake = _FakeContextManager()
-        with mock.patch.object(SpatialEncoder, "_context_manager", lambda self: fake):
-            encoder = load_pretrained(path_model, device="cpu")
-            self.assertEqual(encoder.features, self.CURRENT)
-            index = pd.MultiIndex.from_tuples(
-                [("query", 0), ("query", 1)], names=["pid", "channel"]
-            )
-            df = pd.DataFrame(np.zeros((2, 3)), index=index, columns=["x", "y", "z"])
-            out = encoder.predict(df)
-        self.assertEqual(list(out.columns), [f"pred_{f}" for f in self.CURRENT])

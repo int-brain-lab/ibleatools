@@ -130,10 +130,9 @@ class NeighborInpaintingModel(nn.Module):
     and a variable-size set of neighbor ephys from *other* probes.
 
     ``use_positions`` also feeds the query position and the neighbours' absolute and relative
-    positions to the encoders. Releases before the 2026_W39 republication (Hub commit af6e41e6) did
-    so, in metres, which left the positional encoders practically unused; without them, space
-    enters only through the context at the query and the choice of neighbours (within the
-    radius), and the query and neighbour positions passed to ``forward`` are ignored.
+    positions (metres, left hemisphere) to the encoders. Off by default: space then enters only
+    through the context at the query and the choice of neighbours within the radius, and the
+    positions passed to ``forward`` are ignored.
     """
 
     def __init__(

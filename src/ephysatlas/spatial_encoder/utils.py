@@ -31,16 +31,9 @@ DEFAULT_DATA_DIR = Path(
 )
 
 # Channel-level features predicted by the spatial encoder, from the denoised feature table
-# (``raw_ephys_features_denoised.pqt``, vintage 2026_W39 onwards, whose spike-waveform block is the
-# remapped ``ModelSpikeShapeFeatures`` set). The model consumes and predicts them positionally, so
-# this order is part of a published model's contract: it is recorded in the release manifest with a
-# digest, and changing it requires retraining.
-#
-# Ordered by group -- LF | AP | waveform. Inside the LF group: RMS, band powers from the lowest to
-# the highest frequency band (broadband ``lfp`` last), their bipolar-referenced counterparts (BPR,
-# the first spatial difference) in the same order, the aperiodic-corrected residual powers, then
-# the aperiodic fit parameters and the remaining LF descriptors. The AP group holds the AP-band
-# RMS and the spike-detection statistics.
+# (vintage 2026_W39 onwards), grouped LF | AP | waveform. A model consumes and predicts them
+# positionally, so this order is part of a release's contract: it is recorded in its manifest with
+# a digest.
 LF_FEATURES = [
     "rms_lf",
     "psd_delta",
@@ -112,13 +105,8 @@ class AtlasPCAConfig:
     n_cell_pcs: int = 50  # 338
     n_gene_pcs: int = 50  # 4345
     no_pca: bool = False
-    # MERFISH cell-type densities: the taxonomy level, and whether the raw volume is denoised with
-    # iblatlas.genomics.merfish.denoise_volume (NaNs filled, Gaussian-smoothed with sigma voxels,
-    # renormalised within the brain) keeping all but the last n_drop_non_neuronal types.
+    # MERFISH cell-type taxonomy level, loaded denoised (iblatlas.genomics.merfish).
     merfish_level: str = "subclass"
-    merfish_denoise: bool = True
-    merfish_n_drop_non_neuronal: int = 0
-    merfish_sigma: float = 0.5
 
 
 class ContextAtlasManager:
@@ -161,16 +149,10 @@ class ContextAtlasManager:
             )  # [P_gene, Xc, Zc, Yc]
 
             # -------- MERFISH → PCA --------
-            cell_type_vol, _, atlas_agea = merfish.load_volume(
-                level=cfg.merfish_level, label=""
+            # Denoised volume, with all cell types (non-neuronal included)
+            cell_type_vol, _, _ = merfish.load_volume(
+                level=cfg.merfish_level, label="processed", include_non_neuronal=True
             )
-            if cfg.merfish_denoise:
-                cell_type_vol = merfish.denoise_volume(
-                    cell_type_vol,
-                    atlas_agea.label != 0,
-                    n_drop_non_neuronal=cfg.merfish_n_drop_non_neuronal,
-                    sigma=cfg.merfish_sigma,
-                )
             cell_type_vol = np.asarray(cell_type_vol, dtype=np.float32)
             # Voxels without any cell-type density (outside the brain once denoised).
             zero_ind = np.where(cell_type_vol.sum(axis=0) == 0)
