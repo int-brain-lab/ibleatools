@@ -4,6 +4,9 @@ This file documents the changes to the features for supported feature versions.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
+### Added
+
+- `ephysatlas.data.download_edges_volume` downloads the ephys edges volume (`brainwide_ephys_edges_{res_um}um.npz`) of an encoding volume vintage, with the same `label`, `project`, `res_um` and `overwrite` arguments as `download_encoding_volume`
 
 ## [0.10.0] - 2026-10-21
 

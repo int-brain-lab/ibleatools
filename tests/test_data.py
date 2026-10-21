@@ -390,3 +390,42 @@ class TestReadFeaturesDenoisedRemap(unittest.TestCase):
     def test_pre_remap_denoised_table_still_validates(self):
         df = self._read()
         self.assertIn("peak_time_secs", df.columns)
+
+
+class TestDownloadVolumes(unittest.TestCase):
+    """The encoding and edges volumes resolve their S3 key, finest resolution by default."""
+
+    @staticmethod
+    def _s3(keys):
+        s3 = MagicMock()
+        s3.Bucket.return_value.objects.filter.return_value = [
+            MagicMock(key=f"aggregates/atlas/encoding_volumes/ea_active/L/{k}")
+            for k in keys
+        ]
+        return s3
+
+    def _download(self, func, keys, **kwargs):
+        with patch("ephysatlas.data.aws") as aws:
+            aws.get_s3_from_alyx.return_value = (self._s3(keys), "bucket")
+            func(Path("local"), label="L", one=MagicMock(), **kwargs)
+            return aws.s3_download_file.call_args
+
+    def test_finest_resolution_of_each_family(self):
+        keys = [
+            "brainwide_ephys_atlas_50um.npz",
+            "brainwide_ephys_edges_50um.npz",
+            "brainwide_ephys_edges_25um.npz",
+        ]
+        call = self._download(ephysatlas.data.download_encoding_volume, keys)
+        self.assertTrue(call.args[0].endswith("L/brainwide_ephys_atlas_50um.npz"))
+        call = self._download(ephysatlas.data.download_edges_volume, keys)
+        self.assertTrue(call.args[0].endswith("L/brainwide_ephys_edges_25um.npz"))
+
+    def test_explicit_resolution_and_missing_volume(self):
+        call = self._download(ephysatlas.data.download_edges_volume, [], res_um=50)
+        self.assertEqual(call.args[1], Path("local/brainwide_ephys_edges_50um.npz"))
+        with self.assertRaises(FileNotFoundError):
+            self._download(
+                ephysatlas.data.download_edges_volume,
+                ["brainwide_ephys_atlas_50um.npz"],
+            )

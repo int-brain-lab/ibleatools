@@ -401,19 +401,45 @@ def download_tables(
     return local_path
 
 
-_ENCODING_VOLUME_FILENAME_RE = re.compile(r"brainwide_ephys_atlas_(\d+)um\.npz$")
+def _list_encoding_volume_resolutions(s3, bucket_name, project, label, stem="atlas"):
+    """List the voxel resolutions (µm) available on S3 for an encoding volume vintage.
 
-
-def _list_encoding_volume_resolutions(s3, bucket_name, project, label):
-    """List the voxel resolutions (µm) available on S3 for an encoding volume vintage."""
+    ``stem`` selects the file family: "atlas" (encoding volume) or "edges" (ephys edges).
+    """
+    pattern = re.compile(rf"brainwide_ephys_{stem}_(\d+)um\.npz$")
     prefix = f"aggregates/atlas/encoding_volumes/{project}/{label}/"
     objects = s3.Bucket(name=bucket_name).objects.filter(Prefix=prefix)
     resolutions = (
         int(match.group(1))
-        for match in (_ENCODING_VOLUME_FILENAME_RE.search(obj.key) for obj in objects)
+        for match in (pattern.search(obj.key) for obj in objects)
         if match is not None
     )
     return sorted(resolutions)
+
+
+def _download_volume_file(stem, local_path, label, project, res_um, one, overwrite):
+    """Download ``brainwide_ephys_{stem}_{res_um}um.npz`` of a vintage, finest resolution by default."""
+    if project is None:
+        project = "ea_active"
+    s3, bucket_name = aws.get_s3_from_alyx(alyx=one.alyx)
+    if res_um is None:
+        resolutions = _list_encoding_volume_resolutions(
+            s3, bucket_name, project, label, stem
+        )
+        if not resolutions:
+            raise FileNotFoundError(
+                f"No {stem} volume found on S3 for project={project!r}, label={label!r}"
+            )
+        res_um = resolutions[0]
+        _logger.info(
+            f"res_um not specified, using finest available resolution: {res_um} um"
+        )
+    filename = f"brainwide_ephys_{stem}_{res_um}um.npz"
+    local_file = Path(local_path).joinpath(filename)
+    s3_key = f"aggregates/atlas/encoding_volumes/{project}/{label}/{filename}"
+    return aws.s3_download_file(
+        s3_key, local_file, s3=s3, bucket_name=bucket_name, overwrite=overwrite
+    )
 
 
 def download_encoding_volume(
@@ -447,24 +473,43 @@ def download_encoding_volume(
     Path
         Local path to the downloaded .npz file.
     """
-    if project is None:
-        project = "ea_active"
-    s3, bucket_name = aws.get_s3_from_alyx(alyx=one.alyx)
-    if res_um is None:
-        resolutions = _list_encoding_volume_resolutions(s3, bucket_name, project, label)
-        if not resolutions:
-            raise FileNotFoundError(
-                f"No encoding volume found on S3 for project={project!r}, label={label!r}"
-            )
-        res_um = resolutions[0]
-        _logger.info(
-            f"res_um not specified, using finest available resolution: {res_um} um"
-        )
-    filename = f"brainwide_ephys_atlas_{res_um}um.npz"
-    local_file = Path(local_path).joinpath(filename)
-    s3_key = f"aggregates/atlas/encoding_volumes/{project}/{label}/{filename}"
-    return aws.s3_download_file(
-        s3_key, local_file, s3=s3, bucket_name=bucket_name, overwrite=overwrite
+    return _download_volume_file(
+        "atlas", local_path, label, project, res_um, one, overwrite
+    )
+
+
+def download_edges_volume(
+    local_path, label="2026_W42", project=None, res_um=None, one=None, overwrite=False
+):
+    """Download the ephys edges volume of an encoding volume vintage from AWS S3.
+
+    The edges volume is the local gradient of the encoding volume (see
+    :mod:`ephysatlas.edges`), stored as a .npz file with the encoding volume's
+    conventions: ``ephys_atlas_vol`` of shape (nx, ny, nz, 1), 0 outside the brain mask.
+
+    Parameters
+    ----------
+    local_path : Path
+        Local directory where the file will be saved.
+    label : str, optional
+        Vintage label, e.g. "2026_W42". Defaults to "2026_W42".
+    project : str, optional
+        Project name. Defaults to "ea_active".
+    res_um : int, optional
+        CCF voxel resolution in µm. If not specified, picks the finest resolution
+        available on S3 for this ``project``/``label``.
+    one : ONE
+        ONE client instance for AWS authentication.
+    overwrite : bool, optional
+        Force re-download even if the file already exists. Defaults to False.
+
+    Returns
+    -------
+    Path
+        Local path to the downloaded .npz file.
+    """
+    return _download_volume_file(
+        "edges", local_path, label, project, res_um, one, overwrite
     )
 
 

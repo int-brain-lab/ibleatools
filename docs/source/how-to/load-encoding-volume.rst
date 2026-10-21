@@ -114,6 +114,20 @@ Values are stored in raw (unnormalised) feature units, with ``0.0`` outside the 
 mask. ``mean_per_feature`` / ``std_per_feature`` are provided for optional z-scoring —
 they are not pre-applied to ``ephys_atlas_vol``.
 
+Edges
+-----
+
+``download_edges_volume`` fetches the ephys edges of a vintage, the local gradient of the
+encoding volume (:mod:`ephysatlas.edges`), from ``brainwide_ephys_edges_{res_um}um.npz`` in
+the same S3 folder. It takes the same arguments as ``download_encoding_volume``.
+
+.. code-block:: python
+
+    from ephysatlas.data import download_edges_volume
+
+    file_path = download_edges_volume(local_path, label="2026_W42", one=one)
+    edges = np.load(file_path)["ephys_atlas_vol"][..., 0]   # (nx, ny, nz) float16, 0 outside the mask
+
 See also
 --------
 
