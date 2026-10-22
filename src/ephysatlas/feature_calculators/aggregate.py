@@ -13,6 +13,8 @@ check_snippet_overlap
     Raise or warn when snippet windows overlap.
 compute_aggregated_features
     Compute snippets with a calculator and return the aggregated, denoised features.
+aggregate_snippets
+    Aggregate and denoise snippets already computed by ``compute_snippet``.
 """
 
 from __future__ import annotations
@@ -32,13 +34,22 @@ from ephysatlas.aggregation import (
     denoise_raw_features_data,
     get_aggregated_raw_features,
 )
+from ephysatlas.features import __features_version__
 
-from .types import FeatureComputationOptions, SnippetWindow
+from .types import FeatureComputationOptions, FeatureComputationResult, SnippetWindow
 
 if TYPE_CHECKING:
     from .base import BaseFeatureCalculator
 
 LOGGER = logging.getLogger(__name__)
+
+# Code versions copied from the snippet provenance to the aggregated features (the git keys exist
+# for editable installs only)
+VERSION_KEYS = (
+    "ibleatools_distribution_version",
+    "ibleatools_git_commit_hash",
+    "ibleatools_git_is_dirty",
+)
 
 
 def get_snippet_start_times(
@@ -65,7 +76,7 @@ def get_snippet_start_times(
         on_overlap (str): ``"raise"`` or ``"warn"`` when snippets overlap.
 
     Returns:
-        np.ndarray: Sorted start times in whole seconds (integers), shape ``(n_snippets,)``.
+        np.ndarray: Sorted start times in whole seconds (floats), shape ``(n_snippets,)``.
 
     Raises:
         ValueError: If the recording is too short for the margins and the snippet duration, or if
@@ -84,7 +95,7 @@ def get_snippet_start_times(
         edges = np.linspace(t_first, t_last, n_snippets + 1)
         t_starts = np.random.default_rng(seed).uniform(edges[:-1], edges[1:])
     # Whole seconds, rounded down so that no snippet moves past the usable range
-    t_starts = np.floor(t_starts).astype(int)
+    t_starts = np.floor(t_starts)
     check_snippet_overlap(
         [SnippetWindow(t, snippet_duration, snippet_duration) for t in t_starts],
         on_overlap,
@@ -127,9 +138,8 @@ def compute_aggregated_features(
 ) -> pd.DataFrame:
     """Compute features on several snippets, then aggregate and denoise them.
 
-    Each snippet is computed with ``calculator.compute_snippet``; its manifest record is one row
-    of the snippet table read by ``get_aggregated_raw_features`` (per-channel median), followed by
-    ``denoise_raw_features_data`` and ``apply_waveform_remap``.
+    Each snippet is computed with ``calculator.compute_snippet``, then the snippets are aggregated
+    by ``aggregate_snippets``.
 
     Args:
         calculator (BaseFeatureCalculator): Calculator of the recording.
@@ -142,8 +152,8 @@ def compute_aggregated_features(
 
     Returns:
         pd.DataFrame: Aggregated and denoised features indexed by ``(pid, channel)``, with
-        ``pid = calculator.name``. ``df.attrs["snippet_windows"]`` lists the windows used, as
-        ``{"t_start", "duration_ap", "duration_lf"}`` dicts; pandas saves it in parquet files.
+        ``pid = calculator.name``, and the snippet windows and code versions in ``df.attrs``
+        (see ``aggregate_snippets``).
     """
     options = options or FeatureComputationOptions()
     if options.output_dir is None:
@@ -157,11 +167,35 @@ def compute_aggregated_features(
     results = Parallel(n_jobs=n_jobs)(
         delayed(calculator.compute_snippet)(window, options) for window in windows
     )
+    return aggregate_snippets(results)
+
+
+def aggregate_snippets(results: Sequence[FeatureComputationResult]) -> pd.DataFrame:
+    """Aggregate and denoise snippets already computed by ``compute_snippet``.
+
+    Each result's manifest record is one row of the snippet table read by
+    ``get_aggregated_raw_features`` (per-channel median), followed by ``denoise_raw_features_data``
+    and ``apply_waveform_remap``, as in ``ephysatlas.aggregation.produce_output_dataframes``.
+
+    Args:
+        results (Sequence[FeatureComputationResult]): Results of ``compute_snippet`` for one
+            recording, computed with an ``output_dir`` (the snippet files are read back).
+
+    Returns:
+        pd.DataFrame: Aggregated and denoised features indexed by ``(pid, channel)``. Its
+        ``attrs`` hold ``snippet_windows`` (``{"pid", "t_start", "duration_ap", "duration_lf"}``
+        dicts), ``features_version`` and the ibleatools version and git commit of the code that
+        computed the snippets; pandas saves them in parquet files.
+    """
     snippet_df = pd.DataFrame([result.manifest_record for result in results])
     df = get_aggregated_raw_features(snippet_df)
     df = denoise_raw_features_data(df)
     df = apply_waveform_remap(df)
-    # Keep the snippet windows with the features
-    window_columns = ["t_start", "duration_ap", "duration_lf"]
+    # Keep the snippet windows and the code versions with the features
+    window_columns = ["pid", "t_start", "duration_ap", "duration_lf"]
     df.attrs["snippet_windows"] = snippet_df[window_columns].to_dict("records")
+    # Feature-extractor version: compare it with the vintage the alignment model was trained on
+    df.attrs["features_version"] = __features_version__
+    provenance = results[0].provenance
+    df.attrs.update({key: provenance[key] for key in VERSION_KEYS if key in provenance})
     return df

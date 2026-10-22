@@ -355,7 +355,7 @@ class BaseFeatureCalculator(abc.ABC):
 
         Returns:
             pd.DataFrame: Aggregated and denoised features indexed by ``(pid, channel)``, with
-            the windows used in ``df.attrs["snippet_windows"]``.
+            the snippet windows and code versions in ``df.attrs`` (see ``aggregate_snippets``).
         """
         recording_duration = min(d for d in self.available_duration() if d is not None)
         t_starts = get_snippet_start_times(

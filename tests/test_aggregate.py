@@ -15,18 +15,24 @@ from ephysatlas.feature_calculators import (
     FeatureParams,
     NumpyArrayFeatureCalculator,
     SnippetWindow,
+    aggregate_snippets,
     check_snippet_overlap,
     compute_aggregated_features,
     get_snippet_start_times,
 )
+from ephysatlas.features import __features_version__
 
 N_CH = 16
 FS_LF = 250.0
 DURATION = 660.0  # long enough for the default 5 min margins
 
 
-def _calculator() -> NumpyArrayFeatureCalculator:
-    """Small LF-only recording: 2 columns of 8 depths (the denoiser triangulates x/y), 660 s of noise."""
+def _calculator(labels: bool = True) -> NumpyArrayFeatureCalculator:
+    """Small LF-only recording: 2 columns of 8 depths (the denoiser triangulates x/y), 660 s of noise.
+
+    With ``labels=False`` the channel metadata has no bad-channel labels (and LF-only data
+    has no AP to detect them from).
+    """
     geometry = {
         "x": (np.arange(N_CH) % 2) * 32.0,
         "y": (np.arange(N_CH) // 2) * 20.0,
@@ -37,9 +43,10 @@ def _calculator() -> NumpyArrayFeatureCalculator:
             "axial_um": geometry["y"],
             "lateral_um": geometry["x"],
             "shank": np.zeros(N_CH),
-            "labels": np.zeros(N_CH),
         }
     )
+    if labels:
+        channels["labels"] = np.zeros(N_CH)
     lf = np.random.default_rng(0).standard_normal((N_CH, int(DURATION * FS_LF)))
     return NumpyArrayFeatureCalculator(
         lf=lf.astype(np.float32),
@@ -69,7 +76,7 @@ class TestGetSnippetStartTimes(unittest.TestCase):
         for method in ("stratified", "linspace"):
             t = get_snippet_start_times(100.0, 5, 5.0, margin=10.0, method=method)
             self.assertEqual(len(t), 5)
-            self.assertTrue(np.issubdtype(t.dtype, np.integer))
+            np.testing.assert_array_equal(t, np.floor(t))  # whole seconds
             np.testing.assert_array_equal(t, np.sort(t))
             self.assertTrue(np.all(t >= 10.0))
             self.assertTrue(np.all(t <= 100.0 - 10.0 - 5.0))
@@ -118,10 +125,16 @@ class TestComputeAggregatedFeatures(unittest.TestCase):
         self.assertEqual(len(df), N_CH)
         self.assertEqual(df.index.get_level_values("pid").unique().tolist(), ["pid00"])
         self.assertIn("rms_lf", df.columns)
-        # the windows used are kept with the features
+        # the windows used and the code versions are kept with the features
         self.assertEqual(
-            [SnippetWindow(**w) for w in df.attrs["snippet_windows"]], windows
+            df.attrs["snippet_windows"],
+            [
+                {"pid": "pid00", "t_start": t, "duration_ap": 2.0, "duration_lf": 2.0}
+                for t in (1.0, 7.0, 13.0)
+            ],
         )
+        self.assertEqual(df.attrs["features_version"], __features_version__)
+        self.assertIn("ibleatools_distribution_version", df.attrs)
 
     def test_output_dir_keeps_snippet_folders(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -129,12 +142,34 @@ class TestComputeAggregatedFeatures(unittest.TestCase):
                 _calculator(), _windows([1, 7, 13]), _options(Path(tmp))
             )
             self.assertEqual(len(list((Path(tmp) / "pid00").glob("probe_*"))), 3)
-            # the snippet windows are saved in the parquet file with the features
+            # the snippet windows and versions are saved in the parquet file with the features
             df.to_parquet(Path(tmp) / "features.pqt")
             saved = pd.read_parquet(Path(tmp) / "features.pqt")
-            self.assertEqual(
-                saved.attrs["snippet_windows"], df.attrs["snippet_windows"]
+            self.assertEqual(saved.attrs, df.attrs)
+
+    def test_one_snippet(self):
+        df = _calculator().compute_denoised_features(
+            n_snippets=1, duration_ap=2.0, duration_lf=2.0, options=_options()
+        )
+        self.assertEqual(len(df), N_CH)
+        self.assertEqual(len(df.attrs["snippet_windows"]), 1)
+
+    def test_missing_channel_labels_warn_and_are_good(self):
+        with self.assertLogs("ephysatlas.aggregation", "WARNING"):
+            df = compute_aggregated_features(
+                _calculator(labels=False), _windows([1, 7, 13]), _options()
             )
+        self.assertEqual(len(df), N_CH)
+        self.assertTrue((df["channel_labels"] == 0).all())
+
+    def test_aggregate_snippets_matches_compute(self):
+        calc, windows = _calculator(), _windows([1, 7, 13])
+        with tempfile.TemporaryDirectory() as tmp:
+            results = [calc.compute_snippet(w, _options(Path(tmp))) for w in windows]
+            df = aggregate_snippets(results)
+        expected = compute_aggregated_features(calc, windows, _options())
+        pd.testing.assert_frame_equal(df, expected, check_like=True)
+        self.assertEqual(df.attrs["snippet_windows"], expected.attrs["snippet_windows"])
 
     def test_overlapping_windows_raise(self):
         with self.assertRaises(ValueError):

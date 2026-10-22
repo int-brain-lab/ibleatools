@@ -50,6 +50,7 @@ Features aggregated over several snippets (per-channel median, denoised):
 """
 
 from .aggregate import (
+    aggregate_snippets,
     check_snippet_overlap,
     compute_aggregated_features,
     get_snippet_start_times,
@@ -97,6 +98,7 @@ __all__ = [
     "SpikeInterfaceFeatureCalculator",
     "SpikeInterfaceZarrFeatureCalculator",
     "WaveformParams",
+    "aggregate_snippets",
     "check_snippet_overlap",
     "compute_aggregated_features",
     "get_snippet_start_times",
