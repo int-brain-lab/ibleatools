@@ -10,6 +10,8 @@ produce identical results for these shared methods.
 
 from __future__ import annotations
 
+import pickle
+import threading
 import unittest
 from unittest import mock
 
@@ -80,6 +82,17 @@ class _ConcreteCalc(SpikeGlxLikeFeatureCalculator):
     def load_channel_metadata(self):
         geometry = self.load_geometry()
         return pd.DataFrame({"channel": np.arange(len(geometry["x"]))})
+
+
+class _LockedReaderCalc(_ConcreteCalc):
+    """Opens readers that cannot be pickled, like a ``spikeglx.Reader`` on an open .cbin."""
+
+    def _open_reader(self, band):
+        reader = (
+            _FakeReader(AP_DATA, FS_AP) if band == "ap" else _FakeReader(LF_DATA, FS_LF)
+        )
+        reader.lock = threading.Lock()  # unpicklable, as the reader's open file handle
+        return reader
 
 
 def _window():
@@ -210,6 +223,16 @@ class TestSpikeGlxLikeParent(unittest.TestCase):
         self.assertEqual(set(geo_ibl), set(geo_sgx))
         for key in geo_ibl:
             np.testing.assert_array_equal(geo_ibl[key], geo_sgx[key])
+
+    def test_pickle_drops_open_readers(self):
+        """With open readers the calculator still pickles (joblib workers); the copy reopens them"""
+        calc = _LockedReaderCalc()
+        durations = calc.available_duration()  # opens both readers
+        copy = pickle.loads(pickle.dumps(calc))
+        self.assertIsNone(copy._sr_ap)
+        self.assertIsNone(copy._sr_lf)
+        self.assertIsNotNone(calc._sr_ap)  # the original keeps its readers
+        self.assertEqual(copy.available_duration(), durations)  # reopened on first use
 
 
 if __name__ == "__main__":

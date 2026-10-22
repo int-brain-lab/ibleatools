@@ -9,6 +9,8 @@ development; that step needs real data on disk so it isn't repeated here.
 
 from __future__ import annotations
 
+import pickle
+import threading
 import unittest
 from unittest import mock
 
@@ -170,6 +172,18 @@ class TestLFPackFeatureCalculator(unittest.TestCase):
             second = calc.reader
             self.assertEqual(mocked.call_count, 1)
             self.assertIs(first, second)
+
+    def test_pickle_drops_open_reader(self):
+        """With an open reader the calculator still pickles (joblib workers); the copy reopens it"""
+        calc = self._calc()
+        # unpicklable, as the reader's open h5py file
+        calc.reader.lock = threading.Lock()
+        copy = pickle.loads(pickle.dumps(calc))
+        self.assertIsNone(copy._reader)
+        self.assertIsNotNone(calc._reader)  # the original keeps its reader
+        # reopened on first use
+        with mock.patch("lfpack.LFPackReader", return_value=_FakeLFPackReader()):
+            self.assertIsInstance(copy.reader, _FakeLFPackReader)
 
     def test_compute_snippet_produces_valid_feature_table(self):
         calc = self._calc(annotated=True)
