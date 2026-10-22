@@ -173,7 +173,9 @@ class NwbSource:
             ImportError: If the optional NWB/streaming dependencies are missing.
         """
         try:
-            from spikeinterface.extractors import NwbRecordingExtractor
+            # The public name of NwbRecordingExtractor: spikeinterface >= 0.105 no longer
+            # exports the class name from spikeinterface.extractors
+            from spikeinterface.extractors import read_nwb_recording
         except ImportError as exc:  # pragma: no cover - env-dependent
             raise ImportError(_NWB_IMPORT_HINT) from exc
 
@@ -204,7 +206,7 @@ class NwbSource:
             backend,
             stream_mode,
         )
-        return NwbRecordingExtractor(file_path=url, **kwargs)
+        return read_nwb_recording(file_path=url, **kwargs)
 
 
 class NwbFeatureCalculator(SpikeInterfaceFeatureCalculator):
