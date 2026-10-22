@@ -143,7 +143,6 @@ __features_version__ = (
 )
 
 
-# TODO - Scratch_dir path is not working as expected. Even if I pass the scratch_dir argument in the main compute_features function, here I am gettig log from Path("/scratch/dartsort/")
 def _setup_scratch_directory(scratch_dir=None):
     """Set up scratch directory with fallback logic.
 
