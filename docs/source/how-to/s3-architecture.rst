@@ -25,7 +25,8 @@ Folder Layout
     │
     ├── encoding_volumes/{project}/{label}/      ← 4-D CCF volume, one file per resolution
     │   ├── brainwide_ephys_atlas_25um.npz       (456 × 528 × 320 × N_features), ~500 MB
-    │   └── brainwide_ephys_atlas_50um.npz       (228 × 264 × 160 × N_features), ~240 MB
+    │   ├── brainwide_ephys_atlas_50um.npz       (228 × 264 × 160 × N_features), ~240 MB
+    │   └── brainwide_ephys_edges_50um.npz       ephys edges (228 × 264 × 160 × 1), ~6 MB, 2026_W39 onwards
     │
     ├── models/{model_name}/                     ← trained region classifier
     │   ├── model.ubj
@@ -87,6 +88,8 @@ Download Functions
      - ``features/{project}/{label}/agg_full/``
    * - :func:`ephysatlas.data.download_encoding_volume`
      - ``encoding_volumes/{project}/{label}/``
+   * - :func:`ephysatlas.data.download_edges_volume`
+     - ``encoding_volumes/{project}/{label}/`` (``brainwide_ephys_edges_*``)
    * - :func:`ephysatlas.data.download_probe_details`
      - ``projects/{project}/df_probe_details.pqt``
    * - :func:`ephysatlas.data.download_cells_features`
