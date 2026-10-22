@@ -342,8 +342,9 @@ class BaseFeatureCalculator(abc.ABC):
     ) -> pd.DataFrame:
         """Compute features on snippets spread over the recording, then aggregate and denoise them.
 
-        The start times come from ``get_snippet_start_times`` with its defaults; use it and
-        ``compute_aggregated_features`` directly to choose the margin, method or windows.
+        The start times come from ``get_snippet_start_times`` with its defaults (stratified, 5
+        minute margins); use it and ``compute_aggregated_features`` directly to choose the margin,
+        method or windows.
 
         Args:
             n_snippets (int): Number of snippets.
@@ -353,7 +354,8 @@ class BaseFeatureCalculator(abc.ABC):
             n_jobs (int): Snippets computed in parallel.
 
         Returns:
-            pd.DataFrame: Aggregated and denoised features indexed by ``(pid, channel)``.
+            pd.DataFrame: Aggregated and denoised features indexed by ``(pid, channel)``, with
+            the windows used in ``df.attrs["snippet_windows"]``.
         """
         recording_duration = min(d for d in self.available_duration() if d is not None)
         t_starts = get_snippet_start_times(

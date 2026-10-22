@@ -45,7 +45,7 @@ def get_snippet_start_times(
     recording_duration: float,
     n_snippets: int,
     snippet_duration: float,
-    margin: float = 0.0,
+    margin: float = 300.0,
     method: str = "stratified",
     seed: int = 0,
     on_overlap: str = "raise",
@@ -56,7 +56,8 @@ def get_snippet_start_times(
         recording_duration (float): Recording duration in seconds.
         n_snippets (int): Number of snippets.
         snippet_duration (float): Duration of each snippet in seconds.
-        margin (float): Seconds excluded at the start and at the end of the recording.
+        margin (float): Seconds excluded at the start and at the end of the recording,
+            5 minutes by default.
         method (str): ``"stratified"`` splits the usable range into ``n_snippets`` equal bins and
             draws one start uniformly in each (random but spread); ``"linspace"`` spaces the
             starts evenly.
@@ -64,8 +65,7 @@ def get_snippet_start_times(
         on_overlap (str): ``"raise"`` or ``"warn"`` when snippets overlap.
 
     Returns:
-        np.ndarray: Sorted start times in seconds, rounded to 0.1 s (the precision of the snippet
-        folder names), shape ``(n_snippets,)``.
+        np.ndarray: Sorted start times in whole seconds (integers), shape ``(n_snippets,)``.
 
     Raises:
         ValueError: If the recording is too short for the margins and the snippet duration, or if
@@ -83,7 +83,8 @@ def get_snippet_start_times(
     else:
         edges = np.linspace(t_first, t_last, n_snippets + 1)
         t_starts = np.random.default_rng(seed).uniform(edges[:-1], edges[1:])
-    t_starts = np.round(t_starts, 1)
+    # Whole seconds, rounded down so that no snippet moves past the usable range
+    t_starts = np.floor(t_starts).astype(int)
     check_snippet_overlap(
         [SnippetWindow(t, snippet_duration, snippet_duration) for t in t_starts],
         on_overlap,
@@ -141,7 +142,8 @@ def compute_aggregated_features(
 
     Returns:
         pd.DataFrame: Aggregated and denoised features indexed by ``(pid, channel)``, with
-        ``pid = calculator.name``.
+        ``pid = calculator.name``. ``df.attrs["snippet_windows"]`` lists the windows used, as
+        ``{"t_start", "duration_ap", "duration_lf"}`` dicts; pandas saves it in parquet files.
     """
     options = options or FeatureComputationOptions()
     if options.output_dir is None:
@@ -158,4 +160,8 @@ def compute_aggregated_features(
     snippet_df = pd.DataFrame([result.manifest_record for result in results])
     df = get_aggregated_raw_features(snippet_df)
     df = denoise_raw_features_data(df)
-    return apply_waveform_remap(df)
+    df = apply_waveform_remap(df)
+    # Keep the snippet windows with the features
+    window_columns = ["t_start", "duration_ap", "duration_lf"]
+    df.attrs["snippet_windows"] = snippet_df[window_columns].to_dict("records")
+    return df

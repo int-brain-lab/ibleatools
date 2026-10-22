@@ -22,11 +22,11 @@ from ephysatlas.feature_calculators import (
 
 N_CH = 16
 FS_LF = 250.0
-DURATION = 20.0
+DURATION = 660.0  # long enough for the default 5 min margins
 
 
 def _calculator() -> NumpyArrayFeatureCalculator:
-    """Small LF-only recording: 2 columns of 8 depths (the denoiser triangulates x/y), 20 s of noise."""
+    """Small LF-only recording: 2 columns of 8 depths (the denoiser triangulates x/y), 660 s of noise."""
     geometry = {
         "x": (np.arange(N_CH) % 2) * 32.0,
         "y": (np.arange(N_CH) // 2) * 20.0,
@@ -69,9 +69,15 @@ class TestGetSnippetStartTimes(unittest.TestCase):
         for method in ("stratified", "linspace"):
             t = get_snippet_start_times(100.0, 5, 5.0, margin=10.0, method=method)
             self.assertEqual(len(t), 5)
+            self.assertTrue(np.issubdtype(t.dtype, np.integer))
             np.testing.assert_array_equal(t, np.sort(t))
             self.assertTrue(np.all(t >= 10.0))
             self.assertTrue(np.all(t <= 100.0 - 10.0 - 5.0))
+
+    def test_default_margin_is_five_minutes(self):
+        t = get_snippet_start_times(1000.0, 5, 5.0)
+        self.assertTrue(np.all(t >= 300.0))
+        self.assertTrue(np.all(t <= 1000.0 - 300.0 - 5.0))
 
     def test_stratified_is_reproducible_with_seed(self):
         t1 = get_snippet_start_times(1000.0, 5, 5.0, seed=3)
@@ -85,9 +91,11 @@ class TestGetSnippetStartTimes(unittest.TestCase):
     def test_overlap_raises_or_warns(self):
         # 5 snippets of 5 s in a 10 s range must overlap
         with self.assertRaises(ValueError):
-            get_snippet_start_times(15.0, 5, 5.0, method="linspace")
+            get_snippet_start_times(15.0, 5, 5.0, margin=0.0, method="linspace")
         with self.assertLogs("ephysatlas.feature_calculators.aggregate", "WARNING"):
-            get_snippet_start_times(15.0, 5, 5.0, method="linspace", on_overlap="warn")
+            get_snippet_start_times(
+                15.0, 5, 5.0, margin=0.0, method="linspace", on_overlap="warn"
+            )
 
 
 class TestCheckSnippetOverlap(unittest.TestCase):
@@ -103,21 +111,30 @@ class TestCheckSnippetOverlap(unittest.TestCase):
 class TestComputeAggregatedFeatures(unittest.TestCase):
     def test_one_row_per_channel_and_no_files_left(self):
         before = set(Path(tempfile.gettempdir()).iterdir())
-        df = compute_aggregated_features(
-            _calculator(), _windows([1.0, 7.0, 13.0]), _options()
-        )
+        windows = _windows([1, 7, 13])
+        df = compute_aggregated_features(_calculator(), windows, _options())
         self.assertEqual(set(Path(tempfile.gettempdir()).iterdir()) - before, set())
         self.assertEqual(df.index.names, ["pid", "channel"])
         self.assertEqual(len(df), N_CH)
         self.assertEqual(df.index.get_level_values("pid").unique().tolist(), ["pid00"])
         self.assertIn("rms_lf", df.columns)
+        # the windows used are kept with the features
+        self.assertEqual(
+            [SnippetWindow(**w) for w in df.attrs["snippet_windows"]], windows
+        )
 
     def test_output_dir_keeps_snippet_folders(self):
         with tempfile.TemporaryDirectory() as tmp:
-            compute_aggregated_features(
-                _calculator(), _windows([1.0, 7.0, 13.0]), _options(Path(tmp))
+            df = compute_aggregated_features(
+                _calculator(), _windows([1, 7, 13]), _options(Path(tmp))
             )
             self.assertEqual(len(list((Path(tmp) / "pid00").glob("probe_*"))), 3)
+            # the snippet windows are saved in the parquet file with the features
+            df.to_parquet(Path(tmp) / "features.pqt")
+            saved = pd.read_parquet(Path(tmp) / "features.pqt")
+            self.assertEqual(
+                saved.attrs["snippet_windows"], df.attrs["snippet_windows"]
+            )
 
     def test_overlapping_windows_raise(self):
         with self.assertRaises(ValueError):

@@ -139,7 +139,7 @@ import ibldsp.voltage
 logger = logging.getLogger(__name__)
 
 __features_version__ = (
-    "2026.09.20"  # this is the version of this feature extractor code
+    "2026_W42"  # Tag to indentify the code version used for output features.
 )
 
 
