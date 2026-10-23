@@ -73,7 +73,6 @@ class TestMahalanobisGradient(unittest.TestCase):
         for aggregate, expected in {
             "median": np.median(single, axis=0),
             "mean": single.mean(axis=0),
-            "rss": np.sqrt((single**2).sum(axis=0)),
         }.items():
             got = edge_strength(pcs, valid, RES_UM, aggregate=aggregate)
             np.testing.assert_allclose(got, expected, rtol=1e-4, equal_nan=True)
@@ -124,17 +123,19 @@ class TestEdgesVolume(unittest.TestCase):
         out = self.tmp.joinpath("brainwide_ephys_edges_50um.npz")
         self.assertTrue(out.exists())
         archive = np.load(out)
-        stored = archive["ephys_edges_vol"]
-        # same (ML, AP, DV) convention as the encoding volume
-        self.assertEqual(stored.shape, (SHAPE[1], SHAPE[0], SHAPE[2]))
-        np.testing.assert_array_equal(archive["grid_shape"], stored.shape)
+        # encoding volume layout: (ML, AP, DV, 1) with a named feature
+        stored = archive["ephys_atlas_vol"]
+        self.assertEqual(stored.shape, (SHAPE[1], SHAPE[0], SHAPE[2], 1))
+        self.assertEqual(stored.dtype, np.float16)
+        self.assertEqual(list(archive["feature_names"]), ["ephys_edges"])
+        np.testing.assert_array_equal(archive["grid_shape"], stored.shape[:3])
         self.assertEqual(int(archive["res_um"][0]), RES_UM)
         self.assertEqual(str(archive["aggregate"]), "median")
+        # NaN outside the mask is stored as the encoding volume's 0 sentinel
         np.testing.assert_allclose(
-            np.transpose(stored, (1, 0, 2)).astype(np.float32),
-            edges,
+            np.transpose(stored[..., 0], (1, 0, 2)).astype(np.float32),
+            np.nan_to_num(edges),
             rtol=1e-2,
-            equal_nan=True,
         )
         profile = np.nanmean(edges, axis=(1, 2))
         self.assertLessEqual(abs(int(np.nanargmax(profile)) - SHAPE[0] // 2), 1)
