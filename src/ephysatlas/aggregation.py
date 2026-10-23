@@ -536,9 +536,17 @@ def denoise_raw_features_data(
 
     Note:
         - The function processes each PID separately in parallel to apply PID-specific denoising.
-        - Denoising requires channel labels, which must be present in the 'channel_labels' column.
+        - Denoising requires channel labels, from the 'channel_labels' column. Without that
+          column (e.g. LF-only data with no stored labels) a warning is logged and every
+          channel is labelled good (0).
         - If `output_dir` is provided, the result is saved as 'raw_ephys_features_denoised.pqt'.
     """
+    # No labels to denoise with: treat every channel as good, as the feature computation does
+    if "channel_labels" not in agg_raw_ephys_features.columns:
+        logger.warning(
+            "No channel_labels in the features: all channels are labelled good (0)"
+        )
+        agg_raw_ephys_features = agg_raw_ephys_features.assign(channel_labels=0)
 
     # Helper function to process a single PID group
     def denoise_pid(pid_df_tuple):

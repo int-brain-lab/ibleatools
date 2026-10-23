@@ -108,6 +108,10 @@ class LFPackFeatureCalculator(BaseFeatureCalculator):
             )
         return self._reader
 
+    def __getstate__(self) -> dict:
+        """Pickle without the open reader (e.g. for joblib workers); it reopens on first use."""
+        return {**self.__dict__, "_reader": None}
+
     def load_raw_snippet(self, window: SnippetWindow) -> RawSnippet:
         """Read one LF snippet from the archive.
 

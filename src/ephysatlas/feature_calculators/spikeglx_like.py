@@ -82,6 +82,10 @@ class SpikeGlxLikeFeatureCalculator(BaseFeatureCalculator):
             self._sr_lf = self._open_reader("lf")
         return self._sr_lf
 
+    def __getstate__(self) -> dict:
+        """Pickle without the open readers (e.g. for joblib workers); they reopen on first use."""
+        return {**self.__dict__, "_sr_ap": None, "_sr_lf": None}
+
     def _join_probe_metadata(self, channels: pd.DataFrame) -> pd.DataFrame:
         """Broadcast probe-level SpikeGLX metadata onto every channel.
 

@@ -139,11 +139,10 @@ import ibldsp.voltage
 logger = logging.getLogger(__name__)
 
 __features_version__ = (
-    "2026.09.20"  # this is the version of this feature extractor code
+    "2026_W42"  # Tag to indentify the code version used for output features.
 )
 
 
-# TODO - Scratch_dir path is not working as expected. Even if I pass the scratch_dir argument in the main compute_features function, here I am gettig log from Path("/scratch/dartsort/")
 def _setup_scratch_directory(scratch_dir=None):
     """Set up scratch directory with fallback logic.
 

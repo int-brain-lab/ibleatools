@@ -43,6 +43,9 @@ class IBLPIDFeatureCalculator(SpikeGlxLikeFeatureCalculator):
 
     Note:
         AP/LF readers and channels are loaded lazily and cached on the instance.
+        The ``one`` client cannot be pickled, so this calculator cannot be sent to
+        other processes: use ``n_jobs=1`` with ``compute_denoised_features`` and
+        ``compute_aggregated_features``.
     """
 
     def __init__(

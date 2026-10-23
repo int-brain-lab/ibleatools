@@ -73,7 +73,7 @@ class TestIblVsDandiParity(unittest.TestCase):
     def setUpClass(cls):
         from dandi.dandiapi import DandiAPIClient
         from one.api import ONE
-        from spikeinterface.extractors import NwbRecordingExtractor
+        from spikeinterface.extractors import read_nwb_recording
 
         from ephysatlas.feature_calculators import (
             IBLPIDFeatureCalculator,
@@ -103,7 +103,7 @@ class TestIblVsDandiParity(unittest.TestCase):
 
         # DANDI AP + LF ElectricalSeries for this probe
         base_src = NwbSource.dandi(DANDISET_ID, dandi_path, version=DANDISET_VERSION)
-        es_paths = NwbRecordingExtractor.fetch_available_electrical_series_paths(
+        es_paths = read_nwb_recording.fetch_available_electrical_series_paths(
             file_path=base_src._resolve_url(), stream_mode="remfile"
         )
         probe_nn = pname.replace("probe", "")

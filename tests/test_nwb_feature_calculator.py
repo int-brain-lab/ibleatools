@@ -30,7 +30,7 @@ def _fake_optional_modules(extractor=None, dandi_client=None):
     if extractor is not None:
         si = types.ModuleType("spikeinterface")
         si_ext = types.ModuleType("spikeinterface.extractors")
-        si_ext.NwbRecordingExtractor = extractor
+        si_ext.read_nwb_recording = extractor
         si.extractors = si_ext
         modules["spikeinterface"] = si
         modules["spikeinterface.extractors"] = si_ext
