@@ -44,8 +44,6 @@ EphysDenoiser
 
 Functions
 ---------
-_setup_scratch_directory
-    Set up scratch directory with fallback logic
 voltage_features_set
     Get list of feature column names by provenance
 lf
@@ -139,41 +137,8 @@ import ibldsp.voltage
 logger = logging.getLogger(__name__)
 
 __features_version__ = (
-    "2026_W42"  # Tag to indentify the code version used for output features.
+    "2026_W42"  # Tag to identify the code version used for output features.
 )
-
-
-def _setup_scratch_directory(scratch_dir=None):
-    """Set up scratch directory with fallback logic.
-
-    Args:
-        scratch_dir (Path or str, optional): Preferred scratch directory path.
-            If None, will try system defaults.
-
-    Returns:
-        Path: Path to the created scratch directory.
-
-    Note:
-        This function first tries to use the SDSC scratch directory (/scratch/dartsort/),
-        and falls back to the system temp directory if that fails.
-    """
-    if scratch_dir is not None:
-        scratch_path = Path(scratch_dir)
-    else:
-        # Try SDSC scratch directory first
-        scratch_path = Path("/scratch/dartsort/")
-
-    try:
-        scratch_path.mkdir(parents=True, exist_ok=True)
-        logger.info(f"Using scratch directory: {scratch_path}")
-        return scratch_path
-    except Exception as e:
-        # Fallback to system temp directory if preferred directory fails
-        logger.warning(f"Error creating scratch directory {scratch_path}: {e}")
-        fallback_path = Path(tempfile.gettempdir()) / "dartsort"
-        fallback_path.mkdir(parents=True, exist_ok=True)
-        logger.info(f"Using fallback scratch directory: {fallback_path}")
-        return fallback_path
 
 
 floats = Annotated[pa.Float, pa.Float32]
@@ -219,7 +184,8 @@ class DartParameters(pydantic.BaseModel):
         trough_offset (int): Offset in samples from spike peak to trough.
             Defaults to 42.
         scratch_dir (Path or str, optional): Scratch directory for temporary files.
-            If None, will use system defaults.
+            If None, uses ``tempfile.gettempdir()/dartsort``. Created if missing;
+            raises ``OSError`` if it cannot be created.
         n_jobs (int): DARTsort worker count used to build its
             ``ComputationConfig``. ``0`` runs in the main process; positive values
             select that many workers. Defaults to 0.
@@ -243,7 +209,9 @@ class DartParameters(pydantic.BaseModel):
     residnorm_decrease_threshold: pydantic.PositiveFloat = 3.162
     scratch_dir: Path | str | None = pydantic.Field(
         default=None,
-        description="Scratch directory for temporary files. If None, will use system defaults.",
+        description="Scratch directory for temporary files. If None, uses "
+        "tempfile.gettempdir()/dartsort. Created if missing; raises OSError if it "
+        "cannot be created.",
     )
     n_jobs: pydantic.NonNegativeInt = 0
 
@@ -1411,6 +1379,9 @@ def lf(data, fs, bands=None, decay_features=True):
         fs (float): Sampling frequency in Hz.
         bands (dict, optional): Dictionary with frequency bands to compute.
             Defaults to BANDS constant.
+        decay_features (bool, optional): Also fit the PSD decay (aperiodic) features, see
+            ``get_psd_decay_features``. Defaults to True. ``csd`` sets it to False for
+            the CSD / BPR traces.
 
     Returns:
         pd.DataFrame: DataFrame with columns ['channel', 'rms_lf', 'psd_delta',
@@ -1429,12 +1400,13 @@ def lf(data, fs, bands=None, decay_features=True):
     for b in BANDS:
         df_lf[f"psd_{b}"] = _get_power_in_band(fscale, period, bands[b])
 
-    # Caluclate the Aperiodic and Periodic features
-    logger.info("Calculating Aperiodic and Periodic features")
-    df_decay = get_psd_decay_features(data, fs, fscale, period, bands)
-    assert df_decay.shape[0] == df_lf.shape[0]
-    assert len(set(df_decay.columns) & set(df_lf.columns)) == 0
-    df_lf = pd.concat([df_lf, df_decay], axis=1)
+    if decay_features:
+        # Caluclate the Aperiodic and Periodic features
+        logger.info("Calculating Aperiodic and Periodic features")
+        df_decay = get_psd_decay_features(data, fs, fscale, period, bands)
+        assert df_decay.shape[0] == df_lf.shape[0]
+        assert len(set(df_decay.columns) & set(df_lf.columns)) == 0
+        df_lf = pd.concat([df_lf, df_decay], axis=1)
 
     return ModelLfFeatures.validate(df_lf)
 
@@ -1746,8 +1718,10 @@ def dart_subtraction_numpy(data, fs, geometry, params=None, scratch_dir=None, **
         [random.choice(string.ascii_lowercase + string.digits) for _ in range(8)]
     )
 
-    # Ensure scratch directory exists
-    scratch_dir = _setup_scratch_directory(params.scratch_dir)
+    # Scratch directory for DARTsort's temporary output: the system temp dir by
+    # default (honours $TMPDIR). Raises if an explicit scratch_dir can't be created.
+    scratch_dir = Path(params.scratch_dir or Path(tempfile.gettempdir()) / "dartsort")
+    scratch_dir.mkdir(parents=True, exist_ok=True)
 
     # New version of DARTsort outputs a single object.
     # And has a different keyword arguments for subtract func.

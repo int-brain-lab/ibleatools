@@ -392,6 +392,55 @@ class TestDartsortAdapter(unittest.TestCase):
                 self.assertEqual(captured["computation_cfg"].n_jobs_cpu, n_jobs)
                 self.assertEqual(captured["computation_cfg"].n_jobs_gpu, n_jobs)
 
+    def test_default_scratch_dir_is_system_temp_dir(self):
+        """Without a scratch_dir, DARTsort writes under tempfile.gettempdir()/dartsort."""
+        import dartsort
+
+        captured = {}
+
+        def fake_subtract(**kwargs):
+            captured.update(kwargs)
+            raise RuntimeError("__stop__")  # short-circuit before real subtraction
+
+        data = np.random.RandomState(0).randn(4, 300).astype("float32")
+        geometry = {
+            "x": np.array([0.0, 32.0, 0.0, 32.0]),
+            "y": np.array([0.0, 0.0, 20.0, 20.0]),
+        }
+        with tempfile.TemporaryDirectory(prefix="dart_default_scratch_") as tmp:
+            # Point the system temp dir at tmp, so the default lands inside it.
+            with patch.object(tempfile, "tempdir", tmp):
+                with patch.object(dartsort, "subtract", fake_subtract):
+                    # The former SDSC default (/scratch/dartsort/) logged a warning
+                    # whenever it could not be created, before falling back.
+                    with self.assertNoLogs("ephysatlas.features", level="WARNING"):
+                        with self.assertRaisesRegex(RuntimeError, "__stop__"):
+                            features.dart_subtraction_numpy(data, 30000.0, geometry)
+            self.assertEqual(captured["output_dir"].parent, Path(tmp) / "dartsort")
+
+    def test_unwritable_scratch_dir_raises(self):
+        """An explicit scratch_dir that can't be created raises, with no fallback."""
+        import dartsort
+
+        def fake_subtract(**kwargs):
+            raise AssertionError("dartsort.subtract must not be reached")
+
+        data = np.random.RandomState(0).randn(4, 300).astype("float32")
+        geometry = {
+            "x": np.array([0.0, 32.0, 0.0, 32.0]),
+            "y": np.array([0.0, 0.0, 20.0, 20.0]),
+        }
+        with tempfile.TemporaryDirectory(prefix="dart_bad_scratch_") as tmp:
+            # A directory cannot be created below a regular file.
+            blocker = Path(tmp) / "blocker"
+            blocker.touch()
+            with patch.object(tempfile, "tempdir", tmp):
+                with patch.object(dartsort, "subtract", fake_subtract):
+                    with self.assertRaises(OSError):
+                        features.dart_subtraction_numpy(
+                            data, 30000.0, geometry, scratch_dir=blocker / "sub"
+                        )
+
     def test_current_dartsort_result_and_waveform_file_are_adapted(self):
         """Adapt DARTsort 0.5's sorting return without running a real peel."""
         import dartsort
