@@ -7,12 +7,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 - `ephysatlas.data.download_edges_volume` downloads the ephys edges volume (`brainwide_ephys_edges_{res_um}um.npz`, published from 2026_W39 onwards) of an encoding volume vintage, with the same `label`, `project`, `res_um` and `overwrite` arguments as `download_encoding_volume`. The file has the encoding volume's layout: `ephys_atlas_vol` of shape `(ML, AP, DV, 1)`, 0 outside the brain mask, with `feature_names = ["ephys_edges"]` (#149)
+- Multi-snippet, denoised features for every feature calculator, in `ephysatlas.feature_calculators`. `compute_aggregated_features(calculator, windows, options=None, on_overlap="raise", n_jobs=1)` computes the features of several `SnippetWindow`s of one recording with any `BaseFeatureCalculator` (in parallel with `n_jobs`), then aggregates them as `aggregation.produce_output_dataframes` does: per-channel median, TV denoising and waveform remap. It returns one table indexed by `(pid, channel)`; without `options.output_dir` the snippet files are written to a temporary folder that is removed afterwards
+- `BaseFeatureCalculator.compute_denoised_features(n_snippets=5, duration_ap=5.0, duration_lf=5.0, options=None, n_jobs=1)`: the same in one call, with the snippets spread over the recording by `get_snippet_start_times`
+- `get_snippet_start_times(recording_duration, n_snippets, snippet_duration, margin=300.0, method="stratified", seed=0, on_overlap="raise")`: snippet start times in whole seconds, the first and last `margin` seconds (5 minutes by default) excluded. `"stratified"` draws one seeded start in each of `n_snippets` equal bins, `"linspace"` spaces them evenly. `check_snippet_overlap(windows, on_overlap)` raises (or warns, with `"warn"`) when snippet windows overlap; a window spans the longer of its AP and LF durations
+- `aggregate_snippets(results)`: the aggregation half of `compute_aggregated_features`, for snippets already computed by `compute_snippet`, e.g. to add snippets one at a time
+- The aggregated table records how it was made in its `attrs`, which pandas saves in parquet files: `snippet_windows` (`pid`, `t_start`, `duration_ap` and `duration_lf` of every snippet), `features_version`, and the `ibleatools_distribution_version`, `ibleatools_git_commit_hash` and `ibleatools_git_is_dirty` of the code that computed the snippets (the git keys for editable installs only)
+- `examples/feature_extraction_denoised.py`: denoised features of a SpikeGLX probe in one call, the `attrs`, and choosing the snippets
 
 ### Changed
 - **Breaking.** `ephysatlas.data.download_encoding_volume` defaults to `label="2026_W42"` (previously `2026_W12`), the default of `download_edges_volume`, so the two default volumes share the same vintage and 50 um grid. Pass `label="2026_W12"` for the previous 25 um volume (#149)
+- `features.__features_version__` is now a week label, `2026_W42` (was `2026.09.20`), in the same format as the model vintages: it matches the 2026_W42 models released in 0.10.0
 
 ### Fixed
 - `ephysatlas.data.download_encoding_volume` and `download_edges_volume` raise `FileNotFoundError` when an explicit `res_um` is not on S3, instead of returning `None` (#149)
+- `NwbFeatureCalculator` could not open any recording with spikeinterface >= 0.105.0, which no longer exports `NwbRecordingExtractor` from `spikeinterface.extractors`: `NwbSource.to_recording` raised a misleading `ImportError` asking to install the optional dependencies. It now uses `read_nwb_recording`, the public name of the same class (spikeinterface 0.104.9 to 0.105.3)
+- `SpikeGLXFileFeatureCalculator`, `IBLPIDFeatureCalculator` and `LFPackFeatureCalculator` could not be pickled once their readers were opened (an open `.cbin` file handle, or an `h5py` file), so they failed in joblib workers (`n_jobs > 1`). The open readers are now left out when pickling and reopen on first use. `IBLPIDFeatureCalculator` still cannot be pickled because of its ONE client, so it needs `n_jobs=1`
+- `aggregation.denoise_raw_features_data` raised `KeyError: 'channel_labels'` for features without bad-channel labels, e.g. an LF-only source with no stored labels (there is no AP band to detect them from). It now logs a warning and labels every channel good (0), as the feature computation already does
 
 ## [0.10.0] - 2026-10-21
 
