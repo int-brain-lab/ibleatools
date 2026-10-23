@@ -5,6 +5,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-10-23
+
 ### Added
 - `ephysatlas.data.download_edges_volume` downloads the ephys edges volume (`brainwide_ephys_edges_{res_um}um.npz`, published from 2026_W39 onwards) of an encoding volume vintage, with the same `label`, `project`, `res_um` and `overwrite` arguments as `download_encoding_volume`. The file has the encoding volume's layout: `ephys_atlas_vol` of shape `(ML, AP, DV, 1)`, 0 outside the brain mask, with `feature_names = ["ephys_edges"]` (#149)
 - Multi-snippet, denoised features for every feature calculator, in `ephysatlas.feature_calculators`. `compute_aggregated_features(calculator, windows, options=None, on_overlap="raise", n_jobs=1)` computes the features of several `SnippetWindow`s of one recording with any `BaseFeatureCalculator` (in parallel with `n_jobs`), then aggregates them as `aggregation.produce_output_dataframes` does: per-channel median, TV denoising and waveform remap. It returns one table indexed by `(pid, channel)`; without `options.output_dir` the snippet files are written to a temporary folder that is removed afterwards (#152)
