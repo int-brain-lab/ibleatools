@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `ephysatlas.data.download_edges_volume` downloads the ephys edges volume (`brainwide_ephys_edges_{res_um}um.npz`, published from 2026_W39 onwards) of an encoding volume vintage, with the same `label`, `project`, `res_um` and `overwrite` arguments as `download_encoding_volume`. The file has the encoding volume's layout: `ephys_atlas_vol` of shape `(ML, AP, DV, 1)`, 0 outside the brain mask, with `feature_names = ["ephys_edges"]` (#149)
 
 ### Changed
+- `ephysatlas.edges.save_edges_volume` is the single edges writer and writes the layout published on S3 (and read by `download_edges_volume`): a single-feature `ephys_atlas_vol` of shape `(ML, AP, DV, 1)`, `feature_names=['ephys_edges']`, 0 outside the mask, plus the computation parameters as extra scalars. It previously wrote `ephys_edges_vol`, which `compute_edges_volume` therefore no longer produces. `aggregate` is `"median"` (default) or `"mean"`
 - **Breaking.** `ephysatlas.data.download_encoding_volume` defaults to `label="2026_W42"` (previously `2026_W12`), the default of `download_edges_volume`, so the two default volumes share the same vintage and 50 um grid. Pass `label="2026_W12"` for the previous 25 um volume (#149)
 
 ### Fixed

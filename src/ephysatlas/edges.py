@@ -6,9 +6,8 @@ z-scored, rotated onto its principal components and divided by their standard
 deviations, so Euclidean distance between two voxels is their Mahalanobis distance
 in feature space. The edge strength of a voxel is built from the spatial gradient of
 these whitened PCs: how fast the multivariate ephys signature changes around it. The
-gradient magnitude of each PC is aggregated across PCs by the median (robust to a PC
-that changes alone), the mean, or the root of the sum of squares (``"rss"``, the
-Mahalanobis norm of the gradient).
+gradient magnitude of each PC is aggregated across PCs by the median (the default,
+robust to a PC that changes alone) or the mean.
 
 The edges of the published vintages (2026_W39 onwards) are precomputed on S3: download
 them with :func:`ephysatlas.data.download_edges_volume` instead of recomputing them.
@@ -20,7 +19,7 @@ load_whitened_pcs
 edge_strength
     Gradient magnitude of the whitened PCs, aggregated across PCs, per mm
 save_edges_volume
-    Write an edges volume with the encoding volume's conventions
+    Write an edges volume in the encoding volume layout, as published on S3
 compute_edges_volume
     Encoding volume file -> edges volume file, next to it
 
@@ -47,7 +46,6 @@ DEFAULT_ERODE_UM = 100
 DEFAULT_VARIANCE_THRESHOLD = 0.95
 DEFAULT_AGGREGATE = "median"
 EDGES_UNITS = {
-    "rss": "Mahalanobis distance per mm",
     "median": "median across PCs of the whitened PC gradient magnitude, per mm",
     "mean": "mean across PCs of the whitened PC gradient magnitude, per mm",
 }
@@ -142,10 +140,8 @@ def edge_strength(
     mask, which avoids a bias at the mask border), then its gradient magnitude (root
     of the summed squared derivatives over the three axes) is taken. The smoothing
     removes the blocky grid of the interpolated volume. The per-PC magnitudes are then
-    aggregated across PCs: ``"median"`` keeps voxels where many PCs change together,
-    ``"mean"`` averages them, ``"rss"`` is the root of the sum of squares, i.e. the
-    gradient norm in Mahalanobis distance (PCs are whitened, so this one is a distance
-    per mm and grows with the number of PCs).
+    aggregated across PCs: ``"median"`` keeps voxels where many PCs change together
+    and ``"mean"`` averages them.
 
     Parameters
     ----------
@@ -160,7 +156,7 @@ def edge_strength(
     erode_um : float
         Voxels this close to the mask border are dropped: their gradient is a mask
         artefact.
-    aggregate : {"median", "mean", "rss"}
+    aggregate : {"median", "mean"}
         How the per-PC gradient magnitudes are combined across PCs.
 
     Returns
@@ -188,7 +184,6 @@ def edge_strength(
     reduce = {
         "median": lambda m: np.median(m, axis=1),
         "mean": lambda m: np.mean(m, axis=1),
-        "rss": lambda m: np.sqrt((m**2).sum(axis=1)),
     }[aggregate]
     edges = np.full(valid.shape, np.nan, dtype=np.float32)
     edges[inner] = reduce(magnitudes)
@@ -196,10 +191,12 @@ def edge_strength(
 
 
 def save_edges_volume(file, edges, res_um, units, **metadata):
-    """Save an edges volume with the encoding volume's conventions.
+    """Save an edges volume in the encoding volume layout, as published on S3.
 
-    Same layout as ``brainwide_ephys_atlas_{res_um}um.npz``: ``(ML, AP, DV)`` axis
-    order, ``res_um`` and ``grid_shape`` arrays. Values are stored as float16.
+    Readable like ``brainwide_ephys_atlas_{res_um}um.npz``: a single-feature
+    ``ephys_atlas_vol`` of shape ``(ML, AP, DV, 1)`` named ``ephys_edges`` in
+    ``feature_names``, plus ``grid_shape`` and ``res_um``. Voxels outside the mask
+    are 0, the encoding volume's "no data" sentinel, and values are float16.
 
     Parameters
     ----------
@@ -212,14 +209,15 @@ def save_edges_volume(file, edges, res_um, units, **metadata):
     units : str
         Units of `edges`, e.g. ``EDGES_UNITS["median"]``.
     **metadata
-        Extra scalars stored alongside (vintage, sigma_um, n_pcs...).
+        Extra scalars stored alongside (aggregate, sigma_um, n_pcs...).
     """
-    stored = np.transpose(edges, (1, 0, 2))
+    stored = np.nan_to_num(np.transpose(edges, (1, 0, 2)), nan=0.0)
     np.savez_compressed(
         file,
-        ephys_edges_vol=stored.astype(np.float16),
-        res_um=np.array([res_um]),
+        ephys_atlas_vol=stored[..., np.newaxis].astype(np.float16),
+        feature_names=np.array(["ephys_edges"]),
         grid_shape=np.array(stored.shape, dtype=np.int32),
+        res_um=np.array([res_um]),
         axis_order="ML,AP,DV",
         units=units,
         **metadata,
