@@ -20,6 +20,13 @@ from ephysatlas import model_registry
 
 logger = logging.getLogger(__name__)
 
+# Default release (feature vintage) of each published channel-level region decoder, by Hugging
+# Face repo id: the release the alignment GUI loads unless another is chosen.
+DECODER_VINTAGES = {
+    "int-brain-lab/ea-decoder-channel-xgboost": "2026_W42",
+    "int-brain-lab/ea-decoder-channel-transformer": "2026_W42",
+}
+
 
 def _region_classifier(path_model: Path, index: dict, **kwargs):
     """Build the region-decoding wrapper.

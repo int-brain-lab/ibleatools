@@ -14,6 +14,8 @@ import ephysatlas.data
 FIXTURE_PATH = (
     Path(ephysatlas.features.__file__).parents[2].joinpath("tests", "fixtures")
 )
+# Column prefixes of the PSD decay (aperiodic fit) features of features.lf
+DECAY_PREFIXES = ("aperiodic_", "decay_", "psd_residual_")
 
 print(f"Torch number of threads = {torch.get_num_threads()}")
 
@@ -38,6 +40,8 @@ class TestLFPFeatures(unittest.TestCase):
         self.assertTrue(df.shape[0] == self.data_lf.shape[0])
         self.assertIn("rms_lf_bpr", df.columns)
         self.assertFalse(any("diff1" in c for c in df.columns))
+        # the PSD decay fit is for the raw LF only, not the CSD / BPR traces
+        self.assertFalse(any(c.startswith(DECAY_PREFIXES) for c in df.columns))
 
     def test_cadzow_lfp_kwargs(self):
         # NP1 checkerboard: full grid + shrinkage 2.25, NP2 fills its grid: shrinkage 1.22
@@ -68,6 +72,13 @@ class TestLFPFeatures(unittest.TestCase):
     def test_lf(self):
         df = ephysatlas.features.lf(self.data_lf, fs=2500)
         self.assertTrue(df.shape[0] == self.data_lf.shape[0])
+        self.assertIn("aperiodic_exponent", df.columns)
+
+    def test_lf_without_decay_features(self):
+        """decay_features=False skips the PSD decay fit (csd() relies on it)."""
+        df = ephysatlas.features.lf(self.data_lf[:10], fs=2500, decay_features=False)
+        self.assertIn("rms_lf", df.columns)
+        self.assertFalse(any(c.startswith(DECAY_PREFIXES) for c in df.columns))
 
     def test_get_psd_decay_features(self):
         """Test PSD decay features extraction using spectral parameterization."""
