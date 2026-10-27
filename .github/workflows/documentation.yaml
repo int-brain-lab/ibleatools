@@ -36,28 +36,37 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Quarto is a standalone binary, not a Python package.
+      - name: Install Quarto
+        uses: quarto-dev/quarto-actions/setup@v2
+
       - name: Install uv
         uses: astral-sh/setup-uv@v3
 
       - name: Set up Python
         run: uv python install 3.12
 
-      # Lite install + the `docs` dependency group (myst-parser, sphinx-rtd-theme,
-      # sphinx-autodoc-typehints; sphinx itself comes transitively). The `full`
-      # DARTsort extra is not needed: autodoc only needs to import the
-      # package, and the spike path is lazily imported.
+      # Lite install + the `docs` group (quartodoc, griffe). The `full` extra is not
+      # needed: quartodoc reads docstrings statically, and the optional NWB/Zarr/DARTsort
+      # dependencies are lazily imported, so their symbols still document from a lite
+      # install.
       - name: Sync docs dependencies
         run: uv sync --group docs
 
-      - name: Build documentation
-        run: uv run sphinx-build -b html docs/source docs/build
+      # Generates docs/api/ from the docstrings, per the `quartodoc` block in
+      # docs/_quarto.yml. Must run before `quarto render`, which expects those pages.
+      - name: Build API reference
+        run: uv run quartodoc build --config docs/_quarto.yml
+
+      - name: Render site
+        run: quarto render docs/
 
       # Only publish an artifact for real deployments, not for PR build-checks.
       - name: Upload Pages artifact
         if: github.event_name != 'pull_request'
         uses: actions/upload-pages-artifact@v3
         with:
-          path: docs/build/
+          path: docs/_site/
 
   deploy:
     needs: build

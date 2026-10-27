@@ -1,0 +1,170 @@
+---
+title: "How to load cells features"
+---
+
+This guide downloads and loads the **cells-level feature aggregates** across all IBL
+insertions: cell tables, log-binned autocorrelograms, peak-channel waveforms,
+population coupling (stPC) and spike-triggered LFP (stLFP).
+
+Where [channel features](load-channel-features.qmd) have one row per recording channel,
+these have one row per spike-sorted **unit**.
+
+::: {.callout-important}
+These aggregates are in a private S3 bucket and need an IBL account — pass a logged-in
+[`one.api.ONE`](https://int-brain-lab.github.io/ONE/) instance to every download function.
+:::
+
+## S3 layout
+
+```text
+aggregates/atlas/projects/{project}/
+│
+├── df_probe_details.pqt                  one row per insertion
+│
+└── cells_aggregates/
+    ├── clusters.table.pqt                all cells: QC + anatomy + waveform features   (n_cells × ~59)
+    ├── clusters_good.table.pqt           QC-passing cells (bitwise_fail == 0)          (n_good × ~61)
+    ├── clusters.acgs_log.npy             log-binned ACGs, normalised by spike_count    (n_cells × 128) float16
+    ├── acgs_log.times.npy                ACG bin centres, seconds                      (128,) float64
+    ├── clusters.waveforms_peak.npy       peak-channel waveform per cell                (n_cells × 128) float16
+    ├── clusters_good.stpc.npy            population coupling                           (n_good × 1000) float16
+    ├── clusters_good.stlfp.npy           spike-triggered LFP                           (n_good × 250)  float16
+    ├── clusters.acgs_3d.npy              firing-rate-decile × log-lag 3D ACG (~3.5 GB) (n_cells × 10 × 201) float16
+    ├── acgs_3d.times.npy                 3D-ACG log-time bin centres, ms                (201,) float64
+    ├── waveforms.voltage.npy             all neighbourhood traces (~8 GB)              (n_traces × 128) float16
+    └── waveforms.table.pqt               pid / cluster_id / abs_channel index          (n_traces × 3)
+```
+
+### Row alignment
+
+This is the part to get right — the arrays carry no index of their own:
+
+| array | row-aligned with |
+|---|---|
+| `clusters.acgs_log.npy`, `clusters.waveforms_peak.npy`, `clusters.acgs_3d.npy` | `clusters.table.pqt` — **all** cells |
+| `clusters_good.stpc.npy`, `clusters_good.stlfp.npy` | `clusters_good.table.pqt` — good cells only |
+
+Note that `clusters.acgs_3d.npy` aligns with **all** cells, not just good units, which is
+easy to get wrong given its `clusters.` prefix sits beside the `clusters_good.` arrays.
+
+`clusters.acgs_log.npy` values are in **sp/sp** (normalised by `spike_count`); the
+long-lag asymptote converges to the firing rate in sp/s. See
+[`compute_3d_acgs`](../api/cells.compute_3d_acgs.qmd) for how the 3D ACGs are computed and
+how to recompute them on a new dataset.
+
+## Download
+
+```python
+from pathlib import Path
+
+from one.api import ONE
+import ephysatlas.data
+
+one = ONE(base_url="https://alyx.internationalbrainlab.org")
+local_path = Path("/datadisk/ephys-atlas")
+project = "ibl_neuropixel_brainwide_01"
+
+# probe details + cells_aggregates/ (~1 GB; waveforms and 3D ACGs excluded)
+ephysatlas.data.download_project_data(local_path, project=project, one=one)
+```
+
+The large arrays are opt-in, because most analyses do not need them:
+
+```python
+# + waveforms.voltage.npy and waveforms.table.pqt  (~8 GB extra)
+ephysatlas.data.download_project_data(
+    local_path, project=project, one=one, large_files=True
+)
+
+# + clusters.acgs_3d.npy and acgs_3d.times.npy  (~3.5 GB extra)
+ephysatlas.data.download_project_data(
+    local_path, project=project, one=one, acg3d=True
+)
+```
+
+To fetch only one of the two parts:
+
+```python
+ephysatlas.data.download_probe_details(local_path, project=project, one=one)
+ephysatlas.data.download_cells_features(local_path, project=project, one=one)
+
+# the same opt-ins apply here
+ephysatlas.data.download_cells_features(
+    local_path, project=project, one=one, large_files=True, acg3d=True
+)
+```
+
+## Load
+
+```python
+from pathlib import Path
+
+import ephysatlas.data
+
+local_path = Path("/datadisk/ephys-atlas")
+project = "ibl_neuropixel_brainwide_01"
+
+r = ephysatlas.data.read_cells_features(local_path / project)
+
+df_cells        = r["df_clusters"]       # all cells      (n_cells × ~59)
+df_cells_good   = r["df_clusters_good"]  # good cells     (n_good × ~61)
+acgs_log        = r["acgs_log"]          # (n_cells × 128) float32 — sp/sp
+acgs_log_times  = r["acgs_log_times"]    # (128,) seconds
+waveforms_peak  = r["waveforms_peak"]    # (n_cells × 128) float32
+stpc            = r["stpc"]              # (n_good × 1000) float16 memmap
+stlfp           = r["stlfp"]             # (n_good × 250)  float16 memmap
+```
+
+The optional arrays appear **only if you downloaded them**, so read them with `.get`:
+
+```python
+# present only with large_files=True
+waveforms    = r.get("waveforms")       # (n_traces × 128) float16 memmap — ~8 GB
+df_waveforms = r.get("df_waveforms")    # (n_traces × 3) — pid/cluster_id/abs_channel
+
+# present only with acg3d=True
+acgs_3d       = r.get("acgs_3d")        # (n_cells × 10 × 201) float16 memmap — ~3.5 GB
+acgs_3d_times = r.get("acgs_3d_times")  # (201,) log-time bin centres, ms
+```
+
+The multi-gigabyte arrays are returned as **memmaps**, so slicing reads only what you ask
+for and the whole file never enters memory. Avoid whole-array operations on them —
+`waveforms.mean()` will try to read all 8 GB.
+
+## Join with probe metadata
+
+```python
+df_probes = ephysatlas.data.read_probe_details(local_path / project)
+df = df_cells.merge(df_probes, on="pid", how="left")
+```
+
+## Select good units
+
+`clusters_good.table.pqt` uses the strict `bitwise_fail == 0` criterion. For a more
+permissive selection based on the refractory-period confidence:
+
+```python
+import ephysatlas.cells
+
+df_selected = ephysatlas.cells.select_good_units_relaxed_rp(
+    df_cells, rp_confidence_threshold=70.0
+)
+```
+
+To index the good-cell arrays from the all-cell table — needed whenever you have a mask on
+`df_clusters` and want the corresponding `stpc` / `stlfp` rows:
+
+```python
+import numpy as np
+
+good_pos = np.where(df_cells["bitwise_fail"] == 0)[0]
+waveforms_peak_good = waveforms_peak[good_pos]
+acgs_log_good = acgs_log[good_pos]
+```
+
+## Next steps
+
+- [Load channel features](load-channel-features.qmd) — the per-channel dataset
+- [Load compressed LFP](load-lfp-features.qmd) — full-recording LFP, not per-cell
+- [S3 layout reference](../reference/s3-layout.qmd)
+- [`read_cells_features` API](../api/data.read_cells_features.qmd)

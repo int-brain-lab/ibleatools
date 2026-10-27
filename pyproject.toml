@@ -112,11 +112,13 @@ ephysatlas = "src/ephysatlas"
 include = ["src/ephysatlas"]
 
 [dependency-groups]
+# Quarto site (docs/). quartodoc generates the API reference from the docstrings;
+# griffe is its static-analysis backend and is pinned below 2.0, whose API quartodoc
+# 0.7 does not yet target. Quarto itself is a standalone binary, not a Python package:
+# CI installs it with quarto-dev/quarto-actions/setup.
 docs = [
-    "myst-parser>=4.0.1",
-    "sphinx-autobuild>=2024.10.3",
-    "sphinx-autodoc-typehints>=3.0.1",
-    "sphinx-rtd-theme>=3.1.0",
+    "griffe<2.0",
+    "quartodoc>=0.7.0",
 ]
 lint = ["ruff>=0.7.3"]
 test = [

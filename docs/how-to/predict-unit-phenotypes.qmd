@@ -1,0 +1,125 @@
+---
+title: "How to predict unit phenotypes from position"
+---
+
+The unit encoder describes the **spike-sorted units** you would expect to record at a
+position in the brain: their waveform features and the mix of putative cell types they
+come from. Like the [spatial encoder](predict-features-from-position.qmd), it takes
+positions and returns predictions, at the level of units rather than channels.
+
+| | Input | Output |
+|---|---|---|
+| [Spatial encoder](predict-features-from-position.qmd) | Position (`x`, `y`, `z`) | Channel features |
+| **Unit encoder** | Position (`x`, `y`, `z`) | Unit waveform features, cell-type composition |
+
+How the model is built is described in [model families](../explanation/model-families.qmd).
+
+## What the model needs
+
+```python
+from ephysatlas import load_pretrained
+
+unit = load_pretrained("int-brain-lab/ea-encoder-unit", revision="2026_W42")
+
+print(unit.index["task"])                # unit-encoding
+print(unit.index["model_class"])         # UnitAutoencoder
+print(unit.inputs["columns"])            # ['x', 'y', 'z']
+print(unit.inputs["modalities"])         # ['waveform', 'acg', 'stpc']
+print(len(unit.features))                # 10 phenotype features
+print(unit.outputs["latent_dim"])        # 60
+print(len(unit.subtype_labels))          # 300 sub-types, in 30 types
+```
+
+The input is a DataFrame carrying **`x`, `y`, `z` in metres**. Any index works and is
+kept; the manifest's own `(pid, cluster)` is the unit tables' index. Positions straight
+from `channels.pqt` can be used as they are.
+
+The 10 phenotype features are the waveform features of the
+[feature list](../reference/feature-list.qmd) that are defined for a unit's mean waveform:
+
+```python
+print(unit.features)
+# ['depolarisation_slope', 'recovery_slope', 'repolarisation_slope', 'spatial_spread_um',
+#  'tip_val', 'spike_width_secs', 'predepolarisation_width_secs', 'spike_amplitude',
+#  'peak_to_trough_ratio_log', 'polarity']
+```
+
+## Predict the expected phenotype
+
+```python
+import pandas as pd
+
+channels = pd.read_parquet("/data/features/ea_active/2026_W42/agg_full/channels.pqt")
+positions = channels.loc[["00a824c0-e060-495f-9ebc-79c82fef4c67"], ["x", "y", "z"]]
+
+pred = unit.predict(positions)
+print(pred.shape)          # (384, 10): one row per position
+print(pred.columns[:3])    # ['pred_depolarisation_slope', 'pred_recovery_slope', ...]
+```
+
+`predict` is deterministic. It mixes each sub-type's expected features with the sub-type
+weights at that position, which is what the published unit-level atlas maps show. The
+`pred_` prefix keeps a join onto observed features free of collisions.
+
+## Putative cell-type composition
+
+```python
+w_type = unit.mixture_weights(positions, level="type")
+w_sub = unit.mixture_weights(positions, level="subtype")
+
+print(w_type.shape)            # (384, 30):  type_0 ... type_29
+print(w_sub.shape)             # (384, 300): subtype_0.0 ... subtype_29.9
+print(w_type.sum(axis=1))      # 1.0 for every position
+print(w_type.idxmax(axis=1))   # the dominant type at each position
+```
+
+A sub-type `k.j` always lies inside type `k`: the mixture is hierarchical, and assignment
+is top-down.
+
+## Draw units
+
+`sample` draws real training units from the same predictive distribution: a sub-type
+from the local weights, then one of its training members.
+
+```python
+draws = unit.sample(positions.head(3), n_samples=4, seed=0)
+print(draws.shape)               # (12, 13): 4 draws for each of 3 positions
+print(list(draws.columns[:3]))   # ['sample', 'type', 'subtype'], then the 10 features
+```
+
+Each position's label is repeated once per draw. `subtype` indexes
+`unit.subtype_labels`. The draws average to `predict`.
+
+## Your own units: latents and assignment
+
+The other direction takes **units**, not positions. `encode` embeds a unit's waveform, 3D
+autocorrelogram and population coupling into the 60-D latent. `posterior` and `assign`
+place latents in the mixture:
+
+```python
+latents = unit.encode(waveform, acg=acg, stpc=stpc)   # (n_units, 60)
+types, subtypes = unit.assign(latents)                # top-down hard assignment
+```
+
+The inputs must be prepared as for training: max-abs normalised multi-channel waveforms
+with the shape the model's config records. `unit.latent_dims(...)` selects the latent
+dimensions of a subset of modalities, e.g. for units without population coupling. See the
+[`UnitEncoder` API](../api/models.unit_encoder.UnitEncoder.qmd) for every argument,
+together with `components()`, `split()` and `preprocessing_stats()`.
+
+## Verify the install
+
+```python
+unit.selftest()
+# True
+```
+
+The self-test reproduces the golden outputs the release ships: phenotype predictions at
+500 positions, and the latents of 16 synthetic units. It needs no IBL data access.
+
+## Next steps
+
+- [Predict features from position](predict-features-from-position.qmd): the channel-level encoder
+- [Model families](../explanation/model-families.qmd): how the unit model is built
+- [Load cells features](load-cells-features.qmd): the IBL unit tables
+- [`UnitEncoder` API](../api/models.unit_encoder.UnitEncoder.qmd)

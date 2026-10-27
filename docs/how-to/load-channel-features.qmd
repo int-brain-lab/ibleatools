@@ -1,0 +1,159 @@
+---
+title: "How to load channel features"
+---
+
+This guide downloads and loads the **channel-level ephys feature aggregates** — the core
+dataset of the IBL Ephys Atlas. Each row is one recording channel from one probe
+insertion, annotated with its brain region and its electrophysiological features.
+
+The same data can be browsed, without an account, in the
+[IBL Ephys Atlas viewer](https://ephys-atlas.iblcore.org/).
+
+::: {.callout-important}
+## This needs an IBL account
+
+These aggregates live in a private S3 bucket, and authentication goes through
+[`one.api.ONE`](https://int-brain-lab.github.io/ONE/) with Alyx credentials. Pass a logged-in `ONE` instance as the `one`
+argument to every download function.
+
+If you have no IBL account, you can still
+[compute features from your own recording](compute-features-spikeglx.qmd) and
+[run the published models](download-models.qmd) — both work without credentials.
+:::
+
+## S3 layout
+
+```text
+aggregates/atlas/features/{project}/{label}/agg_full/
+├── raw_ephys_features_denoised.pqt   denoised per-channel features  (~175 MB)
+├── raw_ephys_features.pqt            raw per-channel features       (~165 MB)
+├── channels.pqt                      channel metadata (coordinates, probe info)  (~10 MB)
+├── df_all_cols_merged.pqt            denoised + channels + region ids, pre-merged (~185 MB)
+└── snippets_df.pqt                   per-snippet provenance manifest
+```
+
+Features are versioned with a weekly `YYYY_Www` label — a **vintage**. See the
+[S3 layout reference](../reference/s3-layout.qmd) for the full tree and for how this
+file list changed across vintages (`channels_labels.pqt` is legacy; channel labels are now
+a `labels` column inside `channels.pqt`).
+
+## Download
+
+```python
+from pathlib import Path
+
+from one.api import ONE
+import ephysatlas.data
+
+one = ONE(base_url="https://alyx.internationalbrainlab.org", mode="remote")
+local_path = Path("/datadisk/ephys-atlas/features")
+label = "2026_W42"
+
+# downloads to local_path/ea_active/{label}/agg_full/
+path_features = ephysatlas.data.download_tables(local_path, label=label, one=one)
+```
+
+Pass `extended=True` to also fetch the `{label}_extended/` folder, which holds large
+optional datasets such as cross-correlograms:
+
+```python
+ephysatlas.data.download_tables(local_path, label=label, one=one, extended=True)
+```
+
+## Load
+
+```python
+import ephysatlas.data
+import ephysatlas.anatomy
+
+brain_atlas = ephysatlas.anatomy.ClassifierAtlas()
+df_features = ephysatlas.data.read_features_from_disk(
+    path_features, brain_atlas=brain_atlas
+)
+```
+
+`read_features_from_disk` merges the denoised features with `channels.pqt` into one
+DataFrame indexed by `(pid, channel)`, and annotates every channel with `Allen_id`,
+`Cosmos_id` and `Beryl_id` region ids. Channel quality labels come from the `labels` column
+inside `channels.pqt`.
+
+Two things happen on the way:
+
+- **Validation picks the schema from the columns present.** A table with the spike-shape
+  columns (`spike_width_secs`, ..., the denoised table) is checked against
+  `ModelDenoisedFeatures`. A table with the raw waveform columns (the raw table) is
+  checked against `ModelRawFeatures`.
+- **The alpha features get an outlier treatment.** Values at or above 1000 times their
+  column's median are replaced by the median. It applies to the first column group the
+  table carries: `alpha_mean` / `alpha_std`, else `psd_alpha` / `psd_alpha_csd` (an
+  LF-only table), else either of those alone
+  (`ephysatlas.data.alpha_outlier_columns`).
+
+Useful arguments:
+
+| argument | default | effect |
+|---|---|---|
+| `brain_atlas` | `ClassifierAtlas()` | The atlas used to map coordinates to regions |
+| `mappings` | `["Cosmos", "Beryl"]` | Which region ontologies to add as `{mapping}_id` columns |
+| `load_denoised` | `True` | Read the denoised table; `False` reads `raw_ephys_features.pqt` |
+| `strict` | `True` | Validate against the pandera schema; `False` skips the validation |
+
+::: {.callout-tip}
+## Skip it with the pre-merged table
+
+The default `brain_atlas=ClassifierAtlas()` downloads the Allen template volumes on first
+use — hundreds of megabytes.
+
+You rarely need it: `df_all_cols_merged.pqt` **is** the output of
+`read_features_from_disk`, already merged and region-annotated.
+
+```python
+import pandas as pd
+
+df_features = pd.read_parquet(path_features / "df_all_cols_merged.pqt")
+# 70 columns: 53 denoised features + channel metadata
+#             + Allen_id / Cosmos_id / Beryl_id / outside
+```
+
+No atlas download, no merge, no schema validation pass. Use `read_features_from_disk` when
+you need `load_denoised=False` or a non-default `mappings` list.
+:::
+
+The denoised table stores `rms_ap` / `rms_lf` in dB and `spike_count` in log2. Set
+`load_denoised=False` for the untransformed values. In the `2026_W42` tables, waveform
+amplitudes are in volts, `spike_count` is a rate in spikes/s, and the denoised table
+carries the spike-shape columns instead of the six raw waveform columns. The raw table
+keeps the raw ones. The first-difference CSD columns are `*_bpr`, Cadzow-denoised with
+the ibl-neuropixel 1.14 defaults. See the [feature list](../reference/feature-list.qmd).
+
+## Find the available vintages
+
+```python
+labels = ephysatlas.data.list_available_labels(one=one, project="ea_active")
+print(labels[0])   # newest first: '2026_W42'
+
+latest = ephysatlas.data.get_latest_label(one=one, project="ea_active")   # '2026_W42'
+
+projects = ephysatlas.data.list_available_projects(one=one)
+```
+
+Two projects exist:
+
+- **`ea_active`** — the default, updated weekly with the latest features
+- **`ibl_neuropixel_brainwide_01`** — the frozen brainwide-map dataset
+
+::: {.callout-tip}
+Pin an explicit `label` in any analysis you intend to reproduce. `get_latest_label`
+resolves to whatever is newest *today*, which is convenient and not reproducible — and if
+you then run a published model over it, the model's vintage and the feature vintage must
+still match. The newest features can be newer than any model. As of October 2026 the
+latest label is `2026_W42`, and so are the newest models, so these pages use `2026_W42`.
+:::
+
+## Next steps
+
+- [Plot features along the probe](../visualise/features-along-probe.qmd)
+- [Predict brain regions](predict-regions.qmd) — the denoised table is exactly what the
+  decoder wants
+- [Load cells features](load-cells-features.qmd) — per-unit rather than per-channel
+- [S3 layout reference](../reference/s3-layout.qmd)

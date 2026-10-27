@@ -1,0 +1,231 @@
+---
+title: "How to predict features from position"
+---
+
+The spatial encoder runs the **opposite way round** to the region decoder: you give it a
+position in the brain, and it predicts the electrophysiological features a channel there
+would record.
+
+| | Input | Output |
+|---|---|---|
+| [Region decoder](predict-regions.qmd) | Features | Brain region |
+| **Spatial encoder** | Position (`x`, `y`, `z`) | Features |
+
+That makes it useful for asking counterfactuals — what *should* this channel look like,
+given where it is? — and so for spotting channels whose recorded features disagree with
+their nominal anatomy.
+
+## What the model needs
+
+```python
+from ephysatlas import load_pretrained
+
+encoder = load_pretrained(
+    "int-brain-lab/ea-encoder-channel", revision="2026_W42"
+)
+
+print(encoder.index["task"])            # spatial-encoding
+print(encoder.index["model_class"])     # NeighborInpaintingModel
+print(encoder.inputs["table"])          # channels.pqt
+print(encoder.inputs["index"])          # ['pid', 'channel']
+print(encoder.inputs["columns"])        # ['x', 'y', 'z']
+print(len(encoder.features))            # 43 predicted features
+```
+
+`2026_W42` is trained on the `2026_W42` features, with channel positions refreshed from
+the current alignments and without the insertions whose alignment was revised. It
+predicts the 43 features of the denoised table, spike-shape columns included, with the
+first-difference CSD columns named `*_bpr`.
+
+A DataFrame indexed by `(pid, channel)` carrying **`x`, `y`, `z` in metres**. That is all.
+The feature columns are not read — they are what the model predicts. If you pass a table
+that happens to contain them, they are ignored.
+
+::: {.callout-important}
+## Coordinates are in metres, not micrometres
+
+`channels.pqt` stores `x`, `y`, `z` in metres. A table in µm is off by 10⁶ and will land
+every query outside the brain, returning meaningless predictions rather than an error.
+:::
+
+## Predict
+
+```python
+import pandas as pd
+
+df_channels = pd.read_parquet("/data/features/aggregated/channels.pqt")
+pred = encoder.predict(df_channels)
+
+print(pred.shape)          # (n_channels, 43)
+print(pred.columns[:4])    # ['pred_rms_lf', 'pred_psd_delta', 'pred_psd_theta', 'pred_psd_alpha']
+```
+
+Positions in either hemisphere work. The model was trained on positions mirrored to the
+left hemisphere, so each query is mirrored the same way (`x → -|x|`) before the neighbour
+search and the position input: a right-hemisphere channel is predicted exactly as its
+mirror.
+
+For positions that are not in a table, `predict_xyz` takes an `(N, 3)` array in metres
+and returns an `(N, 43)` array, in `encoder.features` order:
+
+```python
+values = encoder.predict_xyz(xyz_m, pids=pid)
+```
+
+`pids` (one insertion id, or one per position) excludes that probe's own channels from
+the neighbours; pass the probe's pid when predicting for a probe that may be in the
+training bank.
+
+Predict every voxel of an atlas slice and you get a map of what the brain should record:
+
+![`predict_xyz` on the voxels of the coronal plane AP = −2 mm, every 100 µm, with the Cosmos outlines from iblatlas. [Atlas maps](../visualise/atlas-maps.qmd) has the code.](../figures/encoder_coronal_maps.png){.lightbox}
+
+Output is indexed exactly like the input, with one `pred_<feature>` column per predicted
+feature, in feature units. The `pred_` prefix lets you join the
+prediction onto a table holding the ground-truth columns of the same names without a
+collision.
+
+To try it with no data of your own:
+
+```python
+sample = encoder.path_model / "example" / "features_sample.parquet"
+pred = encoder.predict(pd.read_parquet(sample))
+```
+
+Verify the install first, as always:
+
+```python
+encoder.selftest()
+# True
+```
+
+::: {.callout-note}
+The encoder's self-test uses looser tolerances than the decoder's (`rtol=1e-4`,
+`atol=1e-5`). These are float32 transformer outputs, which drift by around 1e-4 relative
+between environments with different BLAS libraries. Corrupted weights or a wrong model
+change the outputs by orders of magnitude more, so the tolerance still detects them.
+:::
+
+## Comparing prediction against reality
+
+This is the main use. Join the encoder's expectation onto your measured features and look
+at the residual:
+
+```python
+df = pd.read_parquet("/data/features/aggregated/raw_ephys_features_denoised.pqt")
+df_channels = pd.read_parquet("/data/features/aggregated/channels.pqt")
+
+pred = encoder.predict(df_channels)
+joined = df.join(pred)
+
+# Residual for one feature
+joined["resid_rms_lf"] = joined["rms_lf"] - joined["pred_rms_lf"]
+print(joined["resid_rms_lf"].describe())
+```
+
+Large systematic residuals down a stretch of probe suggest the channels are not where the
+trajectory says they are — which is the signal an alignment workflow wants.
+
+## How it works, and what that implies
+
+The encoder predicts from two things:
+
+1. **Anatomical context** — MERFISH and AGEA PCA volumes sampled at the query coordinates
+   (50 cell PCs + 50 gene PCs, on a 200 µm voxel grid).
+2. **Neighbouring recorded channels** — real features from channels near the query
+   position, drawn from a bank of training channels shipped with the model.
+
+Read the neighbourhood settings straight off the manifest:
+
+```python
+print(encoder.config["neighbourhood"])
+# {'radius_um': 500.0, 'm_max': 8, 'selection': 'nearest', 'allow_same_probe': False}
+```
+
+As a result:
+
+**The weights alone are not a usable model.** It also needs the frozen PCA context volumes
+and the neighbour bank, neither of which can be recomputed downstream. Both ship as
+artifacts:
+
+```python
+print(encoder.index["artifacts"])
+# {'weights': 'spatial_encoder.pt',
+#  'context': ['agea_vol_pca.npy', 'merfish_vol_pca.npy'],
+#  'confidence': 'confidence_model.pt',
+#  'neighbor_bank': 'neighbor_bank.npz',
+#  'stats': 'preprocessing/channel_stats.npz',
+#  'split': 'split.json',
+#  'results': [...]}
+```
+
+This is why the download is larger than the decoder's. Each artifact has an accessor:
+
+```python
+encoder.split()                  # {'train_pids', 'validation_pids', 'test_pids', ...}
+encoder.neighbor_bank()          # {'xyz', 'feat', 'pid'}: the training channels
+encoder.preprocessing_stats()    # standardisation, and the per-feature clipping thresholds
+encoder.load_confidence_model()  # the probe-confidence model, in eval() mode
+```
+
+For `2026_W42` the split is 528 / 76 / 151 insertions, plus 294 excluded as misaligned.
+The neighbour bank holds 202,752 training channels: positions mirrored to the left
+hemisphere, features clipped and standardised exactly as the model saw them.
+
+Neighbours are drawn from *other* probes only (`allow_same_probe: False`), so a
+prediction for a probe already in the training bank does not use that probe's own
+features.
+
+Neighbour selection is **deterministic nearest-M**. Training-time collation drew a random
+subset when more than `m_max` candidates fell inside the radius; serving does not, so
+predictions do not depend on the global NumPy seed. Two runs give identical numbers.
+
+## Controlling the device and batch size
+
+```python
+encoder = load_pretrained(
+    "int-brain-lab/ea-encoder-channel", revision="2026_W42", device="cuda"
+)
+
+pred = encoder.predict(df_channels, batch_size=4096)
+```
+
+`device` is forwarded to the wrapper; omit it to use the checkpoint's own device.
+`batch_size` (default `1024`) is rows per forward pass — raise it on a GPU with headroom,
+lower it if you run out of memory.
+
+## Troubleshooting
+
+**`KeyError` naming coordinate columns** — the message is explicit that this model predicts
+features *from* position and needs `['x', 'y', 'z']`, not the feature columns. The usual
+cause is passing a feature table where a channel table was wanted.
+
+**`FileNotFoundError` about a missing manifest** — the manifest is the only record of the
+encoder's neighbourhood and context settings, so a directory without one cannot be loaded.
+
+**`ValueError` about the feature-order digest** — the manifest's output feature list no
+longer matches its recorded hash. Re-download the model.
+
+**Predictions look like noise** — check your coordinates are in **metres**, which is what
+the model expects.
+
+**`RuntimeError: Error(s) in loading state_dict for NeighborInpaintingModel`, with
+`Missing key(s)` such as `qenc.pos.pe.0.weight`** — the release is newer than your
+`ephysatlas`. The current release was trained without the position input
+(`use_positions: False` in the manifest), which older versions cannot build. Upgrade
+`ephysatlas`.
+
+## Next steps
+
+- [Model families](../explanation/model-families.qmd) — how the encoder relates to the
+  decoder and the unit encoder
+- [Predict unit phenotypes from position](predict-unit-phenotypes.qmd) — the same question
+  for spike-sorted units
+- [Predict brain regions](predict-regions.qmd) — the inverse direction
+- [Plot features along the probe](../visualise/features-along-probe.qmd) — visualise predicted
+  against measured
+- [Atlas maps](../visualise/atlas-maps.qmd) — the predictions on atlas slices, and the
+  [IBL Ephys Atlas viewer](https://ephys-atlas.iblcore.org/) to browse them
+- [Which brain regions is my probe in?](../tutorials/where-is-my-probe.qmd#refine-with-histology)
+  — the encoder at work in alignment
+- [`SpatialEncoder` API](../api/models.encoder_inpainting.SpatialEncoder.qmd)
