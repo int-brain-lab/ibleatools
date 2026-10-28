@@ -23,6 +23,7 @@ from pathlib import Path
 
 from ephysatlas.alignment.models import (
     CHANNEL_MODEL_REPO_ID,
+    CHANNEL_MODEL_REVISION,
     UNIT_MODEL_REPO_ID,
     UNIT_MODEL_REVISION,
     VINTAGE,
@@ -42,7 +43,7 @@ METHODS_TO_RUN = ("histology", "histology_unit", "ephys_only")
 # human alignment's channel positions, extended; the setting of the paper's Figure 5).
 TRACE = "picks"
 SPLIT = "test"  # "test" (held out), or "validation"
-OUT_DIR = DEFAULT_RESULTS_DIR / "alignment" / f"heldout_{VINTAGE}"
+OUT_DIR = DEFAULT_RESULTS_DIR / "alignment" / f"heldout_{CHANNEL_MODEL_REVISION}"
 SAVE_FIGURES = False  # one figure per insertion and method (slower)
 
 
@@ -62,6 +63,11 @@ def main():
     parser.add_argument("--vintage", default=VINTAGE)
     parser.add_argument("--channel-model", default=CHANNEL_MODEL_REPO_ID)
     parser.add_argument(
+        "--channel-revision",
+        default=CHANNEL_MODEL_REVISION,
+        help="Hub tag of the channel-level model (ignored for a local release dir)",
+    )
+    parser.add_argument(
         "--unit-model",
         default=UNIT_MODEL_REPO_ID,
         help="unit-level model: Hub repo id or local release directory",
@@ -80,7 +86,9 @@ def main():
     out_dir = args.out_dir or (
         OUT_DIR if args.trace == "picks" else OUT_DIR.with_name(OUT_DIR.name + "_human")
     )
-    pids = split_pids(ChannelModel(args.channel_model, args.vintage), args.split)
+    pids = split_pids(
+        ChannelModel(args.channel_model, args.channel_revision), args.split
+    )
     print(f"[alignment] {len(pids)} {args.split} insertions -> {out_dir}")
     csv_path = run_alignments(
         pids,
@@ -89,6 +97,7 @@ def main():
             methods=args.methods,
             trace=args.trace,
             vintage=args.vintage,
+            channel_revision=args.channel_revision,
             channel_repo_id=args.channel_model,
             unit_repo_id=args.unit_model,
             unit_revision=args.unit_revision,

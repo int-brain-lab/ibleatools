@@ -25,6 +25,7 @@ from .histology import align_histology
 from .metrics import alignment_metrics, result_metrics
 from .models import (
     CHANNEL_MODEL_REPO_ID,
+    CHANNEL_MODEL_REVISION,
     UNIT_MODEL_REPO_ID,
     UNIT_MODEL_REVISION,
     VINTAGE,
@@ -39,6 +40,7 @@ from .unit_cost import align_histology_with_units
 __all__ = [
     "AlignmentResult",
     "CHANNEL_MODEL_REPO_ID",
+    "CHANNEL_MODEL_REVISION",
     "ChannelModel",
     "EphysOnlyLocalizer",
     "METHOD_LABELS",

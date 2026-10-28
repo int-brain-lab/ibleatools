@@ -18,11 +18,12 @@ import numpy as np
 
 CHANNEL_MODEL_REPO_ID = "int-brain-lab/ea-encoder-channel"
 UNIT_MODEL_REPO_ID = "int-brain-lab/ea-encoder-unit"
-# The channel-level release and the feature release it was trained on.
+# The feature release the models were trained on, and the Hub tags of the releases: both are
+# trained on the automatic split of every 2026_W42 insertion, without those the QC marks bad
+# (ephysatlas.fixtures.pid_qc_filter).
 VINTAGE = "2026_W42"
-# The unit-level release, trained on the units, split and context volumes of 2026_W41 (the
-# channel-level release 2026_W42 reuses that split and those volumes).
-UNIT_MODEL_REVISION = "2026_W42"
+CHANNEL_MODEL_REVISION = "2026_W44"
+UNIT_MODEL_REVISION = "2026_W44"
 
 
 def default_device() -> str:
@@ -43,7 +44,7 @@ class ChannelModel:
     def __init__(
         self,
         repo_id: str = CHANNEL_MODEL_REPO_ID,
-        revision: str = VINTAGE,
+        revision: str = CHANNEL_MODEL_REVISION,
         device: Optional[str] = None,
     ):
         from ephysatlas import load_pretrained

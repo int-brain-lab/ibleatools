@@ -22,6 +22,7 @@ import pandas as pd
 from .metrics import alignment_metrics
 from .models import (
     CHANNEL_MODEL_REPO_ID,
+    CHANNEL_MODEL_REVISION,
     UNIT_MODEL_REPO_ID,
     UNIT_MODEL_REVISION,
     VINTAGE,
@@ -43,7 +44,8 @@ class RunSettings:
         out_dir: Output directory.
         methods: Any of :data:`METHODS`.
         trace: Histology trace for the histology methods, one of :data:`TRACES`.
-        vintage: Feature release and channel-model tag.
+        vintage: Feature release.
+        channel_revision: Hub tag of the channel-level model (ignored for a local release dir).
         channel_repo_id, unit_repo_id: Released models (Hub repo ids or local release dirs).
         unit_revision: Tag of the unit-level model on the Hub (ignored for a local release dir).
         save_results: Write each result's ``.npz``.
@@ -59,6 +61,7 @@ class RunSettings:
     methods: Sequence[str] = ("histology", "ephys_only")
     trace: str = "picks"
     vintage: str = VINTAGE
+    channel_revision: str = CHANNEL_MODEL_REVISION
     channel_repo_id: str = CHANNEL_MODEL_REPO_ID
     unit_repo_id: str = UNIT_MODEL_REPO_ID
     unit_revision: str = UNIT_MODEL_REVISION
@@ -120,7 +123,7 @@ def run_alignments(
     print(
         f"[alignment] loading models {settings.channel_repo_id}@{settings.vintage} ..."
     )
-    channel_model = ChannelModel(settings.channel_repo_id, settings.vintage)
+    channel_model = ChannelModel(settings.channel_repo_id, settings.channel_revision)
     unit_model = None
     if "histology_unit" in settings.methods:
         print(

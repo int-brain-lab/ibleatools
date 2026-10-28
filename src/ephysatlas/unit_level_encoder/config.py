@@ -21,7 +21,7 @@ DEFAULT_RESULTS_DIR = _default_dir("EPHYS_ATLAS_RESULTS_DIR", "results")
 UNIT_MODEL_REPO_ID = "int-brain-lab/ea-encoder-unit"
 # Hub tag of the released unit-level model. It is trained on the units, probe split and context
 # volumes of ``Config.vintage``.
-UNIT_MODEL_REVISION = "2026_W42"
+UNIT_MODEL_REVISION = "2026_W44"
 CHANNEL_MODEL_REPO_ID = "int-brain-lab/ea-encoder-channel"
 
 # Paths are runtime settings, not part of the scientific configuration saved with a release.

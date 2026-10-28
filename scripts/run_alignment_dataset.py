@@ -1,7 +1,7 @@
 """Align or localize every insertion of the feature release (the entire dataset).
 
 Same methods and outputs as ``run_alignment_heldout.py``, over all insertions of the release
-(misaligned insertions excluded, as for model training), with each insertion's split recorded in
+(including those the QC filter marks bad, recorded as ``excluded``), with each insertion's split recorded in
 ``alignment_metrics.csv``. For training insertions the channel model's neighbours never include the
 insertion's own channels, but the models were fitted on them: their scores are in-sample and
 optimistic -- use the held-out run for performance, this one for coverage (e.g. finding insertions
@@ -18,6 +18,7 @@ from pathlib import Path
 
 from ephysatlas.alignment.models import (
     CHANNEL_MODEL_REPO_ID,
+    CHANNEL_MODEL_REVISION,
     UNIT_MODEL_REPO_ID,
     UNIT_MODEL_REVISION,
     VINTAGE,
@@ -34,7 +35,7 @@ from ephysatlas.unit_level_encoder.config import DEFAULT_RESULTS_DIR
 # %% User settings (each can also be given on the command line; see --help) ----------------------
 METHODS_TO_RUN = ("histology", "ephys_only")
 TRACE = "picks"  # "picks" (reconstructed histology track) or "human" (human channel positions)
-OUT_DIR = DEFAULT_RESULTS_DIR / "alignment" / f"dataset_{VINTAGE}"
+OUT_DIR = DEFAULT_RESULTS_DIR / "alignment" / f"dataset_{CHANNEL_MODEL_REVISION}"
 SAVE_FIGURES = False
 
 
@@ -47,6 +48,11 @@ def main():
     parser.add_argument("--out-dir", type=Path, default=OUT_DIR)
     parser.add_argument("--vintage", default=VINTAGE)
     parser.add_argument("--channel-model", default=CHANNEL_MODEL_REPO_ID)
+    parser.add_argument(
+        "--channel-revision",
+        default=CHANNEL_MODEL_REVISION,
+        help="Hub tag of the channel-level model (ignored for a local release dir)",
+    )
     parser.add_argument(
         "--unit-model",
         default=UNIT_MODEL_REPO_ID,
@@ -63,7 +69,7 @@ def main():
     from ephysatlas.alignment.data import ChannelDataset
     from ephysatlas.alignment.models import ChannelModel
 
-    split = ChannelModel(args.channel_model, args.vintage).split()
+    split = ChannelModel(args.channel_model, args.channel_revision).split()
     split_of = {
         str(p): name
         for name, key in (
@@ -73,7 +79,7 @@ def main():
         )
         for p in split[key]
     }
-    pids = ChannelDataset.load(args.vintage).pids.tolist()
+    pids = ChannelDataset.load(args.vintage, exclude_pids=[]).pids.tolist()
     print(f"[alignment] {len(pids)} insertions -> {args.out_dir}")
     csv_path = run_alignments(
         pids,
@@ -82,12 +88,14 @@ def main():
             methods=args.methods,
             trace=args.trace,
             vintage=args.vintage,
+            channel_revision=args.channel_revision,
             channel_repo_id=args.channel_model,
             unit_repo_id=args.unit_model,
             unit_revision=args.unit_revision,
             save_figures=args.figures,
             overwrite=args.overwrite,
             limit=args.limit,
+            exclude_pids=[],
         ),
         split_of={p: split_of.get(p, "excluded") for p in pids},
     )
