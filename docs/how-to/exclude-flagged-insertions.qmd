@@ -61,12 +61,13 @@ pids, features, xyz, planned_xyz = LoadInsertionData(
 `unit_level_encoder.prepare_data.prepare_latest_cells_encoder_data` take the same argument.
 
 ::: {.callout-note}
-## The default is unchanged
+## The default
 
-Without `exclude_pids`, the loaders still leave out `ephysatlas.fixtures.misaligned_pids`, the
-hand-curated list the published `2026_W42` models were trained without. `exclude_pids`
-*replaces* that list: insertions on it that the QC clears are kept. An empty list keeps every
-insertion.
+Without `exclude_pids`, the channel loaders leave out the insertions bad on any component,
+`excluded_pids()`, and the unit loader those bad for their alignment, AP band or waveforms,
+`excluded_pids(("alignment", "ap", "waveform"))`. The models released from `2026_W44` on are
+trained this way; `ephysatlas.fixtures.misaligned_pids`, the hand-curated list of earlier
+releases, is kept for reference only. An empty list keeps every insertion.
 :::
 
 ## Levels

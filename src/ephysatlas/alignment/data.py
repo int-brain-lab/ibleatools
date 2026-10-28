@@ -57,7 +57,7 @@ class ChannelDataset:
     ) -> "ChannelDataset":
         """Load the release's features (downloaded from IBL S3 on first use; ONE credentials).
 
-        Insertions on the misaligned list (``ephysatlas.fixtures.misaligned_pids``) are left
+        Insertions the automatic QC marks bad (``ephysatlas.fixtures.pid_qc_filter``) are left
         out, exactly as for model training, unless ``exclude_pids`` lists others (an empty list
         keeps every insertion).
         """

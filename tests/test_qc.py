@@ -450,14 +450,14 @@ class TestModelFree(unittest.TestCase):
 
 
 class TestLoadersExcludePids(unittest.TestCase):
-    """``exclude_pids`` of ``LoadInsertionData``: the misaligned list by default (the released
-    models were trained without it), any list on request."""
+    """``exclude_pids`` of ``LoadInsertionData``: the QC filter's bad insertions by default, any
+    list on request."""
 
     def load(self, **kwargs):
-        from ephysatlas.fixtures import misaligned_pids
+        from ephysatlas.fixtures import pid_qc_filter
         from ephysatlas.spatial_encoder import utils
 
-        self.misaligned = sorted(misaligned_pids)[0]
+        self.misaligned = sorted(pid_qc_filter.excluded_pids())[0]
         self.pids = sorted(
             ["kept-1", self.misaligned, "kept-2"]
         )  # read sorted, as on disk
@@ -473,7 +473,7 @@ class TestLoadersExcludePids(unittest.TestCase):
         ):
             return list(utils.LoadInsertionData(VINTAGE="2099_W01", **kwargs)[0])
 
-    def test_default_leaves_out_the_misaligned_list(self):
+    def test_default_leaves_out_the_qc_bad_insertions(self):
         self.assertEqual(self.load(), [p for p in self.pids if p != self.misaligned])
 
     def test_explicit_lists(self):
