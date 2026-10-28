@@ -252,7 +252,7 @@ def run_alignments(
             print(
                 f"    {method}: cosmos={row.get('cosmos_acc', np.nan):.3f} "
                 f"beryl={row.get('beryl_acc', np.nan):.3f} "
-                f"distance={row.get('mean_distance_um', np.nan):.0f} um "
+                f"distance={row.get('median_distance_um', np.nan):.0f} um "
                 f"({row['seconds']:.1f} s)",
                 flush=True,
             )
@@ -260,7 +260,8 @@ def run_alignments(
 
 
 def summarize(csv_path: Path) -> pd.DataFrame:
-    """Mean and median of the main scores per method (successful rows only)."""
+    """Median over the probes of the main scores per method (successful rows only); the distance
+    of a probe is the median distance of its channels."""
     df = pd.read_csv(csv_path)
     df = df[df["error"].fillna("") == ""]
     cols = [
@@ -268,12 +269,12 @@ def summarize(csv_path: Path) -> pd.DataFrame:
         for c in (
             "cosmos_acc",
             "beryl_acc",
-            "mean_distance_um",
+            "median_distance_um",
             "cosmos_acc_high_conf",
             "beryl_acc_high_conf",
-            "mean_distance_um_high_conf",
+            "median_distance_um_high_conf",
             "high_conf_fraction",
         )
         if c in df.columns
     ]
-    return df.groupby("method")[cols].agg(["mean", "median", "count"])
+    return df.groupby("method")[cols].agg(["median", "count"])

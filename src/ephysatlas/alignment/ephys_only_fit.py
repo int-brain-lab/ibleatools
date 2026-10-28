@@ -430,7 +430,12 @@ def tune_temperature(
                 },
                 **{
                     f"planned_{k}": plan[k]
-                    for k in ("mean_distance_um", "cosmos_acc", "beryl_acc")
+                    for k in (
+                        "mean_distance_um",
+                        "median_distance_um",
+                        "cosmos_acc",
+                        "beryl_acc",
+                    )
                 },
                 score=search.diagnostics["score"],
                 c_p=search.diagnostics["c_p"],
@@ -449,28 +454,32 @@ def tune_temperature(
 
 
 def temperature_table(rows: pd.DataFrame) -> pd.DataFrame:
-    """Per-T summary over the probes searched at every T (paired comparison)."""
+    """Per-T summary over the probes searched at every T (paired comparison): the median over
+    the probes of each per-probe measure. The distance of a probe is the median distance of its
+    channels (``median_distance_um``); ``win_vs_plan`` is the fraction of probes closer than their
+    planned trajectory."""
     n_t = rows["T"].nunique()
     counts = rows.groupby("pid")["T"].nunique()
     rows = rows[rows["pid"].isin(counts[counts == n_t].index)].copy()
-    rows["win_vs_plan"] = rows["mean_distance_um"] < rows["planned_mean_distance_um"]
-    table = rows.groupby("T").agg(
+    agg = dict(
         n=("pid", "nunique"),
-        mean_distance_um=("mean_distance_um", "mean"),
-        sem_distance_um=(
-            "mean_distance_um",
-            lambda x: float(np.std(x, ddof=1) / np.sqrt(len(x))),
-        ),
-        median_distance_um=("mean_distance_um", "median"),
-        cosmos_acc=("cosmos_acc", "mean"),
-        beryl_acc=("beryl_acc", "mean"),
-        win_vs_plan=("win_vs_plan", "mean"),
-        planned_mean_distance_um=("planned_mean_distance_um", "mean"),
-        planned_cosmos_acc=("planned_cosmos_acc", "mean"),
-        planned_beryl_acc=("planned_beryl_acc", "mean"),
-        seconds_per_probe=("seconds", "mean"),
+        median_distance_um=("median_distance_um", "median"),
+        cosmos_acc=("cosmos_acc", "median"),
+        beryl_acc=("beryl_acc", "median"),
+        planned_cosmos_acc=("planned_cosmos_acc", "median"),
+        planned_beryl_acc=("planned_beryl_acc", "median"),
+        seconds_per_probe=("seconds", "median"),
     )
-    return table.reset_index()
+    # Tuning rows cached before the planned median distance was recorded lack it.
+    if "planned_median_distance_um" in rows:
+        rows["win_vs_plan"] = (
+            rows["median_distance_um"] < rows["planned_median_distance_um"]
+        )
+        agg.update(
+            win_vs_plan=("win_vs_plan", "mean"),
+            planned_median_distance_um=("planned_median_distance_um", "median"),
+        )
+    return rows.groupby("T").agg(**agg).reset_index()
 
 
 def _write_fit(localizer, params: dict, T: float) -> None:
@@ -571,7 +580,7 @@ def fit_localizer(
         sub_progress(progress, 0.25, 1.0),
     )
     table = temperature_table(rows)
-    T = float(table.loc[table["mean_distance_um"].idxmin(), "T"])
+    T = float(table.loc[table["median_distance_um"].idxmin(), "T"])
     params["T"] = np.float64(T)
     localizer.set_params(params)
     _write_fit(localizer, params, T)
