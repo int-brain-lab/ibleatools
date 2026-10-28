@@ -51,6 +51,8 @@ class RunSettings:
         overwrite: Recompute rows already in the CSV.
         limit: Process at most this many insertions (for a quick check).
         ephys_only_kwargs: Keyword arguments for :func:`.ephys_only.localize_ephys_only`.
+        exclude_pids: Insertions the dataset leaves out (None: the QC filter's default; an empty
+            list keeps every insertion, e.g. to align the whole release).
     """
 
     out_dir: Path
@@ -65,6 +67,7 @@ class RunSettings:
     overwrite: bool = False
     limit: Optional[int] = None
     ephys_only_kwargs: dict = field(default_factory=dict)
+    exclude_pids: Optional[list] = None
 
 
 def _done(csv_path: Path) -> set:
@@ -124,7 +127,7 @@ def run_alignments(
             f"[alignment] loading {settings.unit_repo_id}@{settings.unit_revision} and its unit data ..."
         )
         unit_model = UnitModel.load(settings.unit_repo_id, settings.unit_revision)
-    dataset = ChannelDataset.load(settings.vintage)
+    dataset = ChannelDataset.load(settings.vintage, exclude_pids=settings.exclude_pids)
     brain_atlas = AllenAtlas()
     traces = HistologyTraces()
     if "ephys_only" in settings.methods:

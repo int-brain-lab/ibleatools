@@ -243,8 +243,9 @@ def LoadInsertionData(
     Loads table-based ephys features and concatenates per-channel averaged waveform latents
     assigned by nearest channel in xyz for each probe.
 
-    ``exclude_pids``: insertions left out; None leaves out ``ephysatlas.fixtures.misaligned_pids``
-    (the training data), an empty list keeps every insertion.
+    ``exclude_pids``: insertions left out; None leaves out those the automatic QC marks bad on
+    any component (``ephysatlas.fixtures.pid_qc_filter.excluded_pids()``), an empty list keeps
+    every insertion.
 
     Returns:
       unique_pids, context [N,C,(cell_pc+gene_pc)], allen_ix [N,C],
@@ -300,9 +301,9 @@ def LoadInsertionData(
     # PIDs in the df order
     unique_pids = df_features.index.get_level_values("pid").unique()
 
-    # Filter bad/misaligned
+    # Leave out the insertions the QC marks bad (by default)
     if exclude_pids is None:
-        exclude_pids = ephysatlas.fixtures.misaligned_pids
+        exclude_pids = ephysatlas.fixtures.pid_qc_filter.excluded_pids()
     block_set = set(map(str, exclude_pids))
 
     filter_indices = [i for i, item in enumerate(unique_pids) if item not in block_set]
