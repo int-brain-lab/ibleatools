@@ -747,7 +747,13 @@ def prepare_latest_cells_encoder_data(
     n_gene_pcs: int = 50,
     mirror_x_to_single_hemisphere: bool = True,
     mirror_x_sign: float = -1.0,
+    exclude_pids=None,
 ) -> dict:
+    """Prepare the unit arrays of the good units of ``project``.
+
+    ``exclude_pids``: insertions left out; None leaves out ``ephysatlas.fixtures.misaligned_pids``
+    (the training data), an empty list keeps every insertion.
+    """
     root_path = Path(root_path).expanduser().resolve()
     out_dir = Path(out_dir).expanduser().resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -813,22 +819,23 @@ def prepare_latest_cells_encoder_data(
         df_good, ["pid", "probe_insertion", "probe_insertion_id", "insertion_id"]
     )
 
-    # Remove known misaligned probes before waveform / ACG loading
+    # Remove the excluded (by default, known misaligned) probes before waveform / ACG loading
     try:
-        from ephysatlas.fixtures import misaligned_pids
+        if exclude_pids is None:
+            from ephysatlas.fixtures import misaligned_pids as exclude_pids
 
-        misaligned_set = set(map(str, misaligned_pids))
-        aligned_mask = ~df_good[pid_col].astype(str).isin(misaligned_set).to_numpy()
+        excluded = set(map(str, exclude_pids))
+        keep = ~df_good[pid_col].astype(str).isin(excluded).to_numpy()
 
         n_before = len(df_good)
-        good_pos = good_pos[aligned_mask]
-        df_good = df_good.iloc[np.flatnonzero(aligned_mask)].copy()
+        good_pos = good_pos[keep]
+        df_good = df_good.iloc[np.flatnonzero(keep)].copy()
 
         print(
-            f"Removed misaligned pids: {n_before - len(df_good):,} units removed; {len(df_good):,} units remain."
+            f"Removed excluded pids: {n_before - len(df_good):,} units removed; {len(df_good):,} units remain."
         )
     except Exception as exc:
-        print(f"WARNING: could not apply misaligned_pids filter: {exc}")
+        print(f"WARNING: could not apply the exclude_pids filter: {exc}")
 
     atlas_col = _first_existing_column(
         df_good, ["atlas_id", "atlas_id_final", "allen_id", "ccf_id"]
