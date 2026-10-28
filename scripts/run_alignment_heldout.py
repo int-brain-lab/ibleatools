@@ -73,6 +73,12 @@ def main():
         help="unit-level model: Hub repo id or local release directory",
     )
     parser.add_argument("--unit-revision", default=UNIT_MODEL_REVISION)
+    parser.add_argument(
+        "--unit-prepared-data",
+        type=Path,
+        default=None,
+        help="prepared unit data of the unit-level model (default: its Config.prepared_data_dir)",
+    )
     parser.add_argument("--figures", action="store_true", default=SAVE_FIGURES)
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument(
@@ -101,6 +107,7 @@ def main():
             channel_repo_id=args.channel_model,
             unit_repo_id=args.unit_model,
             unit_revision=args.unit_revision,
+            unit_prepared_data_dir=args.unit_prepared_data,
             save_figures=args.figures,
             overwrite=args.overwrite,
             limit=args.limit,

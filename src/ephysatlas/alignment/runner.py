@@ -48,6 +48,8 @@ class RunSettings:
         channel_revision: Hub tag of the channel-level model (ignored for a local release dir).
         channel_repo_id, unit_repo_id: Released models (Hub repo ids or local release dirs).
         unit_revision: Tag of the unit-level model on the Hub (ignored for a local release dir).
+        unit_prepared_data_dir: Prepared unit data of the unit-level model (None: the unit
+            model's default ``Config.prepared_data_dir``).
         save_results: Write each result's ``.npz``.
         save_figures: Draw each result's figure (slower).
         overwrite: Recompute rows already in the CSV.
@@ -65,6 +67,7 @@ class RunSettings:
     channel_repo_id: str = CHANNEL_MODEL_REPO_ID
     unit_repo_id: str = UNIT_MODEL_REPO_ID
     unit_revision: str = UNIT_MODEL_REVISION
+    unit_prepared_data_dir: Optional[Path] = None
     save_results: bool = True
     save_figures: bool = False
     overwrite: bool = False
@@ -121,7 +124,7 @@ def run_alignments(
     done = set() if settings.overwrite else _done(csv_path)
 
     print(
-        f"[alignment] loading models {settings.channel_repo_id}@{settings.vintage} ..."
+        f"[alignment] loading models {settings.channel_repo_id}@{settings.channel_revision} ..."
     )
     channel_model = ChannelModel(settings.channel_repo_id, settings.channel_revision)
     unit_model = None
@@ -129,7 +132,11 @@ def run_alignments(
         print(
             f"[alignment] loading {settings.unit_repo_id}@{settings.unit_revision} and its unit data ..."
         )
-        unit_model = UnitModel.load(settings.unit_repo_id, settings.unit_revision)
+        unit_model = UnitModel.load(
+            settings.unit_repo_id,
+            settings.unit_revision,
+            prepared_data_dir=settings.unit_prepared_data_dir,
+        )
     dataset = ChannelDataset.load(settings.vintage, exclude_pids=settings.exclude_pids)
     brain_atlas = AllenAtlas()
     traces = HistologyTraces()
