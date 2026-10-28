@@ -15,6 +15,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 - The data loaders leave out the insertions the automatic QC marks bad by default (`pid_qc_filter.excluded_pids()`; for the unit loader, those bad for their alignment, AP band or waveforms), instead of the hand-curated `ephysatlas.fixtures.misaligned_pids`, which is kept for reference
 - The alignment code and the docs default to the `2026_W44` releases of `ea-encoder-channel` and `ea-encoder-unit` (`alignment.CHANNEL_MODEL_REVISION`, `UNIT_MODEL_REVISION`), trained without the insertions the QC marks bad at L3; the feature release stays `VINTAGE = "2026_W42"`, and `ChannelModel.vintage` gives the feature release of a loaded model. The offline alignment outputs go to `heldout_<model tag>` and `dataset_<model tag>`
+- Alignment scores are medians: the runner's summary (`alignment.runner.summarize`), its log line and the titles of `alignment.plotting.plot_alignment_result` give the channel distance of a probe as the median distance of its channels (`median_distance_um`), summarized by the median over probes, and the ephys-only fit chooses the likelihood temperature by the median over the validation probes of that distance (`alignment.ephys_only_fit.temperature_table`, which now reports medians). For the 2026_W44 fit the chosen temperature is unchanged (T = 40)
 
 ## [0.12.0] - 2026-10-27
 

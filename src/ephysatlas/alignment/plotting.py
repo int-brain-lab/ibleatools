@@ -514,7 +514,7 @@ def plot_alignment_result(
         for key, fmt in (
             ("cosmos_acc", "Cosmos {:.0%}"),
             ("beryl_acc", "Beryl {:.0%}"),
-            ("mean_distance_um", "distance {:.0f} µm"),
+            ("median_distance_um", "distance {:.0f} µm"),
             ("cosmos_acc_high_conf", "high-confidence Cosmos {:.0%}"),
         ):
             if key in metrics and np.isfinite(metrics[key]):
