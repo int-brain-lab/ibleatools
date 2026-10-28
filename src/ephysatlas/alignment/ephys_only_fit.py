@@ -556,7 +556,7 @@ def fit_localizer(
     if dataset is None:
         report(progress, 0.0, "Loading the channel features")
         dataset = ChannelDataset.load(
-            getattr(localizer.channel_model, "revision", VINTAGE)
+            getattr(localizer.channel_model, "vintage", VINTAGE)
         )
     stage = fit_residual_and_prior(
         localizer, dataset, sub_progress(progress, 0.0, 0.25)
