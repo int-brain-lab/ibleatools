@@ -201,7 +201,7 @@ Once the channels have positions, the spatial encoder says what a channel at eac
 is either unusual tissue or still misplaced:
 
 ```python
-encoder = load_pretrained("int-brain-lab/ea-encoder-channel", revision="2026_W42")
+encoder = load_pretrained("int-brain-lab/ea-encoder-channel", revision="2026_W44")
 expected = encoder.predict_xyz(result.channel_xyz, pids=pid)   # (384, 43), metres in
 ```
 

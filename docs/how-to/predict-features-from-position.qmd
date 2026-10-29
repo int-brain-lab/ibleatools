@@ -21,7 +21,7 @@ their nominal anatomy.
 from ephysatlas import load_pretrained
 
 encoder = load_pretrained(
-    "int-brain-lab/ea-encoder-channel", revision="2026_W42"
+    "int-brain-lab/ea-encoder-channel", revision="2026_W44"
 )
 
 print(encoder.index["task"])            # spatial-encoding
@@ -184,7 +184,7 @@ predictions do not depend on the global NumPy seed. Two runs give identical numb
 
 ```python
 encoder = load_pretrained(
-    "int-brain-lab/ea-encoder-channel", revision="2026_W42", device="cuda"
+    "int-brain-lab/ea-encoder-channel", revision="2026_W44", device="cuda"
 )
 
 pred = encoder.predict(df_channels, batch_size=4096)
