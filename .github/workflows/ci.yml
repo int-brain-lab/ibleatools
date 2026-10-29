@@ -6,6 +6,9 @@ on:
   # No branches filter: run on PRs against any base, including stacked PRs
   # whose base isn't main/develop.
   pull_request:
+  schedule:
+    # Every Monday at 06:00 UTC on main:
+    - cron: "0 6 * * 1"
 
 
 jobs:
@@ -19,8 +22,12 @@ jobs:
       - uses: actions/checkout@v4
       
       - name: Install uv
-        uses: astral-sh/setup-uv@v3
-        
+        # setup-uv publishes no major-version tags (v10) since v8, only full versions.
+        uses: astral-sh/setup-uv@v10.3.0
+        with:
+          # setup-uv v10 enables it by default.
+          enable-cache: false
+
       - name: Set up Python ${{ matrix.python-version }}
         run: uv python install ${{ matrix.python-version }}
         
@@ -33,9 +40,23 @@ jobs:
           uv run ruff check
           uv run ruff format --check .
           
+      # The tests load the Allen atlas at 25 and 50 um. Download it once here: the
+      # parallel test workers would otherwise download the same files at the same time,
+      - name: Download the Allen atlas
+        run: uv run python -c "from iblatlas.atlas import AllenAtlas; AllenAtlas(res_um=25); AllenAtlas(res_um=50)"
+
       - name: Run tests with coverage
+        env:
+          # Python 3.12+: trace with sys.monitoring, which has less overhead than the
+          # default tracer. It does not support branch coverage on 3.12, which
+          # [tool.coverage.run] in pyproject.toml does not enable.
+          COVERAGE_CORE: sysmon
         run: |
-          uv run coverage run -m unittest discover -s tests -v
+          # -n logical: one worker per logical CPU; --dist loadfile: each test file runs whole
+          # on one worker, so setUpModule/setUpClass run once per file. --cov-report= leaves
+          # only .coverage, which the two lines below turn into the reports. -rs lists the
+          # skipped tests with their reasons, --durations=15 the slowest tests.
+          uv run pytest tests -n logical --dist loadfile --cov --cov-report= -rs --durations=15
           uv run coverage xml
           uv run coverage report
           

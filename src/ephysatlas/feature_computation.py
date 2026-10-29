@@ -81,12 +81,6 @@ def add_target_coordinates(pid=None, one=None, channels=None, traj_dict=None):
           histology tracks in the Allen frame, and each is read in its own frame. A traj_dict
           passed by the caller carries no provenance and is treated as a Needles one.
     """
-    # Initialize atlas objects for coordinate transformations
-    needles = NeedlesAtlas()
-    allen = AllenAtlas()
-    # Compute the brain surface for the needles atlas
-    needles.compute_surface()
-
     # Validate input combinations and retrieve trajectory data
     if pid is not None and one is not None:
         # Mode 1: Using Alyx database to retrieve trajectory information
@@ -132,6 +126,10 @@ def add_target_coordinates(pid=None, one=None, channels=None, traj_dict=None):
     # the caller's traj_dict, tilting it again on every subsequent call.
     traj = dict(traj)
 
+    # Initialize the Allen atlas, used by both frames below. Atlases take a couple of
+    # seconds to load, so this happens only once the inputs are known to be valid.
+    allen = AllenAtlas()
+
     if traj.get("provenance") == "Histology track":
         # A histology track is already in the Allen coordinate system (Alyx stores it with
         # coordinate_system "IBL-Allen"), so it takes neither the pitch correction nor the
@@ -143,6 +141,10 @@ def add_target_coordinates(pid=None, one=None, channels=None, traj_dict=None):
     else:
         # Planned and micro-manipulator trajectories are in the in-vivo Needles frame
         # ("Needles-Allen"), as is a caller-supplied traj_dict, which carries no provenance.
+        # Only this frame needs the needles atlas and its brain surface.
+        needles = NeedlesAtlas()
+        needles.compute_surface()
+
         # Apply the pitch correction by using iblatlas.atlas.tilt_spherical()
         # This corrects for the -5 degree tilt of the probe during insertion
         new_theta, new_phi = iblatlas.atlas.tilt_spherical(

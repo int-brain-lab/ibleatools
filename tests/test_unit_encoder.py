@@ -9,7 +9,8 @@ assign contract, the top-down hierarchy, determinism and the selftest -- not lea
 
 In its own file with a setUpModule guard: the wrapper pulls in torch, which segfaults on macOS
 arm64 if xgboost is already imported in the same process. The guard is macOS arm64-only -- Linux
-CI runs the whole suite in a single `unittest discover` process and does not segfault.
+CI runs the suite with pytest-xdist, whose worker processes each import several test files, and
+does not segfault.
 """
 
 import platform

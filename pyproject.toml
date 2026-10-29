@@ -123,7 +123,9 @@ docs = [
 lint = ["ruff>=0.7.3"]
 test = [
     "coverage",       # CI runs `uv run coverage ...` directly (declare it explicitly)
+    "pytest",         # CI runs the suite with pytest (declare it explicitly)
     "pytest-cov>=4.0.0",
+    "pytest-xdist",   # `pytest -n auto`: spread the test files over worker processes
     "coveralls",
 ]
 
