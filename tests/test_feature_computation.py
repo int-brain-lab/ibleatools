@@ -3,6 +3,7 @@ import numpy as np
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
+from unittest import mock
 import pandas as pd
 
 from iblatlas.atlas import AllenAtlas, Insertion
@@ -57,6 +58,17 @@ class TestFeatureComputation(unittest.TestCase):
         """Test add_target_coordinates with only one provided"""
         with self.assertRaises(ValueError):
             add_target_coordinates(one="test_one")
+
+    def test_add_target_coordinates_errors_before_loading_atlases(self):
+        """Invalid arguments raise before the (slow) atlases are loaded"""
+        with (
+            mock.patch("ephysatlas.feature_computation.AllenAtlas") as allen,
+            mock.patch("ephysatlas.feature_computation.NeedlesAtlas") as needles,
+        ):
+            with self.assertRaises(ValueError):
+                add_target_coordinates()
+        allen.assert_not_called()
+        needles.assert_not_called()
 
     def test_add_target_coordinates_valid_trajectory(self):
         """Test add_target_coordinates with valid trajectory dictionary"""

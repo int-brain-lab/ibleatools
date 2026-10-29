@@ -5,6 +5,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+- `add_target_coordinates` checks its arguments before loading the atlases, so invalid calls raise at once instead of after ~2 s, and it loads `NeedlesAtlas` (and its surface) only for Needles-frame trajectories, not for histology tracks
+- CI: coverage traces with `sys.monitoring` (`COVERAGE_CORE=sysmon`), and `astral-sh/setup-uv` is bumped from v3 to v10.3.0 (from v8 on, the action publishes no major-version tags such as `v10`) with its uv cache turned off (v10 enables it by default; with the CUDA torch wheels it is ~3.3 GB and took ~2 min to save, against a ~35 s fresh install). The tests run with `pytest -n logical --dist loadfile` (pytest-xdist, added with `pytest` to the `test` group) instead of `unittest discover`, one worker per logical CPU (`-n auto` counts physical cores and started 2 workers on the 4-vCPU runner), after a step that downloads the Allen atlas once so the parallel workers do not download it at the same time. The tests also run every Monday on `main`, against the newest dependency releases
+- `tests/test_aggregate.py`: the check that `compute_aggregated_features` leaves no temporary files behind now runs in a private temp directory, so files written to the system temp dir by other processes cannot fail it
+- `CONTRIBUTING.md`: the "Release process" heading was in French
+
+### Removed
+- `examples/drafts/` (`aggregation_example.py`, `visualisation.py`): unfinished scripts with hardcoded local paths; `visualisation.py` called `AtlasReveal.figure_02_classifier_results` with a `filename` argument it does not take
+- `examples/inference_region_predictor_gradient_boosting.py`: replaced by `examples/inference_region_classifier_public.py`, which loads a published model with `load_pretrained`. It read an old-format local model folder through `infer_regions`, which now reads only the manifest fold layout
+
 ## [0.12.0] - 2026-10-27
 
 ### Added

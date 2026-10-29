@@ -5,6 +5,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 import pandas as pd
@@ -117,10 +118,15 @@ class TestCheckSnippetOverlap(unittest.TestCase):
 
 class TestComputeAggregatedFeatures(unittest.TestCase):
     def test_one_row_per_channel_and_no_files_left(self):
-        before = set(Path(tempfile.gettempdir()).iterdir())
         windows = _windows([1, 7, 13])
-        df = compute_aggregated_features(_calculator(), windows, _options())
-        self.assertEqual(set(Path(tempfile.gettempdir()).iterdir()) - before, set())
+        # Point tempfile at a private directory, so that files other processes write to
+        # the system temp dir meanwhile (e.g. parallel test workers) cannot fail the check.
+        with (
+            tempfile.TemporaryDirectory() as private_tmp,
+            mock.patch.object(tempfile, "tempdir", private_tmp),
+        ):
+            df = compute_aggregated_features(_calculator(), windows, _options())
+            self.assertEqual(list(Path(private_tmp).iterdir()), [])
         self.assertEqual(df.index.names, ["pid", "channel"])
         self.assertEqual(len(df), N_CH)
         self.assertEqual(df.index.get_level_values("pid").unique().tolist(), ["pid00"])

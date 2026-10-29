@@ -1,6 +1,6 @@
 # Contribution Guide
 
-## Processus de mise en production
+## Release process
 
 The main branch is the trunk and features branches are squashed merge after a successful Pull request.
 
