@@ -213,6 +213,7 @@ your browser.
 | [Cells features](how-to/load-cells-features.qmd) | The per-unit aggregates: cell tables, autocorrelograms, waveforms, stPC, stLFP |
 | [Compressed LFP](how-to/load-lfp-features.qmd) | The whole-recording LFP of every insertion, from lfpack archives |
 | [Encoding volumes](how-to/load-encoding-volume.qmd) | Features on a whole-brain voxel grid of the Allen CCF |
+| [Leave out flagged insertions](how-to/exclude-flagged-insertions.qmd) | The automatic QC labels of every insertion, and the `exclude_pids` of the loaders |
 | **Visualise** | |
 | [Gallery](visualise/index.qmd) | Every figure of the site, with the page that draws it |
 | [Features along the probe](visualise/features-along-probe.qmd) | How features vary with depth, beside the brain regions |

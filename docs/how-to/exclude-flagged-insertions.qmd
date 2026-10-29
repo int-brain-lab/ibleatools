@@ -1,0 +1,90 @@
+---
+title: "How to leave out the insertions the QC flags"
+---
+
+Some IBL insertions should not be used to train or evaluate a model: the probe is not where
+its alignment places it, or a band of the recording is broken. `ephysatlas.qc` checks every
+insertion of a feature release automatically and labels it per component. The labels ship
+with the package as `ephysatlas.fixtures.pid_qc_filter`; reading them needs no account and
+no data.
+
+## The labels
+
+Each insertion gets one label per component, `good`, `review` or `bad`:
+
+| Component | Bad when |
+|---|---|
+| `alignment` | the recording is more typical somewhere else (another depth along the probe, the other probe's track in a two-probe session), or both its LF and its spike band are unusual for where it is placed |
+| `lf` | the LF band alone is unusual for where the probe is placed, or its signal is unusual anywhere |
+| `ap` | the AP band (not the LF) is unusual for where the probe is placed, or its signal is unusual anywhere, including a fifth of the channels dead or noisy |
+| `waveform` | the AP band is bad, the waveforms are unusual anywhere, or the spike band (not the LF) is unusual for where the probe is placed |
+
+*Unusual for where the probe is placed* compares the recording with what the other probes
+record within 300 µm of the same positions, never with a model's prediction. Only the data
+decide: no model, no auto-alignment and no manual label enters the QC.
+
+```python
+from ephysatlas.fixtures import pid_qc_filter
+
+pid_qc_filter.VINTAGE, pid_qc_filter.LEVEL   # ('2026_W42', 'L3')
+pid_qc_filter.qc_labels("0228bcfd-632e-49bd-acd4-c334cf9213e9")
+# {'alignment': 'bad', 'lf': 'good', 'ap': 'bad', 'waveform': 'bad',
+#  'checks': 'wf_outlier;ap_signal;depth;swap'}
+```
+
+`checks` lists the failure cases that fired; their definitions are
+`ephysatlas.qc.levels.TESTS`. Unlisted insertions are good on every component.
+
+## Leave them out of a dataset
+
+`excluded_pids` returns the insertions bad on any of the components you name:
+
+```python
+from ephysatlas.fixtures import pid_qc_filter
+
+channel_bad = pid_qc_filter.excluded_pids()   # any component: 175 of 1,049 for 2026_W42
+unit_bad = pid_qc_filter.excluded_pids(("alignment", "ap", "waveform"))   # 147
+cautious = pid_qc_filter.excluded_pids(include_review=True)   # also those to review: 244
+```
+
+Pass the list as `exclude_pids` to the loaders:
+
+```python
+from ephysatlas.spatial_encoder.utils import LoadInsertionData
+
+pids, features, xyz, planned_xyz = LoadInsertionData(
+    VINTAGE="2026_W42", exclude_pids=pid_qc_filter.excluded_pids()
+)
+```
+
+`alignment.ChannelDataset.load` and
+`unit_level_encoder.prepare_data.prepare_latest_cells_encoder_data` take the same argument.
+
+::: {.callout-note}
+## The default is unchanged
+
+Without `exclude_pids`, the loaders still leave out `ephysatlas.fixtures.misaligned_pids`, the
+hand-curated list the published `2026_W42` models were trained without. `exclude_pids`
+*replaces* that list: insertions on it that the QC clears are kept. An empty list keeps every
+insertion.
+:::
+
+## Levels
+
+The QC has five nested levels of sensitivity, from L1 (one failure case beyond 3 robust SDs;
+3.5% of the 2026_W42 insertions bad) to L5 (one beyond 2.5 SDs, or two beyond 1 SD; 33%). The
+fixture is written at **L3**: an insertion is bad when one failure case is beyond 2.5 robust SDs
+or two are beyond 1.5 (17% of the insertions), and *review* when it is bad only at L4 (two
+beyond 1.25). Retraining the channel-level model without the insertions bad at each level
+changed its held-out accuracy by no more than the variability between trainings at any level;
+L3 catches more of the problems planted in random insertions than L2 at no measurable cost.
+
+To rebuild the filter, or write it at another level (the measurements are cached, and only
+the last stage runs):
+
+```bash
+python scripts/build_pid_qc_filter.py --stages levels --level L3 --write-fixture
+```
+
+The first run measures every insertion of the release (hours). It needs the release's
+features only, and Alyx once for the session of each insertion; see the script's docstring.

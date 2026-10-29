@@ -44,6 +44,8 @@ website:
             file: how-to/load-lfp-features.qmd
           - text: "Encoding volumes"
             file: how-to/load-encoding-volume.qmd
+          - text: "Leave out the insertions the QC flags"
+            file: how-to/exclude-flagged-insertions.qmd
       - text: "Visualise"
         menu:
           - text: "Gallery"
@@ -225,6 +227,25 @@ quartodoc:
         - alignment.plot_alignment_result
         - alignment.ChannelModel
         - alignment.UnitModel
+    - title: "Insertion quality control"
+      desc: "Flag the insertions whose recording does not fit where they are placed, or whose signal is broken."
+      contents:
+        - fixtures.pid_qc_filter.excluded_pids
+        - fixtures.pid_qc_filter.qc_labels
+        - qc.levels.calibrate
+        - qc.levels.zscores
+        - qc.levels.all_levels
+        - qc.levels.level_table
+        - qc.levels.detection
+        - qc.levels.Level
+        - qc.modelfree.LocalReference
+        - qc.modelfree.depth_scan
+        - qc.modelfree.swap_gain
+        - qc.pipeline.QCSettings
+        - qc.pipeline.fake_sources
+        - qc.pipeline.stage_levels
+        - qc.cases.render_examples
+        - qc.fixture.write_fixture
     - title: "Cells"
       desc: "Per-unit features: coupling, autocorrelograms, burstiness."
       contents:
