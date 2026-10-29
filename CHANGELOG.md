@@ -10,9 +10,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `ephysatlas.fixtures.pid_qc_filter`: the QC labels of the 1,049 insertions of 2026_W42 at level L3 (bad when one failure case is beyond 2.5 SD, or two beyond 1.5 SD): 175 bad (100 alignment, 28 LF only, 23 AP and/or waveform, 24 several bands) and 69 to review (bad at L4 only), with `excluded_pids(components, include_review)` and `qc_labels(pid)`
 - `spatial_encoder.utils.LoadInsertionData`, `alignment.ChannelDataset.load` and `unit_level_encoder.prepare_data.prepare_latest_cells_encoder_data` take `exclude_pids`, the insertions to leave out, and `alignment.runner.RunSettings` passes it on. An empty list keeps every insertion
 - Documentation: *How to leave out the insertions the QC flags* (`docs/how-to/exclude-flagged-insertions.qmd`) and an API section for `ephysatlas.qc`
+- `alignment.runner.RunSettings.unit_prepared_data_dir` and `scripts/run_alignment_heldout.py --unit-prepared-data`: the prepared unit data of the unit-level model used for the unit evidence (default: its `Config.prepared_data_dir`); `--channel-revision` for the channel-level model's Hub tag
 
 ### Changed
 - The data loaders leave out the insertions the automatic QC marks bad by default (`pid_qc_filter.excluded_pids()`; for the unit loader, those bad for their alignment, AP band or waveforms), instead of the hand-curated `ephysatlas.fixtures.misaligned_pids`, which is kept for reference
+- The alignment code and the docs default to the `2026_W44` releases of `ea-encoder-channel` and `ea-encoder-unit` (`alignment.CHANNEL_MODEL_REVISION`, `UNIT_MODEL_REVISION`), trained without the insertions the QC marks bad at L3; the feature release stays `VINTAGE = "2026_W42"`, and `ChannelModel.vintage` gives the feature release of a loaded model. The offline alignment outputs go to `heldout_<model tag>` and `dataset_<model tag>`
 
 ## [0.12.0] - 2026-10-27
 

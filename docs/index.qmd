@@ -167,8 +167,8 @@ Full walkthrough in the [tutorial](tutorials/first-predictions.qmd).
 |---|---|---|---|
 | [`int-brain-lab/ea-decoder-channel-xgboost`](https://huggingface.co/int-brain-lab/ea-decoder-channel-xgboost) | Region decoder | Brain region per channel, from features | `2026_W42` |
 | [`int-brain-lab/ea-decoder-channel-transformer`](https://huggingface.co/int-brain-lab/ea-decoder-channel-transformer) | Whole-probe region decoder | Brain region per channel, from a whole probe's features | `2026_W42` |
-| [`int-brain-lab/ea-encoder-channel`](https://huggingface.co/int-brain-lab/ea-encoder-channel) | Spatial encoder | Features per channel, from position | `2026_W42` |
-| [`int-brain-lab/ea-encoder-unit`](https://huggingface.co/int-brain-lab/ea-encoder-unit) | Unit encoder | Unit phenotypes and cell-type composition, from position | `2026_W42` |
+| [`int-brain-lab/ea-encoder-channel`](https://huggingface.co/int-brain-lab/ea-encoder-channel) | Spatial encoder | Features per channel, from position | `2026_W44` |
+| [`int-brain-lab/ea-encoder-unit`](https://huggingface.co/int-brain-lab/ea-encoder-unit) | Unit encoder | Unit phenotypes and cell-type composition, from position | `2026_W44` |
 
 All four load through the same call, [`load_pretrained`](api/load_pretrained.qmd). The
 encoders also drive probe alignment —

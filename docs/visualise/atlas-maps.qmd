@@ -43,7 +43,7 @@ import ephysatlas.plots
 from ephysatlas import load_pretrained
 
 ba = AllenAtlas(res_um=25)   # downloads the Allen volumes on first use
-encoder = load_pretrained("int-brain-lab/ea-encoder-channel", revision="2026_W42")
+encoder = load_pretrained("int-brain-lab/ea-encoder-channel", revision="2026_W44")
 
 # Every 4th voxel (100 µm) of the coronal plane at AP = -2 mm, inside the brain
 fig, axs = ephysatlas.plots.figure_encoder_coronal(

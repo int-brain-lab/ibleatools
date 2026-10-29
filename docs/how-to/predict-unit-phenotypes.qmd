@@ -19,7 +19,7 @@ How the model is built is described in [model families](../explanation/model-fam
 ```python
 from ephysatlas import load_pretrained
 
-unit = load_pretrained("int-brain-lab/ea-encoder-unit", revision="2026_W42")
+unit = load_pretrained("int-brain-lab/ea-encoder-unit", revision="2026_W44")
 
 print(unit.index["task"])                # unit-encoding
 print(unit.index["model_class"])         # UnitAutoencoder
