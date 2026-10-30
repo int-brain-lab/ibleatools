@@ -1,0 +1,81 @@
+---
+title: "How to extract raw snippets to send to the IBL"
+---
+
+This guide is for labs that share Neuropixels recordings with the IBL. The recordings are too
+large to move, so you run one command per probe. It reads your SpikeGLX recording, keeps five
+short snippets of the raw AP and LF data, adds the probe geometry and (optionally) your
+histology, and writes one `.h5` file that you send to us. Nothing is filtered or otherwise
+processed, so we can try different analyses without asking you for more data.
+
+## Prerequisites
+
+- Python 3.12 or newer
+- A SpikeGLX recording of the probe: the `.ap.bin` or `.ap.cbin` file with its `.meta` file
+  next to it. The `.lf.bin` / `.lf.cbin` file is used when it is next to the AP file.
+- Supported probes: Neuropixels 1.0, 3A and 2.x (including four-shank 2.4). Neuropixels 2
+  records no separate LF band, so only the wideband data is stored and we compute LF
+  ourselves. If your probe type is not supported, the command stops and says so; please tell
+  us the probe type.
+
+## Install
+
+```bash
+pip install git+https://github.com/int-brain-lab/ibleatools@<tag>
+```
+
+Use the tag we gave you in place of `<tag>`. This installs ibleatools and its dependencies,
+which is a large install.
+
+## Extract the snippets
+
+Run the command once per probe:
+
+```bash
+ibleatools-snippets /data/probe00/run_g0_t0.imec0.ap.cbin \
+    -o /data/to_send/VF066_2025-12-04_probe00.h5 \
+    --histology /data/VF066/alf/probe00/channel_locations.json /data/VF066/alf/probe00/xyz_picks.json \
+    --trajectory 2243 -2000 -200 4000 15 180
+```
+
+- `-o` is the file to write. Name it so that you can tell the subject, date and probe apart;
+  the command refuses to overwrite an existing file.
+- `--histology` is optional. List the files or folders of this probe's histology, for example
+  `channel_locations.json`, `xyz_picks.json` or the tracing CSVs. They are copied as they are.
+  Only small per-probe files are accepted: the total is limited to 100 MB, so whole-brain
+  image volumes are rejected.
+- `--trajectory` is optional (the numbers above are only an example). It is the planned insertion, six numbers: `x y z depth theta phi`.
+  Use the IBL Alyx convention: `x`, `y`, `z` in um relative to bregma (`x` is mediolateral,
+  right positive; `y` is anterior-posterior, anterior positive; `z` is dorsoventral, dorsal
+  positive), `depth` in um along the probe, `theta` (from straight up) and `phi` (from the +x
+  axis) in degrees. If your lab uses other conventions, convert the numbers first.
+
+By default the command takes 5 snippets of 5 s, spread over the recording and leaving out the
+first and last 5 minutes. Options for other cases:
+
+| Option | Meaning |
+|---|---|
+| `--t-starts 600 900` | Snippet start times in seconds, instead of automatic ones |
+| `--n-snippets`, `--duration` | Number and length (s) of the automatic snippets |
+| `--margin` | Seconds skipped at each end; lower it for recordings shorter than about 10 minutes |
+
+`ibleatools-snippets --help` lists everything.
+
+If a run fails, the command prints the reason and exits with a non-zero code, so a script
+that loops over probes can check the exit code.
+
+## What the file holds
+
+- The raw AP and LF samples of each snippet, compressed without loss, with the gains to
+  convert them to volts.
+- The probe geometry, each channel's shank, the original `.meta` text, and the start time of
+  each snippet in your recording.
+- The histology files and the trajectory, if you passed them.
+
+The SpikeGLX sync channel is not included. A Neuropixels 1.0 probe gives about 0.23 GB per
+file with the defaults (5 snippets of 5 s).
+
+## Send us the files
+
+Send us the `.h5` files, for example zipped together. One file is written per probe, so
+repeat the command for each probe of each session.

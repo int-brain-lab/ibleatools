@@ -18,6 +18,8 @@ website:
           - text: "--- Compute features on your data ---"
           - text: "SpikeGLX AP/LF files"
             file: how-to/compute-features-spikeglx.qmd
+          - text: "Extract snippets to send to the IBL"
+            file: how-to/extract-snippets.qmd
           - text: "NWB recordings"
             file: how-to/compute-features-nwb.qmd
           - text: "SpikeInterface Zarr stores"
@@ -127,7 +129,12 @@ quartodoc:
         - feature_calculators.IBLPIDFeatureCalculator
         - feature_calculators.LFPackFeatureCalculator
         - feature_calculators.NumpyArrayFeatureCalculator
+        - feature_calculators.SnippetFileFeatureCalculator
         - feature_calculators.BaseFeatureCalculator
+    - title: "Snippet extraction"
+      desc: "Pack raw snippets of one SpikeGLX probe recording into a small HDF5 file."
+      contents:
+        - snippet_extractor.extract_snippets
     - title: "Computation options"
       desc: "The typed parameters accepted by every calculator."
       contents:

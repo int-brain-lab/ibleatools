@@ -5,6 +5,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- `ephysatlas.snippet_extractor.extract_snippets` and the `ibleatools-snippets` command: for partner labs, they write the raw AP and LF snippets of one SpikeGLX probe (NP1.0, 3A, NP2.x), its geometry and `.meta`, and optionally small histology files and a planned trajectory, to one HDF5 file (gzip level 4 with shuffle, about 0.23 GB per NP1 probe with 5 snippets of 5 s). The how-to is `docs/how-to/extract-snippets.qmd`, the example `examples/snippet_extraction_example.py`
+- `SnippetFileFeatureCalculator` in `ephysatlas.feature_calculators`: computes features from such a file, one calculator per shank for multi-shank probes, and derives the LF band from the wideband data for NP2
+
 ## [0.12.0] - 2026-10-27
 
 ### Added
