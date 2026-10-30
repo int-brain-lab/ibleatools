@@ -25,6 +25,8 @@ LFPackFeatureCalculator
     Calculator for an lfpack-compressed LF archive.
 NumpyArrayFeatureCalculator
     Calculator for an LF array already held in memory.
+SnippetFileFeatureCalculator
+    Calculator for an HDF5 snippet file written by ``ephysatlas.snippet_extractor``.
 
 Examples
 --------
@@ -60,6 +62,7 @@ from .ibl import IBLPIDFeatureCalculator
 from .lfpack import LFPackFeatureCalculator
 from .numpy_array import NumpyArrayFeatureCalculator
 from .nwb import NwbFeatureCalculator, NwbSource
+from .snippet_file import SnippetFileFeatureCalculator
 from .spikeglx import SpikeGLXFileFeatureCalculator
 from .spikeglx_like import SpikeGlxLikeFeatureCalculator
 from .spikeinterface_like import SpikeInterfaceFeatureCalculator
@@ -92,6 +95,7 @@ __all__ = [
     "NwbFeatureCalculator",
     "NwbSource",
     "RawSnippet",
+    "SnippetFileFeatureCalculator",
     "SnippetWindow",
     "SpikeGLXFileFeatureCalculator",
     "SpikeGlxLikeFeatureCalculator",
