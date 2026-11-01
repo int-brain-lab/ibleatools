@@ -47,6 +47,25 @@ class TestTrilinearContext(unittest.TestCase):
         self.assertEqual(self.sample(0.5), (0.0, 0.0))
 
 
+class TestReleaseOptions(unittest.TestCase):
+    def encoder(self, **prediction):
+        encoder = object.__new__(SpatialEncoder)
+        encoder.config = dict(prediction=prediction) if prediction else {}
+        return encoder
+
+    def test_a_release_without_options_predicts_as_it_was_published(self):
+        self.assertEqual(self.encoder().prediction_options(), (False, 0))
+
+    def test_a_release_gives_its_options(self):
+        encoder = self.encoder(trilinear_context=True, neighbour_draws=4)
+        self.assertEqual(encoder.prediction_options(), (True, 4))
+
+    def test_the_caller_overrides_the_release(self):
+        encoder = self.encoder(trilinear_context=True, neighbour_draws=4)
+        self.assertEqual(encoder.prediction_options(False, 0), (False, 0))
+        self.assertEqual(encoder.prediction_options(None, 2), (True, 2))
+
+
 class TestNeighbourDraws(unittest.TestCase):
     def setUp(self):
         n = 40

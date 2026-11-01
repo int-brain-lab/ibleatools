@@ -207,15 +207,17 @@ class ContextAtlasManager:
             "allen_ix": self.allen_idx[yi, xi, zi].astype(np.int32),
         }
 
-    def sample_context_trilinear_m(self, xyz_m: np.ndarray, mode="clip"):
+    def sample_context_trilinear_m(self, xyz_m: np.ndarray, mode="clip", mirror=True):
         """The context interpolated between the 8 voxels around each position.
 
         :meth:`sample_context_numpy_m` takes the nearest voxel of the 200 µm grid. Here empty
         voxels are left out and the weights renormalised, so the brain's edge is not pulled to
-        zero; a position with 8 empty voxels stays zero.
+        zero; a position with 8 empty voxels stays zero. ``mirror`` folds positions onto the left
+        hemisphere, as the model was trained.
         """
         xyz_m = xyz_m.copy()
-        xyz_m[:, 0] = -np.abs(xyz_m[:, 0])  # mirror to left
+        if mirror:
+            xyz_m[:, 0] = -np.abs(xyz_m[:, 0])
         grid = self.bc.xyz2i(xyz_m.astype(np.float64), round=False, mode=mode) / 8.0
         _, n_x, n_z, n_y = self.cell_pca.shape
         limits = np.array([n_x, n_y, n_z]) - 1

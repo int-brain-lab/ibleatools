@@ -22,8 +22,8 @@ UNIT_MODEL_REPO_ID = "int-brain-lab/ea-encoder-unit"
 # trained on the automatic split of every 2026_W42 insertion, without those the QC marks bad
 # (ephysatlas.fixtures.pid_qc_filter).
 VINTAGE = "2026_W42"
-CHANNEL_MODEL_REVISION = "2026_W44"
-UNIT_MODEL_REVISION = "2026_W44"
+CHANNEL_MODEL_REVISION = "2026_W45"
+UNIT_MODEL_REVISION = "2026_W45"
 
 
 def default_device() -> str:
@@ -39,8 +39,8 @@ class ChannelModel:
         repo_id (str, optional): Hugging Face repo id or a local release directory.
         revision (str, optional): Release tag.
         device (str, optional): Torch device; auto-detected when None.
-        trilinear_context, neighbour_draws: How the model predicts, see
-            :meth:`~ephysatlas.models.encoder_inpainting.SpatialEncoder.predict_xyz`.
+        trilinear_context, neighbour_draws: How the model predicts; by default, what the release
+            says. See :meth:`~ephysatlas.models.encoder_inpainting.SpatialEncoder.predict_xyz`.
     """
 
     predict_options: dict = {}
@@ -51,8 +51,8 @@ class ChannelModel:
         revision: str = CHANNEL_MODEL_REVISION,
         device: Optional[str] = None,
         *,
-        trilinear_context: bool = False,
-        neighbour_draws: int = 0,
+        trilinear_context: Optional[bool] = None,
+        neighbour_draws: Optional[int] = None,
     ):
         from ephysatlas import load_pretrained
 

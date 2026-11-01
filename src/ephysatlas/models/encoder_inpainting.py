@@ -15,6 +15,7 @@ module scope, and the two runtimes segfault together on macOS arm64.
 
 import logging
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -526,6 +527,23 @@ class SpatialEncoder:
                 mask[i, :taken] = True
         return e_n, p_n, mask
 
+    def prediction_options(
+        self,
+        trilinear_context: Optional[bool] = None,
+        neighbour_draws: Optional[int] = None,
+    ) -> tuple[bool, int]:
+        """``(trilinear_context, neighbour_draws)`` of a prediction: those given, else the release's.
+
+        A release records them in ``config.prediction``; a release without that block predicts from
+        the nearest voxel and the nearest neighbours, as it did when it was published.
+        """
+        release = self.config.get("prediction") or {}
+        if trilinear_context is None:
+            trilinear_context = release.get("trilinear_context", False)
+        if neighbour_draws is None:
+            neighbour_draws = release.get("neighbour_draws", 0)
+        return bool(trilinear_context), int(neighbour_draws)
+
     def _neighbour_draws(self, xyz_m: np.ndarray, pids: np.ndarray, draws: int):
         """Random neighbour sets for each query position, as the model was trained on.
 
@@ -570,8 +588,8 @@ class SpatialEncoder:
         df,
         batch_size: int = 1024,
         *,
-        trilinear_context: bool = False,
-        neighbour_draws: int = 0,
+        trilinear_context: Optional[bool] = None,
+        neighbour_draws: Optional[int] = None,
     ) -> pd.DataFrame:
         """Predict electrophysiological features for each channel position.
 
@@ -628,8 +646,8 @@ class SpatialEncoder:
         batch_size: int = 1024,
         standardized: bool = False,
         *,
-        trilinear_context: bool = False,
-        neighbour_draws: int = 0,
+        trilinear_context: Optional[bool] = None,
+        neighbour_draws: Optional[int] = None,
     ) -> np.ndarray:
         """Predict the features at an array of positions (the array form of :meth:`predict`).
 
@@ -642,10 +660,12 @@ class SpatialEncoder:
             standardized (bool, optional): Return the model's standardised output instead of
                 feature units.
             trilinear_context (bool, optional): Interpolate the context between the voxels of its
-                200 µm grid, instead of taking the nearest voxel.
+                200 µm grid, instead of taking the nearest voxel. By default, what the release
+                says (:meth:`prediction_options`).
             neighbour_draws (int, optional): Average this many random neighbour sets, as the
                 model was trained on (reproducible; 4 draws take about twice as long on one probe),
-                instead of the nearest ``m_max`` neighbours. 0 keeps the nearest.
+                instead of the nearest ``m_max`` neighbours. 0 keeps the nearest. By default, what
+                the release says.
 
         Returns:
             np.ndarray: ``[N, n_features]`` float32 predictions, in ``outputs.columns`` order.
@@ -662,6 +682,9 @@ class SpatialEncoder:
         if pids is None or isinstance(pids, str):
             pids = np.full(xyz.shape[0], "" if pids is None else pids)
         pids = np.asarray(pids).astype(str)
+        trilinear_context, neighbour_draws = self.prediction_options(
+            trilinear_context, neighbour_draws
+        )
         ctx = self._standardised_context(xyz, trilinear=trilinear_context)
         neighbours = (
             self._neighbour_draws(xyz, pids, neighbour_draws)
