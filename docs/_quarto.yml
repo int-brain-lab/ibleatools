@@ -242,7 +242,7 @@ quartodoc:
         - qc.regions.bin_probe
         - qc.measures.band_scores
         - qc.measures.scan
-        - qc.measures.swap_gain
+        - qc.measures.swap_gains
         - qc.pipeline.QCSettings
         - qc.pipeline.fake_sources
         - qc.pipeline.stage_levels
