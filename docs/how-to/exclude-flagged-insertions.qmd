@@ -14,26 +14,26 @@ Each insertion gets one label per component, `good`, `review` or `bad`:
 
 | Component | Bad when |
 |---|---|
-| `alignment` | the recording is more typical somewhere else (another depth along the probe, the other probe's track in a two-probe session), or both its LF and its spike band are unusual for where it is placed |
-| `lf` | the LF band alone is unusual for where the probe is placed, or its signal is unusual anywhere |
-| `ap` | the AP band (not the LF) is unusual for where the probe is placed, or its signal is unusual anywhere, including a fifth of the channels dead or noisy |
-| `waveform` | the AP band is bad, the waveforms are unusual anywhere, or the spike band (not the LF) is unusual for where the probe is placed |
+| `alignment` | the recording is more typical somewhere else: deeper or shallower along the probe, sideways, or on the track of the session's other probe |
+| `lf` | the LF band is unusual for the brain regions the probe is in |
+| `ap` | the AP band is unusual for those regions, or a fifth of the channels are dead or noisy |
+| `waveform` | the AP band is bad, or the waveforms are unusual for those regions |
 
-*Unusual for where the probe is placed* compares the recording with what the other probes
-record within 300 µm of the same positions, never with a model's prediction. Only the data
-decide: no model, no auto-alignment and no manual label enters the QC.
+*Unusual for the brain regions* compares the recording with what the other insertions record
+in the same regions, in MADs of each feature in each region, never with a model's prediction.
+Only the data decide: no model, no auto-alignment and no manual label enters the QC.
 
 ```python
 from ephysatlas.fixtures import pid_qc_filter
 
 pid_qc_filter.VINTAGE, pid_qc_filter.LEVEL   # ('2026_W42', 'L3')
-pid_qc_filter.qc_labels("0228bcfd-632e-49bd-acd4-c334cf9213e9")
-# {'alignment': 'bad', 'lf': 'good', 'ap': 'bad', 'waveform': 'bad',
-#  'checks': 'wf_outlier;ap_signal;depth;swap'}
+pid_qc_filter.qc_labels("16ad5eef-3fa6-4c75-9296-29bf40c5cfaa")
+# {'alignment': 'good', 'lf': 'good', 'ap': 'bad', 'waveform': 'bad', 'checks': 'channels'}
 ```
 
-`checks` lists the failure cases that fired; their definitions are
-`ephysatlas.qc.levels.TESTS`. Unlisted insertions are good on every component.
+`checks` lists the tests the insertion fails; their definitions are
+`ephysatlas.qc.levels.TESTS` and `FIXED_TESTS`. Unlisted insertions are good on every
+component.
 
 ## Leave them out of a dataset
 
@@ -42,9 +42,9 @@ pid_qc_filter.qc_labels("0228bcfd-632e-49bd-acd4-c334cf9213e9")
 ```python
 from ephysatlas.fixtures import pid_qc_filter
 
-channel_bad = pid_qc_filter.excluded_pids()   # any component: 175 of 1,049 for 2026_W42
-unit_bad = pid_qc_filter.excluded_pids(("alignment", "ap", "waveform"))   # 147
-cautious = pid_qc_filter.excluded_pids(include_review=True)   # also those to review: 244
+channel_bad = pid_qc_filter.excluded_pids()   # any component: 76 of 1,049 for 2026_W42
+unit_bad = pid_qc_filter.excluded_pids(("alignment", "ap", "waveform"))   # 51
+cautious = pid_qc_filter.excluded_pids(include_review=True)   # also those to review: 100
 ```
 
 Pass the list as `exclude_pids` to the loaders:
@@ -69,15 +69,36 @@ hand-curated list the published `2026_W42` models were trained without. `exclude
 insertion.
 :::
 
+## How an insertion is judged
+
+A probe's channels are reduced to 100 µm depth bins. Each bin's region comes from its position, in
+the finest Allen parcellation that at least eight other insertions cover (cortical layers,
+hippocampal strata), else in Beryl. The reference of a region is the median and the MAD of what the
+other insertions record there, so a bin's residual says how far it is from them, in MADs of that
+feature in that region. The tests come in three groups:
+
+| Group | Tests |
+|---|---|
+| Unusual for its regions | For the LF band, the AP band and the waveforms: the `level` of the band, and its `shape` along the probe, which ignores an offset over the whole probe |
+| More typical elsewhere | The recording fits better up to 1 mm deeper or shallower (`depth`), up to 1 mm sideways (`sideways`), or on the track of the session's other probe (`swap`) |
+| Dead or noisy channels | A fifth of the channels (`channels`) |
+
+Every test but the last two becomes a z-score, `(x - median) / (1.4826 MAD)` over all the
+insertions. `swap` and `channels` have natural limits: nearly every pair of probes fits far worse
+swapped, so a pair that fits better stands out, and a dead channel is dead.
+
 ## Levels
 
-The QC has five nested levels of sensitivity, from L1 (one failure case beyond 3 robust SDs;
-3.5% of the 2026_W42 insertions bad) to L5 (one beyond 2.5 SDs, or two beyond 1 SD; 33%). The
-fixture is written at **L3**: an insertion is bad when one failure case is beyond 2.5 robust SDs
-or two are beyond 1.5 (17% of the insertions), and *review* when it is bad only at L4 (two
-beyond 1.25). Retraining the channel-level model without the insertions bad at each level
-changed its held-out accuracy by no more than the variability between trainings at any level;
-L3 catches more of the problems planted in random insertions than L2 at no measurable cost.
+The QC has five nested levels of sensitivity: an insertion is bad when one z-score is beyond 6
+(L1), 5 (L2), 4.5 (L3), 4 (L4) or 3.5 (L5), or when `swap` or `channels` fails. The fixture is
+written at **L3**, which marks 7% of the 2026_W42 insertions; an insertion is *review* when it is
+bad only at L4.
+
+To see what a level catches, the same problems are planted in 150 random insertions. At L3, 7% of
+those insertions are marked bad as recorded, and with a problem planted: 31% of those moved 1 mm
+sideways, 49% and 31% of those with their LF or AP band replaced, 59% and 41% with noise added to
+it. A 500 µm shift along the probe is the hardest (12%): many insertions as recorded are displaced
+by a few hundred µm already.
 
 To rebuild the filter, or write it at another level (the measurements are cached, and only
 the last stage runs):
@@ -86,5 +107,5 @@ the last stage runs):
 python scripts/build_pid_qc_filter.py --stages levels --level L3 --write-fixture
 ```
 
-The first run measures every insertion of the release (hours). It needs the release's
+The first run measures every insertion of the release (minutes). It needs the release's
 features only, and Alyx once for the session of each insertion; see the script's docstring.

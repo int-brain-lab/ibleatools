@@ -228,7 +228,7 @@ quartodoc:
         - alignment.ChannelModel
         - alignment.UnitModel
     - title: "Insertion quality control"
-      desc: "Flag the insertions whose recording does not fit where they are placed, or whose signal is broken."
+      desc: "Flag the insertions whose recording is unusual for their brain regions, or more typical elsewhere."
       contents:
         - fixtures.pid_qc_filter.excluded_pids
         - fixtures.pid_qc_filter.qc_labels
@@ -238,9 +238,11 @@ quartodoc:
         - qc.levels.level_table
         - qc.levels.detection
         - qc.levels.Level
-        - qc.modelfree.LocalReference
-        - qc.modelfree.depth_scan
-        - qc.modelfree.swap_gain
+        - qc.regions.RegionReference
+        - qc.regions.bin_probe
+        - qc.measures.band_scores
+        - qc.measures.scan
+        - qc.measures.swap_gain
         - qc.pipeline.QCSettings
         - qc.pipeline.fake_sources
         - qc.pipeline.stage_levels
