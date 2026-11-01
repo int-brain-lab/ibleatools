@@ -65,9 +65,9 @@ pids, features, xyz, planned_xyz = LoadInsertionData(
 
 Without `exclude_pids`, the channel loaders leave out the insertions bad on any component,
 `excluded_pids()`, and the unit loader those bad for their alignment, AP band or waveforms,
-`excluded_pids(("alignment", "ap", "waveform"))`. The models released from `2026_W44` on are
-trained this way; `ephysatlas.fixtures.misaligned_pids`, the hand-curated list of earlier
-releases, is kept for reference only. An empty list keeps every insertion.
+`excluded_pids(("alignment", "ap", "waveform"))`. The `2026_W44` models were trained this way, with
+an earlier version of the QC; `ephysatlas.fixtures.misaligned_pids`, the hand-curated list of
+earlier releases, is kept for reference only. An empty list keeps every insertion.
 :::
 
 ## How an insertion is judged
