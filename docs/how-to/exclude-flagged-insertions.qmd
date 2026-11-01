@@ -42,9 +42,9 @@ component.
 ```python
 from ephysatlas.fixtures import pid_qc_filter
 
-channel_bad = pid_qc_filter.excluded_pids()   # any component: 75 of 1,049 for 2026_W42
-unit_bad = pid_qc_filter.excluded_pids(("alignment", "ap", "waveform"))   # 48
-cautious = pid_qc_filter.excluded_pids(include_review=True)   # also those to review: 98
+channel_bad = pid_qc_filter.excluded_pids()   # any component: 79 of 1,049 for 2026_W42
+unit_bad = pid_qc_filter.excluded_pids(("alignment", "ap", "waveform"))   # 59
+cautious = pid_qc_filter.excluded_pids(include_review=True)   # also those to review: 106
 ```
 
 Pass the list as `exclude_pids` to the loaders:
@@ -89,15 +89,16 @@ swapped, so a pair that fits better stands out, and a dead channel is dead.
 
 ## Levels
 
-The QC has five nested levels of sensitivity: an insertion is bad when one z-score is beyond 6
-(L1), 5 (L2), 4.5 (L3), 4 (L4) or 3.5 (L5), or when `swap` or `channels` fails. The fixture is
-written at **L3**, which marks 7% of the 2026_W42 insertions; an insertion is *review* when it is
-bad only at L4.
+The QC has five nested levels of sensitivity: an insertion is bad when a band test is beyond 7, 6,
+5, 4.5 or 4 (L1 to L5), `depth` or `sideways` beyond 5, 4, 3.5, 3 or 2.5, or when `swap` or
+`channels` fails. The position tests have their own limit because their z-scores have short tails.
+The fixture is written at **L3**, which marks 8% of the 2026_W42 insertions; an insertion is
+*review* when it is bad only at L4.
 
-To see what a level catches, the same problems are planted in 150 random insertions. At L3, 7% of
-those insertions are marked bad as recorded, and with a problem planted: 30% of those moved 1 mm
-sideways, 48% and 31% of those with their LF or AP band replaced, 57% and 39% with noise added to
-it. A 500 µm shift along the probe is the hardest (14%): many insertions as recorded are displaced
+To see what a level catches, the same problems are planted in 150 random insertions. At L3, 9% of
+those insertions are marked bad as recorded, and with a problem planted: 37% of those moved 1 mm
+sideways, 41% and 29% of those with their LF or AP band replaced, 49% and 35% with noise added to
+it. A 500 µm shift along the probe is the hardest (23%): many insertions as recorded are displaced
 by a few hundred µm already.
 
 To rebuild the filter, or write it at another level (the measurements are cached, and only

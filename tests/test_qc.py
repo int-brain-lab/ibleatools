@@ -230,12 +230,13 @@ class TestLevels(unittest.TestCase):
 
     def test_the_ladder(self):
         """A test just beyond each limit marks the probe from that level on."""
-        cal = self.cal["lf_level"]
-        for level in levels.LEVELS:
-            x = cal["median"] + (level.k + 0.1) * cal["sd"]
-            t = self.table(with_problem(self.df, "p000", lf_level=x))
-            self.assertEqual(t.loc["p000", "first_level"], level.name)
-            self.assertTrue(t.loc["p000", f"{level.name}_bad"])
+        for test, limit in (("lf_level", "k"), ("depth", "k_position")):
+            cal = self.cal[test]
+            for level in levels.LEVELS:
+                x = cal["median"] + (getattr(level, limit) + 0.1) * cal["sd"]
+                t = self.table(with_problem(self.df, "p000", **{test: x}))
+                self.assertEqual(t.loc["p000", "first_level"], level.name)
+                self.assertEqual(t.loc["p000", f"{level.name}_failed"], test)
 
     def test_levels_are_nested(self):
         t = self.table(measurements(seed=1).assign(depth=lambda d: d["depth"] * 2))
@@ -348,7 +349,7 @@ class TestFixture(unittest.TestCase):
         for pid, test in (("p000", "lf_level"), ("p001", "depth")):
             df.loc[pid, test] = cal[test]["median"] + 9 * cal[test]["sd"]
         df.loc["p002", "ap_shape"] = (
-            cal["ap_shape"]["median"] + 4.2 * cal["ap_shape"]["sd"]
+            cal["ap_shape"]["median"] + 4.7 * cal["ap_shape"]["sd"]
         )  # bad at L4 only
         cls.table = levels.level_table(df, cal)
         with tempfile.TemporaryDirectory() as tmp:

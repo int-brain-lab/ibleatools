@@ -18,9 +18,11 @@ selection made by hand.
 probe, without any label or split. The tests of :data:`FIXED_TESTS` have a natural limit and need no
 calibration: nearly every pair of probes fits far worse swapped, and a dead channel is dead.
 
-**Levels** (:data:`LEVELS`). A probe is *bad* at a level when any test of :data:`TESTS` is beyond the
-level's limit ``k``, or any test of :data:`FIXED_TESTS` fails. It is *review* when it is bad at the
-next level only. The levels are nested. What is bad: **alignment** when the depth, the sideways or
+**Levels** (:data:`LEVELS`). A probe is *bad* at a level when a band test is beyond the level's limit
+``k``, a position test (:data:`POSITION_TESTS`) beyond ``k_position``, or a test of
+:data:`FIXED_TESTS` fails. The position tests have their own limit because their z-scores have short
+tails: the same limit would leave them little to say. A probe is *review* when it is bad at the next
+level only. The levels are nested. What is bad: **alignment** when the depth, the sideways or
 the swap test fails; **lf** when an LF test fails; **ap** when an AP test fails or the channels are
 dead or noisy; **waveform** when a waveform test fails, or the AP band is bad.
 
@@ -75,26 +77,28 @@ FIXED_TESTS = {
     ),
 }
 ALL_TESTS = tuple(TESTS) + tuple(FIXED_TESTS)
+POSITION_TESTS = ("depth", "sideways")
 
 
 @dataclass(frozen=True)
 class Level:
-    """Bad when any test of :data:`TESTS` is beyond ``k`` robust SDs."""
+    """Bad when a band test is beyond ``k`` robust SDs or a position test beyond ``k_position``."""
 
     name: str
     k: float
+    k_position: float
 
     @property
     def text(self) -> str:
-        return f"one test beyond {self.k:g} SD"
+        return f"a band test beyond {self.k:g} SD or a position test beyond {self.k_position:g} SD"
 
 
 LEVELS = (
-    Level("L1", 6.0),
-    Level("L2", 5.0),
-    Level("L3", 4.5),
-    Level("L4", 4.0),
-    Level("L5", 3.5),
+    Level("L1", 7.0, 5.0),
+    Level("L2", 6.0, 4.0),
+    Level("L3", 5.0, 3.5),
+    Level("L4", 4.5, 3.0),
+    Level("L5", 4.0, 2.5),
 )
 
 
@@ -127,9 +131,12 @@ def zscores(df: pd.DataFrame, cal: dict) -> pd.DataFrame:
     )
 
 
-def failures(df: pd.DataFrame, z: pd.DataFrame, k: float) -> pd.DataFrame:
-    """Boolean table of the tests beyond ``k`` SDs and of the fixed tests."""
-    fail = z[list(TESTS)].gt(k)
+def failures(df: pd.DataFrame, z: pd.DataFrame, level: Level) -> pd.DataFrame:
+    """Boolean table of the tests beyond their limit at ``level`` and of the fixed tests."""
+    limits = pd.Series(
+        {t: level.k_position if t in POSITION_TESTS else level.k for t in TESTS}
+    )
+    fail = z[list(TESTS)].gt(limits)
     for test, (_, _, column, limit, _) in FIXED_TESTS.items():
         fail[test] = _col(df, column).gt(limit)
     return fail.fillna(False).astype(bool)
@@ -137,7 +144,7 @@ def failures(df: pd.DataFrame, z: pd.DataFrame, k: float) -> pd.DataFrame:
 
 def label(df: pd.DataFrame, z: pd.DataFrame, level: Level) -> pd.DataFrame:
     """Failed tests, whether each component is bad, and the bad type, at one level."""
-    fail = failures(df, z, level.k)
+    fail = failures(df, z, level)
     component = {t: spec[1] for t, spec in TESTS.items()}
     component.update({t: spec[1] for t, spec in FIXED_TESTS.items()})
     points_to = {
