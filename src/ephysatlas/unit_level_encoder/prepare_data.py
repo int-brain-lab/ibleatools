@@ -4,6 +4,7 @@ import shutil
 from pathlib import Path
 from typing import Iterable
 
+import ibldsp.waveforms
 import neuropixel
 import numpy as np
 import pandas as pd
@@ -551,19 +552,46 @@ def _extract_reference_waveform_features(
     rec, rec_src = col("recovery_slope")
     rep, rep_src = col("repolarisation_slope")
     tip_val, tip_val_src = col("tip_val")
-    peak_val, peak_val_src = col("peak_val")
-    trough_val, trough_val_src = col("trough_val")
-    t_peak, t_peak_src = secs("peak")
-    t_trough, t_trough_src = secs("trough")
-    t_tip, t_tip_src = secs("tip")
+    shape_names = (
+        "spike_width_secs",
+        "predepolarisation_width_secs",
+        "spike_amplitude",
+        "peak_to_trough_ratio_log",
+    )
+    if all(c in df_units.columns for c in shape_names):
+        # Tables remapped with ibldsp.waveforms.remap_waveform_shape_features already hold them
+        shape = {c: col(c) for c in shape_names}
+    else:
+        peak_val, peak_val_src = col("peak_val")
+        trough_val, trough_val_src = col("trough_val")
+        t_peak, t_peak_src = secs("peak")
+        t_trough, t_trough_src = secs("trough")
+        t_tip, t_tip_src = secs("tip")
+        with np.errstate(divide="ignore", invalid="ignore"):
+            raw = ibldsp.waveforms.waveform_shape_features(
+                t_peak, t_trough, t_tip, peak_val, trough_val
+            )
+        shape = {
+            "spike_width_secs": (raw["spike_width"], f"{t_trough_src} - {t_peak_src}"),
+            "predepolarisation_width_secs": (
+                raw["predepolarisation_width"],
+                f"{t_peak_src} - {t_tip_src}",
+            ),
+            "spike_amplitude": (
+                raw["spike_amplitude"],
+                f"{trough_val_src} - {peak_val_src}",
+            ),
+            "peak_to_trough_ratio_log": (
+                raw["peak_to_trough_ratio_log"],
+                f"log|{peak_val_src} / {trough_val_src}|",
+            ),
+        }
     if "polarity" in df_units.columns:
         polarity, polarity_src = col("polarity")
     else:
         # Current IBL tables expose invert_sign_peak (minus the sign of peak_val) instead.
         invert, _ = col("invert_sign_peak")
         polarity, polarity_src = -invert, "-invert_sign_peak"
-    with np.errstate(divide="ignore", invalid="ignore"):
-        ratio_log = np.log(np.abs(peak_val / trough_val))
 
     columns = {
         "depolarisation_slope": (dep, dep_src),
@@ -571,16 +599,7 @@ def _extract_reference_waveform_features(
         "repolarisation_slope": (rep, rep_src),
         "spatial_spread_um": (np.full(n, np.nan), "multichannel waveform"),
         "tip_val": (tip_val, tip_val_src),
-        "spike_width_secs": (t_trough - t_peak, f"{t_trough_src} - {t_peak_src}"),
-        "predepolarisation_width_secs": (t_peak - t_tip, f"{t_peak_src} - {t_tip_src}"),
-        "spike_amplitude": (
-            trough_val - peak_val,
-            f"{trough_val_src} - {peak_val_src}",
-        ),
-        "peak_to_trough_ratio_log": (
-            ratio_log,
-            f"log|{peak_val_src} / {trough_val_src}|",
-        ),
+        **{c: shape[c] for c in shape_names},
         "polarity": (polarity, polarity_src),
     }
     if tuple(columns) != tuple(WAVEFORM_FEATURE_NAMES):

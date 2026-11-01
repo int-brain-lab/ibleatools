@@ -296,5 +296,38 @@ class TestModelSpaceFeatureCache(unittest.TestCase):
             model_space_waveform_features(self._data(["a", "b"]), self.cfg)
 
 
+class TestReferenceWaveformFeaturesFromRemappedTable(unittest.TestCase):
+    """A cluster table remapped by ibldsp gives the same reference features as the raw one."""
+
+    def test_remapped_table_matches_raw_table(self):
+        import pandas as pd
+        from ibldsp.waveforms import remap_waveform_shape_features
+
+        from ephysatlas.unit_level_encoder.prepare_data import (
+            _extract_reference_waveform_features,
+        )
+
+        raw = pd.DataFrame(
+            {
+                "peak_time_idx": [42, 30],
+                "trough_time_idx": [48, 40],
+                "tip_time_idx": [37, 28],
+                "recovery_time_idx": [53, 45],
+                "peak_val": [-1.8e-4, -2e-4],
+                "trough_val": [3.5e-5, 4e-5],
+                "tip_val": [3e-5, 1e-5],
+                "invert_sign_peak": [1.0, 1.0],
+                "depolarisation_slope": [-1.2, -1.0],
+                "repolarisation_slope": [1.0, 0.9],
+                "recovery_slope": [-0.04, -0.03],
+            }
+        )
+        out_raw = _extract_reference_waveform_features(raw)[0]
+        out_remap = _extract_reference_waveform_features(
+            remap_waveform_shape_features(raw)
+        )[0]
+        np.testing.assert_allclose(out_raw, out_remap, rtol=1e-6)
+
+
 if __name__ == "__main__":
     unittest.main()
