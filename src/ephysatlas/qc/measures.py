@@ -1,14 +1,15 @@
-"""What the insertion QC measures on a probe, from its residuals against the region references.
+"""What the insertion QC measures on a probe, from its recording and the region references.
 
 - :func:`band_scores` -- is a band unusual for its regions? ``level``: how far the band is from what
   the other probes record in the same regions; ``shape``: the same after removing each feature's
   offset over the whole probe, so that it sees what changes along the probe (a band broken on part of
   the probe, noise) and not a probe-wide offset. Medians over the band's features and over the bins,
   so that one noisy feature or a few odd bins do not flag a band;
-- :func:`scan` -- would the recording be more typical elsewhere: deeper or shallower along the probe,
-  or sideways? A move changes the bins near region borders only, so the scan uses means over the
-  bins and the features (of residuals clipped at ``COST_CLIP``), not medians;
-- :func:`swap_gain` -- would the two probes of a session fit better on each other's tracks?
+- :func:`fit` -- how well does the recording follow, along the probe, the profile expected from the
+  regions it crosses? One measure for all the tests of position, which ask whether the recording
+  would follow better somewhere else: :func:`scan`, deeper or shallower along the probe, or sideways;
+  :class:`TrackProfiles`, on the tracks of the other insertions; :func:`swap_gains`, on another
+  track of the same mouse.
 
 Positions are in metres, ``[B, 3]``, in row order (top of the probe first).
 """
@@ -19,8 +20,7 @@ import numpy as np
 
 from .regions import BAD_CHANNEL_LABELS, parcel_labels
 
-COST_CLIP = 3.0  # MADs: a bin's cost
-SHIFTS_UM = (-1000.0, -750.0, -500.0, -250.0, 250.0, 500.0, 750.0, 1000.0)
+SHIFTS_UM = tuple(float(d) for d in np.arange(-2000, 2001, 250) if d != 0)
 SIDEWAYS_UM = (
     -1000.0,
     -500.0,
@@ -56,21 +56,31 @@ def band_scores(residuals: np.ndarray, bands: dict) -> dict:
     return out
 
 
-def bin_cost(residuals: np.ndarray) -> np.ndarray:
-    """``[B]`` mean over the features of the clipped ``|residual|`` (NaN without a reference)."""
-    a = np.minimum(np.abs(residuals), COST_CLIP)
-    with np.errstate(all="ignore"):
-        n = np.isfinite(a).sum(axis=1)
-        return np.where(n > 0, np.nansum(a, axis=1) / np.maximum(n, 1), np.nan)
+def fit(z: np.ndarray, expected: np.ndarray, bands: dict) -> tuple[float, int]:
+    """How well a recording ``z`` follows the ``expected`` profile (both ``[B, F]``): the correlation
+    over the bins of each feature, averaged over each band's features and then over the bands, so that
+    a band with many features counts once. Offsets do not matter, only the shape along the probe.
+
+    Returns:
+        tuple: the fit, NaN below ``MIN_SCAN_BINS`` scored bins, and the number of those bins.
+    """
+    scored = np.isfinite(expected).all(axis=1) & np.isfinite(z).all(axis=1)
+    if scored.sum() < MIN_SCAN_BINS:
+        return np.nan, int(scored.sum())
+    a = z[scored] - z[scored].mean(axis=0)
+    b = expected[scored] - expected[scored].mean(axis=0)
+    r = (a * b).sum(axis=0) / np.sqrt((a * a).sum(axis=0) * (b * b).sum(axis=0) + 1e-12)
+    return float(np.mean([r[cols].mean() for cols in bands.values()])), int(
+        scored.sum()
+    )
 
 
-def gain(here: np.ndarray, there: np.ndarray) -> float:
-    """How much lower the cost ``there`` is than ``here`` (``[B]`` per bin, mean over the bins scored
-    at both); NaN when too few of the bins scored ``here`` stay scored ``there``."""
-    valid = np.isfinite(here) & np.isfinite(there)
-    if valid.sum() < max(MIN_KEEP * np.isfinite(here).sum(), MIN_SCAN_BINS):
+def gain(here: tuple, there: tuple) -> float:
+    """How much better the fit is ``there`` than ``here`` (:func:`fit`); NaN when too few of the bins
+    scored ``here`` stay scored ``there``."""
+    if not there[1] >= max(MIN_KEEP * here[1], MIN_SCAN_BINS):
         return np.nan
-    return float(np.mean(here[valid] - there[valid]))
+    return there[0] - here[0]
 
 
 def probe_axis(xyz: np.ndarray) -> np.ndarray:
@@ -95,27 +105,24 @@ def moved_positions(xyz: np.ndarray) -> dict:
 
 
 def scan(
-    reference, brain_atlas, z: np.ndarray, xyz: np.ndarray, probe: int
+    reference, brain_atlas, z: np.ndarray, xyz: np.ndarray, probe: int, bands: dict
 ) -> tuple[dict, dict]:
-    """How much more typical a probe is elsewhere.
+    """How much better a probe follows its regions elsewhere.
 
     Returns:
         tuple: ``summary`` -- ``depth`` and ``sideways``, the largest gain over the moves of each
         scan (:func:`gain`; positive when somewhere else fits better), and ``depth_best``,
         ``sideways_best``, that move (µm); ``profile`` -- ``{scan: [(µm, gain)]}``.
     """
-    here = bin_cost(reference.residuals(z, parcel_labels(xyz, brain_atlas), [probe]))
+
+    def at(positions):
+        labels = parcel_labels(positions, brain_atlas)
+        return fit(z, reference.expected(labels, [probe])[0], bands)
+
+    here = at(xyz)
     summary, profile = {}, {}
     for name, moves in moved_positions(xyz).items():
-        gains = [
-            gain(
-                here,
-                bin_cost(
-                    reference.residuals(z, parcel_labels(pos, brain_atlas), [probe])
-                ),
-            )
-            for _, pos in moves
-        ]
+        gains = [gain(here, at(pos)) for _, pos in moves]
         profile[name] = [(d, g) for (d, _), g in zip(moves, gains)]
         ok = np.isfinite(gains)
         k = int(np.nanargmax(gains)) if ok.any() else None
@@ -124,29 +131,71 @@ def scan(
     return summary, profile
 
 
-def swap_gain(
-    reference,
-    brain_atlas,
-    a: tuple,
-    b: tuple,
-    exclude,
-) -> float:
-    """How much better two probes fit on each other's tracks than on their own (positive when the
-    swap fits better). ``a``, ``b``: ``(z, xyz)``; ``exclude``: the probes left out of the
-    reference."""
+class TrackProfiles:
+    """What is expected along every recorded track, to tell whether a recording follows its own
+    track better than the tracks of the other insertions. Nothing to calibrate: a track that changes
+    little along the probe fits no better than the others, and the rank says so.
+
+    Args:
+        expected: ``[N, B, F]`` expected profile of each track (NaN where a bin is not scored).
+        bands: ``{band: feature columns}``.
+    """
+
+    def __init__(self, expected: np.ndarray, bands: dict):
+        self.scored = np.isfinite(expected).all(axis=2)
+        centred = expected - np.nanmean(expected, axis=1, keepdims=True)
+        self.centred = np.nan_to_num(centred).astype(np.float32)
+        self.norm = (self.centred**2).sum(axis=1)
+        self.bands = list(bands.values())
+
+    def fits(self, z: np.ndarray, exclude=()) -> np.ndarray:
+        """``[N]`` :func:`fit` of the recording ``z`` on every track (NaN on the tracks ``exclude``
+        and on those with too few bins in common with it)."""
+        ok = np.isfinite(z).all(axis=1)
+        out = np.full(len(self.centred), np.nan)
+        if ok.sum() < MIN_SCAN_BINS:
+            return out
+        a = z - z[ok].mean(axis=0)
+        a[~ok] = 0.0
+        r = np.einsum("bf,nbf->nf", a, self.centred)
+        r = r / np.sqrt((a * a).sum(axis=0)[None] * self.norm + 1e-9)
+        means = np.mean([r[:, cols].mean(axis=1) for cols in self.bands], axis=0)
+        common = self.scored[:, ok].sum(axis=1) >= MIN_SCAN_BINS
+        common[list(exclude)] = False
+        out[common] = means[common]
+        return out
+
+    def rank(self, z: np.ndarray, own: float, exclude=()) -> float:
+        """The share of the other tracks the recording ``z`` follows at least as well as its own,
+        whose fit is ``own``: small for a recording that belongs where it is. ``exclude``: the probes
+        whose track is not compared."""
+        fits = self.fits(z, exclude)
+        fits = fits[np.isfinite(fits)]
+        return float((fits >= own).mean()) if len(fits) and np.isfinite(own) else np.nan
+
+
+def swap_gains(
+    reference, brain_atlas, a: tuple, b: tuple, exclude, bands: dict
+) -> tuple[float, float]:
+    """How much better each of two probes follows the track of the other than its own (positive when
+    it does). ``a``, ``b``: ``(z, xyz)``; ``exclude``: the probes left out of the reference."""
     labels = {id(p): parcel_labels(p[1], brain_atlas) for p in (a, b)}
 
-    def cost(src, track):
-        c = bin_cost(reference.residuals(src[0], labels[id(track)], exclude))
-        return np.mean(c[np.isfinite(c)]) if np.isfinite(c).any() else np.nan
+    def on(src, track):
+        return fit(src[0], reference.expected(labels[id(track)], exclude)[0], bands)[0]
 
-    return float(cost(a, a) + cost(b, b) - cost(a, b) - cost(b, a))
+    return on(a, b) - on(a, a), on(b, a) - on(b, b)
 
 
 def measure_probe(
-    reference, brain_atlas, z, xyz, probe: int, bands: dict
+    reference, brain_atlas, z, xyz, probe: int, bands: dict, tracks: TrackProfiles
 ) -> tuple[dict, dict]:
-    """Everything measured on one probe, real or planted: :func:`band_scores` and :func:`scan`."""
-    e = reference.residuals(z, parcel_labels(xyz, brain_atlas), [probe])
-    summary, profile = scan(reference, brain_atlas, z, xyz, probe)
-    return {**band_scores(e, bands), **summary}, profile
+    """Everything measured on one probe, real or planted: :func:`band_scores`, :func:`fit`,
+    :func:`scan` and its rank among the tracks (:meth:`TrackProfiles.rank`)."""
+    labels = parcel_labels(xyz, brain_atlas)
+    median, spread = reference.expected(labels, [probe])
+    own = fit(z, median, bands)[0]
+    summary, profile = scan(reference, brain_atlas, z, xyz, probe, bands)
+    rec = {**band_scores((z - median) / spread, bands), "fit": own, **summary}
+    rec["track_rank"] = tracks.rank(z, own, [probe])
+    return rec, profile

@@ -6,8 +6,8 @@ of the insertions (``planted``), the z-scores and the five levels (``levels``) a
 figures (``examples``). Stages are cached in ``~/ephys-atlas/results/qc/<vintage>/``; ``measures``
 and ``planted`` take minutes, ``levels`` only reads them and takes seconds.
 
-Needs the release's features only (``ea_active/<vintage>/agg_full``), and Alyx once for the session
-of each insertion (cached in ``sessions.csv``). No model and no auto-alignment.
+Needs the release's features only (``ea_active/<vintage>/agg_full``), and Alyx once for the mouse
+of each insertion (cached in ``mice.csv``). No model and no auto-alignment.
 
 Usage::
 
@@ -47,7 +47,7 @@ def main():
     if stages & {"measures", "planted", "examples"}:
         from iblatlas.atlas import AllenAtlas
 
-        from ephysatlas.qc.data import QCDataset, insertion_sessions
+        from ephysatlas.qc.data import QCDataset, insertion_mice
         from ephysatlas.qc.regions import bin_dataset
 
         (s.out_dir / "settings.json").write_text(json.dumps(s.dump(), indent=1))
@@ -57,8 +57,8 @@ def main():
         bins = bin_dataset(ds)
         reference = qp.build_reference(bins, ba)
     if stages & {"measures", "planted"}:
-        sessions = insertion_sessions(ds.pids, cache=s.out_dir / "sessions.csv")
-        pairs = qp.session_pairs(ds, s, sessions)
+        mice = insertion_mice(ds.pids, cache=s.out_dir / "mice.csv")
+        pairs = qp.mouse_pairs(ds, s, mice)
     if "measures" in stages:
         qp.stage_measures(ds, bins, s, ba, reference, pairs)
     if "planted" in stages:

@@ -130,13 +130,16 @@ class TestMeasures(unittest.TestCase):
     def setUpClass(cls):
         cls.z, cls.xyz, cls.ref = dataset()
         cls.rng = np.random.default_rng(3)
+        expected = [cls.ref.expected(parcel_labels(x, Atlas))[0] for x in cls.xyz]
+        cls.tracks = measures.TrackProfiles(np.stack(expected), BANDS)
         cls.base, _ = measures.measure_probe(
-            cls.ref, Atlas, cls.z[0], cls.xyz[0], 0, BANDS
+            cls.ref, Atlas, cls.z[0], cls.xyz[0], 0, BANDS, cls.tracks
         )
 
     def scores(self, z, xyz=None, probe=0):
+        xyz = self.xyz[0] if xyz is None else xyz
         return measures.measure_probe(
-            self.ref, Atlas, z, self.xyz[0] if xyz is None else xyz, probe, BANDS
+            self.ref, Atlas, z, xyz, probe, BANDS, self.tracks
         )[0]
 
     def test_an_offset_of_a_band_raises_its_level_not_its_shape(self):
@@ -166,11 +169,39 @@ class TestMeasures(unittest.TestCase):
         out = measures.band_scores(e, band)
         self.assertEqual((out["lf_level"], out["lf_shape"]), (0.0, 0.0))
 
+    def test_a_recording_follows_the_profile_of_its_regions(self):
+        self.assertGreater(self.base["fit"], 0.9)
+        moved = self.xyz[0] + np.array([0.0, 0.0, -1000e-6])
+        self.assertLess(self.scores(self.z[0], moved)["fit"], 0.5)
+
+    def test_an_offset_does_not_change_the_fit(self):
+        z = self.z[0] + 5.0
+        self.assertAlmostEqual(self.scores(z)["fit"], self.base["fit"], places=4)
+
+    def test_each_band_counts_once_in_the_fit(self):
+        a = np.arange(N_BINS, dtype=float)[:, None] * np.ones((1, 3))
+        b = a.copy()
+        b[:, 2] = -b[:, 2]
+        out = measures.fit(a, b, {"many": [0, 1], "one": [2]})[0]
+        self.assertAlmostEqual(out, 0.0, places=6)
+
+    def test_too_few_bins_have_no_fit(self):
+        expected = self.z[0].copy()
+        expected[measures.MIN_SCAN_BINS - 1 :] = np.nan
+        out, n = measures.fit(self.z[0], expected, BANDS)
+        self.assertTrue(np.isnan(out))
+        self.assertEqual(n, measures.MIN_SCAN_BINS - 1)
+
     def test_the_depth_scan_finds_a_moved_probe(self):
         moved = self.xyz[0] + np.array([0.0, 0.0, -500e-6])  # said to be 500 µm deeper
         s = self.scores(self.z[0], moved)
         self.assertGreater(s["depth"], 10 * max(self.base["depth"], 0.01))
         self.assertEqual(s["depth_best"], -500.0)  # it fits 500 µm shallower
+
+    def test_the_depth_scan_reaches_two_millimetres(self):
+        self.assertEqual(max(measures.SHIFTS_UM), 2000.0)
+        moved = self.xyz[0] + np.array([0.0, 0.0, -1750e-6])
+        self.assertEqual(self.scores(self.z[0], moved)["depth_best"], -1750.0)
 
     def test_the_sideways_scan_finds_a_moved_probe(self):
         moved = self.xyz[0] + np.array([1e-3, 0.0, 0.0])
@@ -183,17 +214,32 @@ class TestMeasures(unittest.TestCase):
         self.assertLess(self.base["sideways"], 0.1)
 
     def test_a_move_out_of_the_brain_does_not_count(self):
-        self.assertTrue(
-            np.isnan(measures.gain(np.ones(20), np.r_[np.ones(9), np.full(11, np.nan)]))
-        )
+        self.assertTrue(np.isnan(measures.gain((0.1, 20), (0.9, 9))))
+        self.assertAlmostEqual(measures.gain((0.1, 20), (0.9, 10)), 0.8)
 
-    def test_swap_gain(self):
+    def test_a_recording_follows_its_own_track_better_than_the_others(self):
+        self.assertLess(
+            self.base["track_rank"], 0.4
+        )  # only the tracks of its own column
+
+    def test_a_recording_on_the_wrong_track_ranks_low(self):
+        moved = self.xyz[0] + np.array([0.0, 0.0, -1000e-6])
+        self.assertGreater(self.scores(self.z[0], moved)["track_rank"], 0.5)
+
+    def test_the_tracks_left_out_are_not_compared(self):
+        fits = self.tracks.fits(self.z[0], [0, 1])
+        self.assertTrue(np.isnan(fits[:2]).all())
+        self.assertTrue(np.isfinite(fits[2:]).all())
+
+    def test_swap_gains(self):
         a, b = (self.z[0], self.xyz[0]), (self.z[20], self.xyz[20])
-        self.assertLess(measures.swap_gain(self.ref, Atlas, a, b, (0, 20)), 0)
+        gains = measures.swap_gains(self.ref, Atlas, a, b, (0, 20), BANDS)
+        self.assertLess(max(gains), 0)
         swapped_a, swapped_b = (self.z[0], self.xyz[20]), (self.z[20], self.xyz[0])
-        self.assertGreater(
-            measures.swap_gain(self.ref, Atlas, swapped_a, swapped_b, (0, 20)), 0
+        gains = measures.swap_gains(
+            self.ref, Atlas, swapped_a, swapped_b, (0, 20), BANDS
         )
+        self.assertGreater(min(gains), 0)
 
     def test_dead_fraction(self):
         self.assertEqual(measures.dead_fraction(np.array([0, 1, 2, 3])), 0.5)
@@ -205,7 +251,8 @@ def measurements(n=400, seed=0) -> pd.DataFrame:
     df = pd.DataFrame(index=pd.Index([f"p{i:03d}" for i in range(n)], name="pid"))
     for test in levels.TESTS:
         df[test] = rng.normal(1.0, 0.1, size=n)
-    df["swap_gain"] = -0.8
+    df["track_rank"] = 0.05
+    df["swap_gain"] = np.nan
     df["dead_fraction"] = 0.0
     return df
 
@@ -296,6 +343,9 @@ class TestLevels(unittest.TestCase):
         df = pd.DataFrame({"swap_gain": [np.nan], "dead_fraction": [0.5]}, index=["p"])
         row = levels.label(df, pd.DataFrame(z, index=["p"]), levels.LEVELS[0]).loc["p"]
         self.assertEqual({c for c in levels.LABELS if row[c]}, {"ap", "waveform"})
+        df = pd.DataFrame({"track_rank": [0.95]}, index=["p"])
+        row = levels.label(df, pd.DataFrame(z, index=["p"]), levels.LEVELS[0]).loc["p"]
+        self.assertEqual({c for c in levels.LABELS if row[c]}, {"alignment"})
 
     def test_groups(self):
         df = with_problem(self.df, "p000", swap_gain=0.5)
@@ -350,23 +400,32 @@ class TestExampleFigures(unittest.TestCase):
         return cases.tests_to_show(t.loc["p000"])
 
     def test_the_fixed_tests_come_first(self):
-        shown = self.shown(swap_gain=0.5, **self.at("lf_level", 9))
-        self.assertEqual(shown, ["swap", "lf_level"])
+        shown = self.shown(swap_gain=0.5, **self.at("depth", 9))
+        self.assertEqual(shown, ["swap", "depth"])
 
-    def test_one_row_per_band_the_strongest(self):
-        shown = self.shown(**self.at("lf_level", 8), **self.at("lf_shape", 12))
-        self.assertEqual(shown, ["lf_shape"])
+    def test_every_figure_shows_the_same_features(self):
+        names = set(cases.FEATURES["lf"] + cases.FEATURES["ap"] + cases.FEATURES["wf"])
+        from ephysatlas.spatial_encoder.utils import FEATURE_GROUPS
 
-    def test_a_position_test_counts_against_its_own_limit(self):
-        shown = self.shown(**self.at("lf_level", 8), **self.at("depth", 6))
-        self.assertEqual(shown, ["depth", "lf_level"])
+        known = {f for group in FEATURE_GROUPS.values() for f in group}
+        self.assertLessEqual(names, known)
+        for band, group in (("lf", "lf"), ("ap", "ap"), ("wf", "waveform")):
+            self.assertLessEqual(set(cases.FEATURES[band]), set(FEATURE_GROUPS[group]))
 
-    def test_at_most_three_rows(self):
+    def test_a_band_that_fails_adds_no_row(self):
+        shown = self.shown(**self.at("lf_level", 9), **self.at("depth", 6))
+        self.assertEqual(shown, ["depth"])
+
+    def test_the_tests_of_position_by_how_far_beyond_their_limits(self):
+        shown = self.shown(track_rank=0.99, **self.at("depth", 5.2))
+        self.assertEqual(shown, ["track", "depth"])
+
+    def test_at_most_two_rows(self):
         shown = self.shown(
             swap_gain=0.5,
             dead_fraction=0.5,
-            **self.at("lf_level", 9),
-            **self.at("ap_level", 9),
+            track_rank=0.95,
+            **self.at("depth", 9),
         )
         self.assertEqual(len(shown), cases.MAX_ROWS)
 
@@ -376,7 +435,7 @@ class TestExampleFigures(unittest.TestCase):
         row = t[t["first_level"].eq("")].iloc[0]
         shown = cases.tests_to_show(row)
         self.assertEqual(len(shown), 1)
-        self.assertIn(shown[0], levels.TESTS)
+        self.assertIn(shown[0], ("depth", "sideways", "track"))
 
 
 class TestPlantedProblems(unittest.TestCase):

@@ -1,5 +1,5 @@
 """Inputs of the insertion quality control: every insertion of a feature release (its recording
-and its human-aligned positions) and the session of each."""
+and its human-aligned positions) and the mouse of each."""
 
 from __future__ import annotations
 
@@ -97,17 +97,17 @@ class QCDataset:
         )
 
 
-def insertion_sessions(
+def insertion_mice(
     pids, cache: Optional[Path] = None, one=None, chunk: int = 50
 ) -> dict:
-    """``{pid: eid}``, the session of each insertion (for the probe swap of two-probe sessions),
-    from Alyx, cached in ``cache`` (a CSV with columns ``pid`` and ``eid``; only the insertions
-    it lacks are queried, ``chunk`` at a time)."""
+    """``{pid: subject}``, the mouse of each insertion (for the swap test), from Alyx, cached in
+    ``cache`` (a CSV with columns ``pid`` and ``subject``; only the insertions it lacks are queried,
+    ``chunk`` at a time)."""
     pids = [str(p) for p in pids]
     known = {}
     if cache is not None and Path(cache).exists():
         table = pd.read_csv(cache, dtype=str)
-        known = dict(zip(table["pid"], table["eid"]))
+        known = dict(zip(table["pid"], table["subject"]))
     todo = [p for p in pids if p not in known]
     if todo:
         if one is None:
@@ -119,8 +119,8 @@ def insertion_sessions(
             for rec in one.alyx.rest(
                 "insertions", "list", django=f"id__in,{part}", no_cache=True
             ):
-                known[str(rec["id"])] = str(rec["session"])
+                known[str(rec["id"])] = str(rec["session_info"]["subject"])
         if cache is not None:
-            table = pd.DataFrame(sorted(known.items()), columns=["pid", "eid"])
+            table = pd.DataFrame(sorted(known.items()), columns=["pid", "subject"])
             table.to_csv(cache, index=False)
     return {p: known[p] for p in pids if p in known}

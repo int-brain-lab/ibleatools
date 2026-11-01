@@ -1,18 +1,19 @@
 """Example insertions of the QC: which insertions to show, and a figure that shows why each is marked.
 
-A figure has one row per test the insertion fails (the strongest first, one row per band), and each
-row shows the evidence for that test, from the top of the probe to its tip:
+Every figure shows the same features (:data:`FEATURES`), whatever is wrong with the insertion, one row
+per band, from the top of the probe to its tip: what the probe records against what the other
+insertions record in the same regions (their median and spread), then the feature of the band
+furthest from it if it is not one of those, and how far every feature of the band is.
 
-- a band test: what the probe records against what the other insertions record in the same regions
-  (their median and spread), for the features furthest from it, and how far every feature of the band
-  is from it;
-- ``depth``, ``sideways``: the same with what the other insertions record at the position that fits
-  best, the regions at both positions, and the fit at every position tried;
-- ``swap``: the same on the track of the session's other probe, and the fit of both probes on both
-  tracks;
+A row follows for each test of position or of the channels that the insertion fails:
+
+- ``depth``, ``sideways``: the regions at both positions and the fit at every position tried;
+- ``track``: the regions on the track it follows best and its fit on every track;
+- ``swap``: the regions on the track of the other probe and the fit of both probes on both tracks;
 - ``channels``: which channels are dead or noisy, and the signal of every channel.
 
-An insertion no level marks shows the test closest to its limit, so a good fit can be seen too.
+What is expected at the better position is then drawn on the rows of the bands. An insertion no level
+marks shows the test of position closest to its limit, so a good fit can be seen too.
 """
 
 from __future__ import annotations
@@ -27,20 +28,25 @@ import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 from matplotlib.gridspec import GridSpec  # noqa: E402
 
-from .levels import FIXED_TESTS, LEVELS, POSITION_TESTS, TESTS  # noqa: E402
+from .levels import FIXED_TESTS, LEVELS, POSITION_TESTS, TRACK_TEST  # noqa: E402
 from .measures import (  # noqa: E402
     SHIFTS_UM,
     SIDEWAYS_UM,
-    bin_cost,
+    fit,
     moved_positions,
 )
 from .regions import BIN_CHANNELS, parcel_labels, region_labels  # noqa: E402
 
 PER_LEVEL = 18  # insertions shown of each first level
 NOT_MARKED = 10  # insertions shown that no level marks
-MAX_ROWS = 3  # tests shown per insertion
-N_FEATURES = 3  # features shown per test
-ROW_INCHES = 2.0
+MAX_ROWS = 2  # tests shown per insertion, beyond the bands
+# The features of every figure, per band.
+FEATURES = {
+    "lf": ("rms_lf", "psd_theta", "psd_theta_bpr"),
+    "ap": ("rms_ap", "alpha_mean", "spike_count"),
+    "wf": ("spike_width_secs", "peak_to_trough_ratio_log", "spike_amplitude"),
+}
+ROW_INCHES = 1.75
 BIN_MM = 0.1
 RECORDED, EXPECTED, BETTER = "#0b0b0b", "#8a8985", "#1baf7a"
 GROUP_COLORS = {"regions": "#2a78d6", "elsewhere": "#14866a", "channels": "#c9501f"}
@@ -73,26 +79,26 @@ def pick_examples(table: pd.DataFrame, seed: int = 0) -> list:
 
 
 def tests_to_show(row: pd.Series) -> list:
-    """The tests an insertion's figure shows: those it fails at its first level, the fixed tests
-    first, then the others by how far they are beyond their limit, one per band, at most
-    ``MAX_ROWS``. For an insertion no level marks, the test closest to its limit."""
+    """The tests an insertion's figure shows, on top of the bands: those of position and of the
+    channels it fails at its first level, the fixed tests first, then the others by how far they are
+    beyond their limit, at most ``MAX_ROWS``. Without any, the test of position closest to its
+    limit."""
     level = {lv.name: lv for lv in LEVELS}.get(row["first_level"] or "", LEVELS[-1])
 
     def beyond(test):
-        limit = level.k_position if test in POSITION_TESTS else level.k
-        return row[f"z_{test}"] / limit
+        if test in TRACK_TEST:
+            return row[TRACK_TEST[test][2]] / level.track
+        return row[f"z_{test}"] / level.k_position
 
     failed = (
         str(row[f"{level.name}_failed"] or "").split(";") if row["first_level"] else []
     )
-    failed = [t for t in failed if t]
-    if not failed:
-        return [max(TESTS, key=lambda t: np.nan_to_num(beyond(t), nan=-9.0))]
     fixed = [t for t in failed if t in FIXED_TESTS]
-    bands = {}
-    for t in sorted((t for t in failed if t in TESTS), key=beyond, reverse=True):
-        bands.setdefault(t.split("_")[0], t)
-    return (fixed + list(bands.values()))[:MAX_ROWS]
+    moves = (*POSITION_TESTS, *TRACK_TEST)
+    others = sorted((t for t in failed if t in moves), key=beyond, reverse=True)
+    return (fixed + others)[:MAX_ROWS] or [
+        max(moves, key=lambda t: np.nan_to_num(beyond(t), nan=-9.0))
+    ]
 
 
 def _pretty(name: str) -> tuple[str, float]:
@@ -243,28 +249,26 @@ def _title(ax, text, color):
     )
 
 
-def _row_band(p, cells, test, row, table, bands):
-    band, kind = test.split("_")
-    cols = np.asarray(bands[band])
-    e = p.e[:, cols]
-    if kind == "shape":
-        e = e - np.nanmedian(e, axis=0, keepdims=True)
-    distance = np.nanmedian(np.abs(e), axis=0)
+def _row_band(p, cells, band, row, table, cols, level, there):
+    """A band: the features of every figure, the one furthest from expected, every feature."""
+    fixed = [p.names.index(name) for name in FEATURES[band]]
+    distance = np.nanmedian(np.abs(p.e[:, cols]), axis=0)
     order = np.argsort(-np.nan_to_num(distance))
+    other = next(int(cols[k]) for k in order if int(cols[k]) not in fixed)
     _regions(cells[0], p.xyz, p.brain_atlas, "Regions", ylabel=True)
-    _feature_panels(p, cells[1:4], cols[order[:N_FEATURES]])
-    what = "shape along the probe" if kind == "shape" else "level"
-    z = row[f"z_{test}"]
-    if row["first_level"]:
-        text = (
-            f"{BAND_NAMES[band]}: {what} unlike the other insertions in these regions"
-        )
-    else:
-        text = (
-            f"{BAND_NAMES[band]}: {what} within what the other insertions record here"
-        )
-    _title(cells[0], f"{text} (z = {z:.1f})", GROUP_COLORS["regions"])
-    ax = cells[4]
+    _feature_panels(p, cells[1:5], fixed + [other], there)
+    cells[4].set_title(
+        f"Furthest off: {_pretty(p.names[other])[0]}", fontsize=5.5, pad=2
+    )
+    scores = {kind: row[f"z_{band}_{kind}"] for kind in ("level", "shape")}
+    failed = any(z > level.k for z in scores.values())
+    _title(
+        cells[0],
+        f"{BAND_NAMES[band]}: level z = {scores['level']:.1f}, "
+        f"shape z = {scores['shape']:.1f}",
+        GROUP_COLORS["regions"] if failed else EXPECTED,
+    )
+    ax = cells[5]
     rank = np.arange(1, len(cols) + 1)
     ax.plot(
         rank,
@@ -276,7 +280,7 @@ def _row_band(p, cells, test, row, table, bands):
         label="This insertion",
     )
     ax.axhline(
-        float(table[test].median()),
+        float(table[f"{band}_level"].median()),
         color=EXPECTED,
         lw=0.9,
         ls="--",
@@ -291,29 +295,22 @@ def _row_band(p, cells, test, row, table, bands):
     ax.spines[["top", "right"]].set_visible(False)
 
 
-def _best_features(p, residuals_there):
-    """The features that fit best after the move, by the mean improvement over the bins."""
-    gain = np.minimum(np.abs(p.e), 3.0) - np.minimum(np.abs(residuals_there), 3.0)
-    with np.errstate(all="ignore"):
-        mean = np.nansum(gain, axis=0) / np.maximum(np.isfinite(gain).sum(axis=0), 1)
-    return np.argsort(-mean)[:N_FEATURES]
-
-
-def _row_move(p, cells, test, row, scans, k):
+def _best_move(p, test, gains):
+    """``(words, µm, positions)`` of the best move of a scan."""
     moves = moved_positions(p.xyz)[test]
-    gains = np.asarray(scans[test][k], dtype=float)
     best = int(np.nanargmax(gains))
     um, xyz = moves[best]
     if test == "depth":
-        where = f"{abs(um):.0f} µm {'deeper' if um > 0 else 'shallower'}"
-    else:
-        side = best // len(SIDEWAYS_UM)
-        words = (("left", "right"), ("back", "front"))[side]
-        where = f"{abs(um):.0f} µm to the {words[int(um > 0)]}"
-    there, e_there = p.at(xyz)
+        return f"{abs(um):.0f} µm {'deeper' if um > 0 else 'shallower'}", um, xyz
+    words = (("left", "right"), ("back", "front"))[best // len(SIDEWAYS_UM)]
+    return f"{abs(um):.0f} µm to the {words[int(um > 0)]}", um, xyz
+
+
+def _row_move(p, cells, test, row, gains):
+    where, um, xyz = _best_move(p, test, gains)
+    best = float(np.nanmax(gains))
     _regions(cells[0], p.xyz, p.brain_atlas, "Regions\nrecorded", ylabel=True)
     _regions(cells[1], xyz, p.brain_atlas, "Regions\nmoved")
-    _feature_panels(p, cells[2:5], _best_features(p, e_there), there)
     z = row[f"z_{test}"]
     text = (
         "The recording fits better"
@@ -321,7 +318,7 @@ def _row_move(p, cells, test, row, scans, k):
         else "Within the limit: its best move is"
     )
     _title(cells[0], f"{text} {where} (z = {z:.1f})", GROUP_COLORS["elsewhere"])
-    ax = cells[5]
+    ax = cells[2]
     ax.axhline(0, color=EXPECTED, lw=0.6)
     if test == "depth":
         ax.plot(SHIFTS_UM, gains, "o-", color=RECORDED, ms=2, lw=0.8)
@@ -348,52 +345,75 @@ def _row_move(p, cells, test, row, scans, k):
         )
         ax.legend(frameon=False, fontsize=4.3, loc="best", handlelength=1.6)
         ax.set_xlabel("Move (µm)", fontsize=5)
-    ax.plot([um], [gains[best]], "o", color=BETTER, ms=4, zorder=5)
+    ax.plot([um], [best], "o", color=BETTER, ms=4, zorder=5)
     ax.set_title("Better fit at each position", fontsize=5.5, pad=2)
     ax.set_ylabel("Gain over the recorded position", fontsize=5)
     ax.tick_params(labelsize=5, length=2)
     ax.spines[["top", "right"]].set_visible(False)
+    return xyz
 
 
-def _row_swap(p, cells, row, pairs):
-    bins, brain_atlas = p.bins, p.brain_atlas
-
-    def fit(z, xyz, exclude):
-        c = bin_cost(p.reference.residuals(z, parcel_labels(xyz, brain_atlas), exclude))
-        return float(np.mean(c[np.isfinite(c)]))
-
-    best, costs = None, None
-    for b in pairs.get(p.i, []):
-        ex = (p.i, b)
-        c = [
-            fit(p.z, p.xyz, ex),
-            fit(p.z, bins.xyz[b], ex),
-            fit(bins.z[b], bins.xyz[b], ex),
-            fit(bins.z[b], p.xyz, ex),
-        ]
-        gain = c[0] + c[2] - c[1] - c[3]
-        if best is None or gain > costs[0] + costs[2] - costs[1] - costs[3]:
-            best, costs = b, c
-    other = str(bins.pids[best])[:8]
-    there, e_there = p.at(bins.xyz[best])
-    _regions(cells[0], p.xyz, brain_atlas, "Regions\nrecorded", ylabel=True)
-    _regions(cells[1], bins.xyz[best], brain_atlas, f"Regions\n{other}")
-    _feature_panels(p, cells[2:5], _best_features(p, e_there), there)
+def _row_track(p, cells, row, tracks):
+    fits = tracks.fits(p.z, [p.i])
+    best = int(np.nanargmax(fits))
+    other = str(p.bins.pids[best])[:8]
+    _regions(cells[0], p.xyz, p.brain_atlas, "Regions\nrecorded", ylabel=True)
+    _regions(cells[1], p.bins.xyz[best], p.brain_atlas, f"Regions\n{other}")
+    rank = row["track_rank"]
+    text = f"{100 * rank:.0f}% of the other tracks fit the recording as well as its own"
     _title(
         cells[0],
-        f"The recording fits better on the track of the session's other probe, {other} "
+        text if row["first_level"] else f"Within the limit: {text}",
+        GROUP_COLORS["elsewhere"],
+    )
+    ax = cells[2]
+    ax.hist(fits[np.isfinite(fits)], bins=30, color=EXPECTED)
+    ax.axvline(row["fit"], color=RECORDED, lw=1.2, label="Its own track")
+    ax.axvline(fits[best], color=BETTER, lw=1.2, label="The track it follows best")
+    ax.legend(frameon=False, fontsize=4.3, loc="best", handlelength=1.3)
+    ax.set_title("Fit on the tracks of the other insertions", fontsize=5.5, pad=2)
+    ax.set_xlabel("Fit (correlation along the probe)", fontsize=5)
+    ax.set_ylabel("Tracks", fontsize=5)
+    ax.tick_params(labelsize=5, length=2)
+    ax.spines[["top", "right"]].set_visible(False)
+    return p.bins.xyz[best]
+
+
+def _row_swap(p, cells, row, bands):
+    bins, brain_atlas = p.bins, p.brain_atlas
+    partner = int(np.flatnonzero(bins.pids.astype(str) == row["swap_partner"])[0])
+    other = str(bins.pids[partner])[:8]
+    ex = (p.i, partner)
+
+    def on(z, xyz):
+        expected = p.reference.expected(parcel_labels(xyz, brain_atlas), ex)[0]
+        return fit(z, expected, bands)[0]
+
+    fits = [
+        on(p.z, p.xyz),
+        on(p.z, bins.xyz[partner]),
+        on(bins.z[partner], bins.xyz[partner]),
+        on(bins.z[partner], p.xyz),
+    ]
+    _regions(cells[0], p.xyz, brain_atlas, "Regions\nrecorded", ylabel=True)
+    _regions(cells[1], bins.xyz[partner], brain_atlas, f"Regions\n{other}")
+    _title(
+        cells[0],
+        f"This probe and {other}, from the same mouse, both fit better swapped "
         f"(gain {row['swap_gain']:.2f})",
         GROUP_COLORS["elsewhere"],
     )
-    ax = cells[5]
+    ax = cells[2]
     x = np.array([0, 1, 2.6, 3.6])
-    ax.bar(x, costs, width=0.8, color=[EXPECTED, BETTER, EXPECTED, BETTER])
+    ax.bar(x, fits, width=0.8, color=[EXPECTED, BETTER, EXPECTED, BETTER])
+    ax.axhline(0, color=EXPECTED, lw=0.6)
     ax.set_xticks(x, ["own", "other", "own", "other"], fontsize=5)
     ax.set_xlabel(f"Recording of this probe  |  of {other}", fontsize=5)
-    ax.set_title("Misfit on each track", fontsize=5.5, pad=2)
-    ax.set_ylabel("Mean distance from expected (MADs)", fontsize=5)
+    ax.set_title("Fit on each track", fontsize=5.5, pad=2)
+    ax.set_ylabel("Fit (correlation along the probe)", fontsize=5)
     ax.tick_params(labelsize=5, length=2)
     ax.spines[["top", "right"]].set_visible(False)
+    return bins.xyz[partner]
 
 
 def _row_channels(p, cells, row):
@@ -432,7 +452,7 @@ def _row_channels(p, cells, row):
         borderaxespad=0,
         markerscale=1.6,
     )
-    for ax, name in zip(cells[2:5], ("rms_ap", "rms_lf", "spike_count")):
+    for ax, name in zip(cells[2:], ("rms_ap", "rms_lf", "spike_count")):
         f = p.names.index(name)
         v = features[:, f].astype(float) * _pretty(name)[1]
         ok = np.isfinite(v) & (v != 0)
@@ -446,7 +466,6 @@ def _row_channels(p, cells, row):
         ax.locator_params(axis="x", nbins=4)
         ax.set_title(f"{_pretty(name)[0]}, per channel", fontsize=5.5, pad=2)
         ax.spines[["top", "right"]].set_visible(False)
-    cells[5].axis("off")
     _title(
         cells[0],
         f"{100 * row['dead_fraction']:.0f}% of the channels are dead or noisy (the limit is 20%)",
@@ -454,48 +473,53 @@ def _row_channels(p, cells, row):
     )
 
 
-def figure_case(pid, ds, bins, table, scans, reference, brain_atlas, bands, pairs):
-    """The figure of one insertion: one row of evidence per test it fails."""
+def figure_case(pid, ds, bins, table, scans, reference, brain_atlas, bands, tracks):
+    """The figure of one insertion: a row per band, then one per test of position or channels."""
     p = _Probe(pid, ds, bins, reference, brain_atlas)
     row = table.loc[str(pid)]
+    level = {lv.name: lv for lv in LEVELS}.get(row["first_level"] or "", LEVELS[-1])
     tests = tests_to_show(row)
     k = int(np.flatnonzero(scans["pids"].astype(str) == str(pid))[0])
-    n = len(tests)
+    n = len(bands) + len(tests)
     height = 0.98 + n * ROW_INCHES
-    fig = plt.figure(figsize=(7.6, height))
+    fig = plt.figure(figsize=(8.6, height))
     grid = GridSpec(
         n,
-        7,
+        8,
         figure=fig,
-        width_ratios=[0.34, 0.34, 0.12, 1.0, 1.0, 1.0, 1.15],
-        left=0.06,
+        width_ratios=[0.34, 0.34, 0.12, 1.0, 1.0, 1.0, 1.0, 1.15],
+        left=0.05,
         right=0.99,
         top=1 - 0.6 / height,
         bottom=0.62 / height,
         hspace=0.62,
         wspace=0.34,
     )
-    for r, test in enumerate(tests):
-        if test in POSITION_TESTS or test in FIXED_TESTS:
-            cells = [fig.add_subplot(grid[r, c]) for c in (0, 1, 3, 4, 5, 6)]
-        else:
-            cells = [fig.add_subplot(grid[r, 0:2])]
-            cells += [fig.add_subplot(grid[r, c]) for c in (3, 4, 5, 6)]
+    there = None
+    for r, test in enumerate(tests, start=len(bands)):
         if test == "channels":
+            cells = [fig.add_subplot(grid[r, c]) for c in (0, 1, 3, 4, 5)]
             _row_channels(p, cells, row)
-        elif test == "swap":
-            _row_swap(p, cells, row, pairs)
-        elif test in POSITION_TESTS:
-            _row_move(p, cells, test, row, scans, k)
+            continue
+        cells = [fig.add_subplot(grid[r, c]) for c in (0, 1)]
+        cells.append(fig.add_subplot(grid[r, 3:5]))
+        if test == "swap":
+            xyz = _row_swap(p, cells, row, bands)
+        elif test in TRACK_TEST:
+            xyz = _row_track(p, cells, row, tracks)
         else:
-            _row_band(p, cells, test, row, table, bands)
+            xyz = _row_move(
+                p, cells, test, row, np.asarray(scans[test][k], dtype=float)
+            )
+        if there is None:
+            there = p.at(xyz)[0]
+    for r, (band, cols) in enumerate(bands.items()):
+        cells = [fig.add_subplot(grid[r, 0:2])]
+        cells += [fig.add_subplot(grid[r, c]) for c in (3, 4, 5, 6, 7)]
+        _row_band(p, cells, band, row, table, np.asarray(cols), level, there)
     first = row["first_level"]
-    head = (
-        f"first marked at {first}"
-        if first
-        else "not marked; the test closest to a limit"
-    )
-    fig.text(0.06, 1 - 0.06 / height, f"{pid}: {head}", fontsize=7, va="top")
+    head = f"first marked at {first}" if first else "not marked at any level"
+    fig.text(0.05, 1 - 0.06 / height, f"{pid}: {head}", fontsize=7, va="top")
     handles = {}
     for ax in fig.axes:
         for handle, label in zip(*ax.get_legend_handles_labels()):
@@ -526,7 +550,7 @@ def render_examples(
     reference,
     brain_atlas,
     bands,
-    pairs,
+    tracks,
     out_dir: Path,
     overwrite=False,
 ) -> dict:
@@ -538,7 +562,7 @@ def render_examples(
         path = out_dir / f"{pid}.png"
         if overwrite or not path.exists():
             fig = figure_case(
-                pid, ds, bins, table, scans, reference, brain_atlas, bands, pairs
+                pid, ds, bins, table, scans, reference, brain_atlas, bands, tracks
             )
             fig.savefig(path, dpi=135, facecolor="white")
             plt.close(fig)

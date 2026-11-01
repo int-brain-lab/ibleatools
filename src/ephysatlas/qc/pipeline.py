@@ -31,7 +31,7 @@ import pandas as pd
 
 from . import levels as lv
 from .data import QCDataset, default_results_dir
-from .measures import dead_fraction, measure_probe, swap_gain
+from .measures import TrackProfiles, dead_fraction, measure_probe, swap_gains
 from .regions import (
     BinnedDataset,
     RegionReference,
@@ -50,6 +50,10 @@ FAKES = (
     "ap_swap_half",
     "lf_noise",
     "ap_noise",
+    "shift_deeper_1000",
+    "shift_shallower_1000",
+    "shift_deeper_2000",
+    "shift_shallower_2000",
 )
 DONOR_MAX_OVERLAP = 0.25  # a donor shares less than this of its Cosmos composition
 NOISE_AMPLITUDE = (0.25, 1.5)  # noise SD, in robust SDs of each feature
@@ -87,15 +91,25 @@ def build_reference(bins: BinnedDataset, brain_atlas) -> RegionReference:
     return RegionReference(bins.z, parcel_labels(bins.xyz, brain_atlas))
 
 
-def session_pairs(ds: QCDataset, s: QCSettings, eid_of: dict) -> dict:
-    """``{probe: [partners]}`` of the probes recorded in one session at least
-    ``swap_min_distance_um`` apart (indices in ``ds``)."""
-    by_eid = {}
+def build_tracks(
+    bins: BinnedDataset, brain_atlas, reference: RegionReference, bands: dict
+) -> TrackProfiles:
+    """What is expected along the track of every probe of a release."""
+    expected = [
+        reference.expected(parcel_labels(xyz, brain_atlas))[0] for xyz in bins.xyz
+    ]
+    return TrackProfiles(np.stack(expected), bands)
+
+
+def mouse_pairs(ds: QCDataset, s: QCSettings, mouse_of: dict) -> dict:
+    """``{probe: [partners]}`` of the probes of one mouse at least ``swap_min_distance_um`` apart
+    (indices in ``ds``)."""
+    by_mouse = {}
     for i, pid in enumerate(ds.pids):
-        if eid_of.get(str(pid)):
-            by_eid.setdefault(eid_of[str(pid)], []).append(i)
+        if mouse_of.get(str(pid)):
+            by_mouse.setdefault(mouse_of[str(pid)], []).append(i)
     pairs = {}
-    for probes in by_eid.values():
+    for probes in by_mouse.values():
         for a in probes:
             for b in probes:
                 d = ds.human_xyz[a] - ds.human_xyz[b]
@@ -105,17 +119,28 @@ def session_pairs(ds: QCDataset, s: QCSettings, eid_of: dict) -> dict:
     return pairs
 
 
-def probe_swap_gain(
-    bins: BinnedDataset, brain_atlas, reference, probe: int, partners, z=None, xyz=None
-) -> float:
-    """The largest :func:`~.measures.swap_gain` of a probe over its session's other probes (NaN
-    without any); ``z``, ``xyz``: its binned features and positions, by default those of ``bins``."""
+def probe_swap(
+    bins: BinnedDataset,
+    brain_atlas,
+    reference,
+    probe: int,
+    partners,
+    bands: dict,
+    z=None,
+    xyz=None,
+) -> tuple[float, Optional[int]]:
+    """The partner a probe would best swap tracks with, among those where both probes fit better
+    swapped (:func:`~.measures.swap_gains`), and the sum of the two gains; ``(NaN, None)`` without
+    one. ``z``, ``xyz``: its binned features and positions, by default those of ``bins``."""
     a = (bins.z[probe] if z is None else z, bins.xyz[probe] if xyz is None else xyz)
-    gains = [
-        swap_gain(reference, brain_atlas, a, (bins.z[b], bins.xyz[b]), (probe, b))
-        for b in partners
-    ]
-    return max(gains) if gains else np.nan
+    best, partner = np.nan, None
+    for b in partners:
+        gains = swap_gains(
+            reference, brain_atlas, a, (bins.z[b], bins.xyz[b]), (probe, b), bands
+        )
+        if min(gains) > 0 and not sum(gains) <= best:
+            best, partner = sum(gains), b
+    return best, partner
 
 
 # -- stage 1 -----------------------------------------------------------------------------------
@@ -130,15 +155,17 @@ def stage_measures(
     """What the QC measures on every probe (``measures.csv``; the gain of every move of the scans in
     ``scans.npz``, for the figures)."""
     bands = bands_of(ds)
+    tracks = build_tracks(bins, brain_atlas, reference, bands)
     rows, depth, sideways = [], [], []
     t0 = time.time()
     for i, pid in enumerate(ds.pids):
         rec, profile = measure_probe(
-            reference, brain_atlas, bins.z[i], bins.xyz[i], i, bands
+            reference, brain_atlas, bins.z[i], bins.xyz[i], i, bands, tracks
         )
-        rec["swap_gain"] = probe_swap_gain(
-            bins, brain_atlas, reference, i, pairs.get(i, [])
+        rec["swap_gain"], partner = probe_swap(
+            bins, brain_atlas, reference, i, pairs.get(i, []), bands
         )
+        rec["swap_partner"] = "" if partner is None else str(ds.pids[partner])
         rec["dead_fraction"] = dead_fraction(ds.channel_labels[i])
         rows.append({"pid": str(pid), **rec})
         depth.append([g for _, g in profile["depth"]])
@@ -208,7 +235,7 @@ def make_fakes(
     """Problems planted in the probes ``pids`` (:func:`fake_sources`), one of each of
     :data:`FAKES` per probe.
 
-    - ``shift_<deeper|shallower>_500``: the human positions moved 500 µm along the probe;
+    - ``shift_<deeper|shallower>_<µm>``: the human positions moved along the probe;
     - ``lateral_1mm``: the positions moved 1 mm laterally (a probe traced on a neighbouring
       track);
     - ``<lf|ap>_swap_<full|half>``: the LF band (or the AP and waveform bands) replaced by those of
@@ -260,7 +287,9 @@ def make_fakes(
             )
             if kind.startswith("shift_"):
                 sign = 1.0 if "deeper" in kind else -1.0
-                xyz = human + sign * probe_axis(human) * 500e-6
+                xyz = (
+                    human + sign * probe_axis(human) * float(kind.split("_")[2]) * 1e-6
+                )
             elif kind == "lateral_1mm":
                 lateral = np.array([np.sign(np.nanmean(human[:, 0])) or 1.0, 0.0, 0.0])
                 xyz = human + lateral * 1e-3
@@ -292,23 +321,24 @@ def stage_planted(
     pids=None,
 ) -> pd.DataFrame:
     """Measure the problems planted by :func:`make_fakes` like the real probes (``planted.csv``).
-    A planted copy is compared with the other probes, never with its source, and with its
-    session's other probe as recorded. ``pids``: the source insertions, by default
+    A planted copy is compared with the other probes and their tracks, never with its source, and
+    with the mouse's other probes as recorded. ``pids``: the source insertions, by default
     :func:`fake_sources` of every insertion of ``ds``."""
     if pids is None:
         pids = fake_sources(ds.pids, s.fake_n_sources, s.fake_seed)
     fakes = make_fakes(ds, s, brain_atlas, pids, feature_sd(ds), seed=s.fake_seed)
     bands = bands_of(ds)
+    tracks = build_tracks(bins, brain_atlas, reference, bands)
     rows = []
     t0 = time.time()
     for k, fk in enumerate(fakes, start=1):
         i = fk["probe"]
         values, xyz = bin_probe(fk["features"], fk["labels"], fk["human"])
         z = bins.standardize(values)
-        rec, _ = measure_probe(reference, brain_atlas, z, xyz, i, bands)
-        rec["swap_gain"] = probe_swap_gain(
-            bins, brain_atlas, reference, i, pairs.get(i, []), z, xyz
-        )
+        rec, _ = measure_probe(reference, brain_atlas, z, xyz, i, bands, tracks)
+        rec["swap_gain"] = probe_swap(
+            bins, brain_atlas, reference, i, pairs.get(i, []), bands, z, xyz
+        )[0]
         rec["dead_fraction"] = dead_fraction(fk["labels"])
         rows.append({**fk["meta"], **rec})
         if k % 200 == 0:
@@ -363,11 +393,9 @@ def stage_examples(
     """One figure per insertion ``pids`` (:func:`~.cases.render_examples`), by default those of
     :func:`~.cases.pick_examples`, in ``out_dir`` (by default ``examples/``)."""
     from .cases import pick_examples, render_examples
-    from .data import insertion_sessions
 
     table = pd.read_parquet(s.out_dir / "qc_levels.pqt")
     table["first_level"] = table["first_level"].fillna("")
-    sessions = insertion_sessions(ds.pids, cache=s.out_dir / "sessions.csv")
     scans = np.load(s.out_dir / "scans.npz")
     if pids is None:
         pids = pick_examples(table)
@@ -380,7 +408,7 @@ def stage_examples(
         reference,
         brain_atlas,
         bands_of(ds),
-        session_pairs(ds, s, sessions),
+        build_tracks(bins, brain_atlas, reference, bands_of(ds)),
         out_dir or s.out_dir / "examples",
         overwrite=overwrite,
     )

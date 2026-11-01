@@ -22,9 +22,9 @@ DOCSTRING = (
     """Built by ``scripts/build_pid_qc_filter.py`` ({generated}, ibleatools {commit}) from feature
     release {vintage}, at level {level} of ``ephysatlas.qc.levels``: {n_total} insertions, {n_bad}
     with at least one bad component ({by_type}), {n_review} to review.""",
-    """An insertion is bad at {level} when it fails {rule}, or a test without a limit in SDs (its
-    tracks swapped with the session's other probe, a fifth of its channels dead or noisy). The tests
-    are ``ephysatlas.qc.levels.TESTS`` and ``FIXED_TESTS``: each compares the probe's recording with
+    """An insertion is bad at {level} when it fails {rule}, or a test with a natural limit (it and
+    another probe of the mouse fitting better swapped, a fifth of its channels dead or noisy). The tests
+    are ``ephysatlas.qc.levels.TESTS``, ``TRACK_TEST`` and ``FIXED_TESTS``: each compares the probe's recording with
     what the other probes record in the same brain regions; no model, auto-alignment or manual label
     decides. Each component -- ``alignment``, ``lf``, ``ap``, ``waveform`` -- is ``bad`` when the
     tests failed at {level} point to it, {review_rule}, else ``good``. Every insertion that is not
