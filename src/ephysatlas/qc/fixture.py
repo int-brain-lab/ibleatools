@@ -22,13 +22,14 @@ DOCSTRING = (
     """Built by ``scripts/build_pid_qc_filter.py`` ({generated}, ibleatools {commit}) from feature
     release {vintage}, at level {level} of ``ephysatlas.qc.levels``: {n_total} insertions, {n_bad}
     with at least one bad component ({by_type}), {n_review} to review.""",
-    """An insertion is bad at {level} when it fails at least {rule}. The failure cases are
-    ``ephysatlas.qc.levels.TESTS``: each compares the probe's recording with what the other probes
-    record around the same positions, or its signal with the signals of all probes; no model,
-    auto-alignment or manual label decides. Each component -- ``alignment``, ``lf``, ``ap``,
-    ``waveform`` -- is ``bad`` when the failures at {level} point to it, {review_rule}, else
-    ``good``. Every insertion that is not good on all four is listed with its labels and the
-    failure cases that fired ({checks_rule}). Unlisted insertions are good.""",
+    """An insertion is bad at {level} when it fails {rule}, or a test without a limit in SDs (its
+    tracks swapped with the session's other probe, a fifth of its channels dead or noisy). The tests
+    are ``ephysatlas.qc.levels.TESTS`` and ``FIXED_TESTS``: each compares the probe's recording with
+    what the other probes record in the same brain regions; no model, auto-alignment or manual label
+    decides. Each component -- ``alignment``, ``lf``, ``ap``, ``waveform`` -- is ``bad`` when the
+    tests failed at {level} point to it, {review_rule}, else ``good``. Every insertion that is not
+    good on all four is listed with its labels and the tests it fails ({checks_rule}). Unlisted
+    insertions are good.""",
     """Use :func:`excluded_pids` for the insertions to leave out of a dataset, e.g.
     ``excluded_pids()`` (bad on any component) for the channel-level model, or
     ``excluded_pids(("alignment", "ap", "waveform"))`` for the unit-level model, and pass them as
@@ -45,7 +46,7 @@ VINTAGE = "{vintage}"
 LEVEL = "{level}"
 COMPONENTS = ("alignment", "lf", "ap", "waveform")
 
-# pid: (alignment, lf, ap, waveform, failure cases that fired)
+# pid: (alignment, lf, ap, waveform, tests failed)
 pid_qc_filter = {{
 {entries}
 }}
@@ -81,8 +82,8 @@ def _next_level(level: str) -> Optional[str]:
 def fixture_labels(table: pd.DataFrame, level: str = "L3") -> pd.DataFrame:
     """The insertions of a :func:`~.levels.level_table` that are not good on every component at
     ``level``, sorted: the label of each component (``bad`` at the level, ``review`` when bad
-    only at the next level, else ``good``) and ``checks``, the failure cases that fired at the
-    level (for an insertion only to review, at the next level)."""
+    only at the next level, else ``good``) and ``checks``, the tests failed at the level (for an
+    insertion only to review, at the next level)."""
     nxt = _next_level(level)
     labels = table[[f"{level}_{c}_label" for c in LABELS]].set_axis(
         list(LABELS), axis=1

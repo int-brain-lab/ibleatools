@@ -1,4 +1,5 @@
-"""Insertion quality control: the local reference, the levels, the fixture and the loaders' filter."""
+"""Insertion quality control: the region reference, the measures, the levels, the fixture and the
+loaders' filter."""
 
 import importlib.util
 import tempfile
@@ -9,444 +10,377 @@ from unittest import mock
 import numpy as np
 import pandas as pd
 
-from ephysatlas.qc import levels
+from ephysatlas.qc import levels, measures
 from ephysatlas.qc import pipeline as qp
-from ephysatlas.qc.data import QCDataset
 from ephysatlas.qc.fixture import fixture_labels, write_fixture
-from ephysatlas.qc.modelfree import LocalReference, depth_scan, swap_gain
-from ephysatlas.qc.pipeline import QCSettings, fake_sources, feature_sd
-from ephysatlas.qc.regions import robust_component_scores
-from ephysatlas.spatial_encoder.utils import FEATURE_GROUPS, FEATURE_LIST
+from ephysatlas.qc.regions import (
+    BIN_CHANNELS,
+    RegionReference,
+    bin_probe,
+    parcel_labels,
+)
+from ephysatlas.spatial_encoder.utils import FEATURE_LIST
+
+BANDS = {"lf": [0, 1], "ap": [2, 3], "wf": [4, 5]}
+N_BINS, N_FEATURES = 38, 6
 
 
-def level_input(n=400, seed=0) -> pd.DataFrame:
-    """Synthetic :func:`levels.insertion_table`: right-skewed positive measurements, as most of
-    the real ones are."""
+class Atlas:
+    """Regions in layers 500 µm thick and columns 2 mm wide. Allen regions are the layers of a
+    column, Beryl regions join two layers. Above z = 0 is outside the brain."""
+
+    @staticmethod
+    def get_labels(xyz, mapping="Allen", mode="clip"):
+        xyz = np.asarray(xyz)
+        layer = np.floor(-xyz[..., 2] / 500e-6).astype(int)
+        column = np.floor((xyz[..., 0] + 4e-3) / 2e-3).astype(int)
+        ids = 1 + column * 100 + (layer if mapping == "Allen" else layer // 2)
+        return np.where(xyz[..., 2] > 0, 0, ids)
+
+
+def track(x_mm: float, top_mm: float = 0.0) -> np.ndarray:
+    """``[B, 3]`` positions of a vertical probe at ``x_mm``, its top at depth ``top_mm``."""
+    z = -(top_mm + 0.05 + 0.1 * np.arange(N_BINS)) * 1e-3
+    return np.column_stack([np.full(N_BINS, x_mm * 1e-3), np.zeros(N_BINS), z])
+
+
+def recording(xyz: np.ndarray, rng, noise: float = 0.1) -> np.ndarray:
+    """``[B, F]`` what a probe at ``xyz`` records: each Allen region has its own values."""
+    region = Atlas.get_labels(xyz)
+    pattern = np.random.default_rng(1).normal(size=(2000, N_FEATURES)) * 2
+    return pattern[region] + rng.normal(scale=noise, size=(len(xyz), N_FEATURES))
+
+
+def dataset(n_columns: int = 3, per_column: int = 15, seed: int = 0):
+    """Probes in columns at x = -3, -1, 1 mm: ``z``, ``xyz`` and their :class:`RegionReference`."""
+    rng = np.random.default_rng(seed)
+    xyz = np.array(
+        [
+            track(-3 + 2 * c + rng.uniform(-0.3, 0.3))
+            for c in range(n_columns)
+            for _ in range(per_column)
+        ]
+    )
+    z = np.array([recording(x, rng) for x in xyz], dtype=np.float32)
+    return z, xyz, RegionReference(z, parcel_labels(xyz, Atlas))
+
+
+class TestRegionReference(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.z, cls.xyz, cls.ref = dataset()
+
+    def test_bins_are_medians_of_the_channels_with_a_signal(self):
+        n = BIN_CHANNELS * 3
+        features = np.ones((n, 2))
+        features[0] = 99.0  # an odd channel
+        labels = np.zeros(n, dtype=int)
+        labels[BIN_CHANNELS : 2 * BIN_CHANNELS - 2] = 1  # most of the second bin dead
+        values, positions = bin_probe(features, labels, np.zeros((n, 3)))
+        self.assertEqual(values.shape, (3, 2))
+        self.assertEqual(values[0, 0], 1.0)
+        self.assertTrue(np.isnan(values[1]).all())
+        self.assertEqual(positions.shape, (3, 3))
+
+    def test_the_probe_is_left_out_of_its_own_reference(self):
+        region = int(Atlas.get_labels(self.xyz[0])[5])
+        probes, values = self.ref.tables["Allen"][region]
+        full = self.ref.stats("Allen", region)
+        left_out = self.ref.stats("Allen", region, exclude=[int(probes[0])])
+        np.testing.assert_allclose(full[0], np.median(values, axis=0))
+        np.testing.assert_allclose(left_out[0], np.median(values[1:], axis=0))
+
+    def test_a_region_with_few_probes_falls_back_to_the_coarser_parcellation(self):
+        labels = parcel_labels(self.xyz, Atlas)
+        labels["Allen"][:3, 5:8] = 9999  # a small region, in only three probes
+        ref = RegionReference(self.z, labels)
+        self.assertIsNone(ref.stats("Allen", 9999))
+        one = {name: v[0] for name, v in labels.items()}
+        self.assertTrue(np.isfinite(ref.residuals(self.z[0], one, [0])[5:8]).all())
+
+    def test_bins_outside_the_brain_have_no_residual(self):
+        xyz = self.xyz[0] + np.array([0.0, 0.0, 1.0e-3])  # 1 mm too shallow
+        e = self.ref.residuals(self.z[0], parcel_labels(xyz, Atlas), [0])
+        self.assertTrue(np.isnan(e[:5]).all())
+        self.assertTrue(np.isfinite(e[20:]).all())
+
+    def test_residuals_are_in_mads_of_the_region(self):
+        labels = parcel_labels(self.xyz[0], Atlas)
+        self.assertLess(
+            np.nanmedian(np.abs(self.ref.residuals(self.z[0], labels, [0]))), 2.0
+        )
+        shifted = self.z[0] + 10.0
+        self.assertGreater(
+            np.nanmedian(np.abs(self.ref.residuals(shifted, labels, [0]))), 5.0
+        )
+
+
+class TestMeasures(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.z, cls.xyz, cls.ref = dataset()
+        cls.rng = np.random.default_rng(3)
+        cls.base, _ = measures.measure_probe(
+            cls.ref, Atlas, cls.z[0], cls.xyz[0], 0, BANDS
+        )
+
+    def scores(self, z, xyz=None, probe=0):
+        return measures.measure_probe(
+            self.ref, Atlas, z, self.xyz[0] if xyz is None else xyz, probe, BANDS
+        )[0]
+
+    def test_an_offset_of_a_band_raises_its_level_not_its_shape(self):
+        e = np.random.default_rng(0).normal(size=(N_BINS, N_FEATURES))
+        s0 = measures.band_scores(e, BANDS)
+        e[:, BANDS["lf"]] += 5.0
+        s = measures.band_scores(e, BANDS)
+        self.assertGreater(s["lf_level"], 3 * s0["lf_level"])
+        self.assertAlmostEqual(s["lf_shape"], s0["lf_shape"], places=5)
+        self.assertEqual(s["ap_level"], s0["ap_level"])
+
+    def test_noise_on_a_band_raises_its_shape(self):
+        z = self.z[0].copy()
+        z[:, BANDS["wf"]] += self.rng.normal(scale=2.0, size=(N_BINS, 2))
+        s = self.scores(z)
+        self.assertGreater(s["wf_shape"], 3 * self.base["wf_shape"])
+
+    def test_a_band_broken_on_half_of_the_probe_raises_its_shape(self):
+        z = self.z[0].copy()
+        z[N_BINS // 2 :, BANDS["ap"]] += 5.0
+        self.assertGreater(self.scores(z)["ap_shape"], 3 * self.base["ap_shape"])
+
+    def test_one_noisy_feature_does_not_flag_a_band(self):
+        band = {"lf": [0, 1, 2]}
+        e = np.zeros((N_BINS, 3))
+        e[:, 0] = 50.0
+        out = measures.band_scores(e, band)
+        self.assertEqual((out["lf_level"], out["lf_shape"]), (0.0, 0.0))
+
+    def test_the_depth_scan_finds_a_moved_probe(self):
+        moved = self.xyz[0] + np.array([0.0, 0.0, -500e-6])  # said to be 500 µm deeper
+        s = self.scores(self.z[0], moved)
+        self.assertGreater(s["depth"], 10 * max(self.base["depth"], 0.01))
+        self.assertEqual(s["depth_best"], -500.0)  # it fits 500 µm shallower
+
+    def test_the_sideways_scan_finds_a_moved_probe(self):
+        moved = self.xyz[0] + np.array([1e-3, 0.0, 0.0])
+        s = self.scores(self.z[0], moved)
+        self.assertGreater(s["sideways"], 0.3)
+        self.assertLess(s["sideways_best"], 0)
+
+    def test_a_probe_where_it_belongs_gains_nothing_by_moving(self):
+        self.assertLess(self.base["depth"], 0.1)
+        self.assertLess(self.base["sideways"], 0.1)
+
+    def test_a_move_out_of_the_brain_does_not_count(self):
+        self.assertTrue(
+            np.isnan(measures.gain(np.ones(20), np.r_[np.ones(9), np.full(11, np.nan)]))
+        )
+
+    def test_swap_gain(self):
+        a, b = (self.z[0], self.xyz[0]), (self.z[20], self.xyz[20])
+        self.assertLess(measures.swap_gain(self.ref, Atlas, a, b, (0, 20)), 0)
+        swapped_a, swapped_b = (self.z[0], self.xyz[20]), (self.z[20], self.xyz[0])
+        self.assertGreater(
+            measures.swap_gain(self.ref, Atlas, swapped_a, swapped_b, (0, 20)), 0
+        )
+
+    def test_dead_fraction(self):
+        self.assertEqual(measures.dead_fraction(np.array([0, 1, 2, 3])), 0.5)
+
+
+def measurements(n=400, seed=0) -> pd.DataFrame:
+    """Synthetic measurements: normal around their medians, as a release of good probes."""
     rng = np.random.default_rng(seed)
     df = pd.DataFrame(index=pd.Index([f"p{i:03d}" for i in range(n)], name="pid"))
-    for c in levels.measurement_columns():
-        df[c] = rng.lognormal(0.0, 0.5, size=n)
-    df["sig_bad_channel_frac"] = 0.0
+    for test in levels.TESTS:
+        df[test] = rng.normal(1.0, 0.1, size=n)
+    df["swap_gain"] = -0.8
+    df["dead_fraction"] = 0.0
     return df
 
 
-def z_table(rows: dict) -> pd.DataFrame:
-    """z-scores of every test, 0 unless given: ``{pid: {test: z}}``."""
-    z = pd.DataFrame(
-        0.0, index=pd.Index(list(rows), name="pid"), columns=list(levels.TESTS)
-    )
-    for pid, values in rows.items():
-        for test, v in values.items():
-            z.loc[pid, test] = v
-    return z
+def with_problem(df, pid, **values) -> pd.DataFrame:
+    df = df.copy()
+    for column, v in values.items():
+        df.loc[pid, column] = v
+    return df
 
 
 class TestLevels(unittest.TestCase):
     def setUp(self):
-        self.df = level_input()
-        self.df.loc["p000", "h_lc_lf"] = 1e3  # a gross LF outlier
-        self.df.loc["p001", "sig_bad_channel_frac"] = 0.5  # half the channels dead
+        self.df = measurements()
         self.cal = levels.calibrate(self.df)
-        self.table = levels.level_table(self.df, self.cal)
 
-    def test_calibrated_zscores_are_standard(self):
+    def table(self, df):
+        return levels.level_table(df, self.cal)
+
+    def test_zscores_are_mad_zscores(self):
         z = levels.zscores(self.df, self.cal)
-        self.assertEqual(list(z.columns), list(levels.TESTS))
-        self.assertLess(abs(float(z["wf_signal"].median())), 0.15)
-        # After the normalizing transform, about 2.3% of a normal sample is beyond 2 SD.
-        self.assertLess(float(z["wf_signal"].gt(2).mean()), 0.06)
+        self.assertLess(z.median().abs().max(), 1e-9)
+        mad = (z - z.median()).abs().median()
+        np.testing.assert_allclose(mad, 1 / levels.MAD_TO_SD)
 
     def test_only_the_data_decide(self):
-        # Eight failure cases, none of them reading an auto-alignment.
-        self.assertEqual(len(levels.TESTS), 8)
-        self.assertNotIn("relocation", levels.TESTS)
-        self.assertEqual(sorted(self.cal), levels.measurement_columns())
-        for col in levels.measurement_columns():
-            self.assertNotRegex(col, levels.LEGACY_COLUMNS)
-        # A split, or auto-alignment columns left in a table, change nothing.
-        n = len(self.df)
-        df = self.df.assign(
-            split=np.where(np.arange(n) % 2, "train", "test"),
-            auto_dist_um=np.linspace(0.0, 3000.0, n),
-            a_lc_lf=0.0,
-        )
-        cal = levels.calibrate(df)
-        self.assertEqual(cal, self.cal)
-        table = levels.level_table(df, cal)
-        for lv in levels.LEVELS:
-            pd.testing.assert_series_equal(
-                table[f"{lv.name}_bad"], self.table[f"{lv.name}_bad"]
-            )
+        for test in levels.TESTS:
+            self.assertIn(test, self.df)
+        self.assertEqual(set(levels.calibrate(self.df)), set(levels.TESTS))
 
-    def test_level_ladder(self):
-        rules = {lv.name: (lv.k, lv.m, lv.k2, lv.m2) for lv in levels.LEVELS}
-        self.assertEqual(rules["L1"][:3], (3.0, 1, None))
-        self.assertEqual(rules["L2"][:3], (2.5, 1, None))
-        for name, k2 in (("L3", 1.5), ("L4", 1.25), ("L5", 1.0)):
-            self.assertEqual(rules[name], (2.5, 1, k2, 2))
-        z = z_table(
-            {
-                "strong": {"lf_outlier": 3.2},  # one test beyond 3 SD
-                "one": {"lf_outlier": 2.7},  # one beyond 2.5 SD only
-                "two_mid": {"ap_outlier": 1.6, "depth": 1.6},  # two beyond 1.5 SD
-                "two_low": {"ap_outlier": 1.1, "depth": 1.1},  # two beyond 1 SD
-                "one_mid": {"ap_outlier": 2.0},  # one moderate sign is not enough
-                "clean": {},
-            }
-        )
-        df = pd.DataFrame({"sig_bad_channel_frac": 0.0}, index=z.index)
-        bad = pd.DataFrame(
-            {lv.name: levels.label(df, z, lv)["bad"] for lv in levels.LEVELS}
-        )
-        expected = {
-            "strong": [True] * 5,
-            "one": [False] + [True] * 4,
-            "two_mid": [False, False, True, True, True],
-            "two_low": [False] * 4 + [True],
-            "one_mid": [False] * 5,
-            "clean": [False] * 5,
-        }
-        for pid, row in expected.items():
-            self.assertEqual(bad.loc[pid].tolist(), row, pid)
-
-    def test_what_is_bad_per_component(self):
-        z = z_table(
-            {
-                "depth": {"depth": 3.0},
-                "swap": {"swap": 3.0},
-                "lf_and_spike": {"lf_outlier": 3.0, "wf_outlier": 3.0},
-                "lf": {"lf_outlier": 3.0},
-                "ap": {"ap_outlier": 3.0},
-                "wf": {"wf_signal": 3.0},
-            }
-        )
-        df = pd.DataFrame({"sig_bad_channel_frac": 0.0}, index=z.index)
-        t = levels.label(df, z, levels.LEVELS[1])
-        self.assertEqual(
-            t["bad_type"].to_dict(),
-            {
-                "depth": "alignment",
-                "swap": "alignment",
-                "lf_and_spike": "alignment",
-                "lf": "lf",
-                "ap": "ap+waveform",
-                "wf": "waveform",
-            },
-        )
+    def test_the_ladder(self):
+        """A test just beyond each limit marks the probe from that level on."""
+        cal = self.cal["lf_level"]
+        for level in levels.LEVELS:
+            x = cal["median"] + (level.k + 0.1) * cal["sd"]
+            t = self.table(with_problem(self.df, "p000", lf_level=x))
+            self.assertEqual(t.loc["p000", "first_level"], level.name)
+            self.assertTrue(t.loc["p000", f"{level.name}_bad"])
 
     def test_levels_are_nested(self):
-        t = self.table
+        t = self.table(measurements(seed=1).assign(depth=lambda d: d["depth"] * 2))
         names = [lv.name for lv in levels.LEVELS]
         for a, b in zip(names, names[1:]):
-            self.assertTrue((~t[f"{a}_bad"] | t[f"{b}_bad"]).all(), (a, b))
-        counts = [int(t[f"{n}_bad"].sum()) for n in names]
-        self.assertEqual(counts, sorted(counts))
+            self.assertTrue((t[f"{b}_bad"] | ~t[f"{a}_bad"]).all())
 
     def test_review_is_bad_at_the_next_level_only(self):
-        t = self.table
-        names = [lv.name for lv in levels.LEVELS]
-        for a, b in zip(names, names[1:]):
-            expected = ~t[f"{a}_bad"] & t[f"{b}_bad"]
-            pd.testing.assert_series_equal(
-                t[f"{a}_review"], expected, check_names=False
-            )
-            for comp in levels.LABELS:
-                lab = t[f"{a}_{comp}_label"]
-                self.assertTrue((lab.eq("bad") == t[f"{a}_{comp}"]).all())
-                review = ~t[f"{a}_{comp}"] & t[f"{b}_{comp}"]
-                self.assertTrue((lab.eq("review") == review).all())
-        self.assertFalse(t[f"{names[-1]}_review"].any())
+        cal = self.cal["ap_level"]
+        k = levels.LEVELS[2].k + 0.1  # L3
+        t = self.table(
+            with_problem(self.df, "p000", ap_level=cal["median"] + k * cal["sd"])
+        )
+        self.assertTrue(t.loc["p000", "L2_review"])
+        self.assertFalse(t.loc["p000", "L3_review"])
+        self.assertEqual(t.loc["p000", "L2_ap_label"], "review")
+        self.assertEqual(t.loc["p000", "L3_ap_label"], "bad")
 
-    def test_what_is_bad(self):
-        t = self.table
-        self.assertTrue(t.loc["p000", "L2_bad"])
-        self.assertEqual(t.loc["p000", "L2_bad_type"], "lf")
-        self.assertIn("lf_outlier", t.loc["p000", "L2_failed"])
-        # Dead channels fail the AP signal test, whatever its z.
-        self.assertTrue(t.loc["p001", "L2_fail_ap_signal"])
-        self.assertEqual(t.loc["p001", "L2_bad_type"], "ap+waveform")
-        # A bad insertion has at least one bad component.
-        comps = t[[f"L2_{c}" for c in levels.LABELS]].any(axis=1)
-        self.assertTrue((comps == t["L2_bad"]).all())
+    def test_fixed_tests_fail_at_every_level(self):
+        df = with_problem(self.df, "p000", swap_gain=0.5)
+        df = with_problem(df, "p001", dead_fraction=0.5)
+        t = self.table(df)
+        self.assertEqual(t.loc["p000", "first_level"], "L1")
+        self.assertEqual(t.loc["p000", "L1_failed"], "swap")
+        self.assertEqual(t.loc["p001", "L1_failed"], "channels")
+
+    def test_no_swap_test_without_a_partner(self):
+        t = self.table(with_problem(self.df, "p000", swap_gain=np.nan))
+        self.assertFalse(t.loc["p000", "L5_fail_swap"])
+
+    def test_what_is_bad_per_component(self):
+        z = {t: 0.0 for t in levels.TESTS}
+        cases = {
+            "lf_level": {"lf"},
+            "lf_shape": {"lf"},
+            "ap_level": {"ap", "waveform"},
+            "ap_shape": {"ap", "waveform"},
+            "wf_level": {"waveform"},
+            "wf_shape": {"waveform"},
+            "depth": {"alignment"},
+            "sideways": {"alignment"},
+        }
+        for test, bad in cases.items():
+            df = pd.DataFrame(index=["p"])
+            df["swap_gain"], df["dead_fraction"] = np.nan, 0.0
+            frame = pd.DataFrame({**z, test: 9.0}, index=["p"])
+            row = levels.label(df, frame, levels.LEVELS[0]).loc["p"]
+            self.assertEqual({c for c in levels.LABELS if row[c]}, bad, test)
+        df = pd.DataFrame({"swap_gain": [np.nan], "dead_fraction": [0.5]}, index=["p"])
+        row = levels.label(df, pd.DataFrame(z, index=["p"]), levels.LEVELS[0]).loc["p"]
+        self.assertEqual({c for c in levels.LABELS if row[c]}, {"ap", "waveform"})
+
+    def test_groups(self):
+        df = with_problem(self.df, "p000", swap_gain=0.5)
+        df = with_problem(df, "p001", dead_fraction=0.5)
+        cal = self.cal["wf_shape"]
+        df = with_problem(df, "p002", wf_shape=cal["median"] + 9 * cal["sd"])
+        g = levels.group_failures(self.table(df), "L1")
+        self.assertEqual(g.loc["p000"].to_dict()["elsewhere"], True)
+        self.assertEqual(g.loc["p001"].to_dict()["channels"], True)
+        self.assertEqual(g.loc["p002"].to_dict()["regions"], True)
+        self.assertEqual(int(g.any(axis=1).sum()), 3)
 
     def test_summary_and_bad_list(self):
-        s = levels.summary(self.table)
-        for lv in levels.LEVELS:
-            row = s.loc[lv.name]
-            self.assertEqual(row["bad"], int(self.table[f"{lv.name}_bad"].sum()))
-            parts = [*levels.BAD_GROUPS, "several bands"]
-            self.assertEqual(sum(row[k] for k in parts), row["bad"])
-        bad = levels.bad_list(self.table, "L2")
-        self.assertEqual(set(bad.index), set(self.table.index[self.table["L2_bad"]]))
-        self.assertIn("tests_failed", bad)
-        self.assertTrue(bad["n_tests_failed"].is_monotonic_decreasing)
+        t = self.table(with_problem(self.df, "p000", dead_fraction=0.5))
+        s = levels.summary(t)
+        self.assertEqual(list(s.index), [lv.name for lv in levels.LEVELS])
+        self.assertGreaterEqual(s.loc["L1", "bad"], 1)
+        bad = levels.bad_list(t, "L1")
+        self.assertIn("p000", bad.index)
+        self.assertEqual(bad.loc["p000", "first_level"], "L1")
 
-    def test_detection_counts_problems_in_good_sources_only(self):
-        t = self.table
-        bad_src = t.index[t["L2_bad"]][0]
-        good_src = t.index[~t["L5_bad"]][:2].tolist()
-        fakes = pd.DataFrame(
-            {
-                "fake": ["shift"] * 3 + ["lf_noise"] * 3,
-                "source_pid": [bad_src, *good_src] * 2,
-                "L2_bad": [True, True, False, True, False, False],
-            }
+    def test_detection_compares_the_same_insertions(self):
+        table = self.table(with_problem(self.df, "p000", dead_fraction=0.5))
+        planted = self.table(self.df.iloc[:4]).reset_index(drop=True)
+        planted["source_pid"] = ["p000", "p000", "p001", "p001"]
+        planted["fake"] = ["a", "b", "a", "b"]
+        planted.loc[0, "L1_bad"] = (
+            True  # planted in an insertion already bad: it counts
         )
-        for lv in levels.LEVELS:
-            if lv.name != "L2":
-                fakes[f"{lv.name}_bad"] = False
-        det = levels.detection(t, fakes).set_index(["level", "fake"])
-        # The problem planted in the bad source is not counted.
-        self.assertEqual(det.loc[("L2", "shift"), ["n", "detected"]].tolist(), [2, 1])
-        self.assertEqual(det.loc[("L2", "lf_noise"), "detected"], 0)
-        self.assertEqual(
-            det.loc[("L2", "unmodified"), ["n", "detected"]].tolist(), [3, 1]
-        )
-        self.assertEqual(det.loc[("L2", "shift"), "percent"], 50.0)
-        s = levels.summary(t, fakes)
-        self.assertEqual(s.loc["L2", "shift %"], 50.0)
-        self.assertAlmostEqual(s.loc["L2", "sources flagged %"], 33.3)
-
-
-class TestTables(unittest.TestCase):
-    def test_insertion_table(self):
-        mf = pd.DataFrame(
-            {
-                "pid": ["b", "a", "b", "c"],
-                "h_lc_lf": [1.0, 2.0, 3.0, 4.0],
-                "a_lc_lf": 0.0,  # version 4: at the auto-aligned positions
-                "auto_dist_um": 100.0,
-            }
-        )
-        swap = pd.DataFrame(
-            {"pid_a": ["a", "a"], "pid_b": ["b", "c"], "swap_gain_mf": [0.1, -0.3]}
-        )
-        t = levels.insertion_table(mf, swap)
-        self.assertEqual(t.index.tolist(), ["a", "b", "c"])
-        self.assertEqual(t.columns.tolist(), ["h_lc_lf", "swap_gain_mf"])
-        self.assertEqual(
-            t.loc["b", "h_lc_lf"], 3.0
-        )  # the last row of a pid scored twice
-        # The largest gain over the pairs a probe is in.
-        np.testing.assert_allclose(t["swap_gain_mf"], [0.1, 0.1, -0.3])
-        t = levels.insertion_table(mf, None)
-        self.assertTrue(t["swap_gain_mf"].isna().all())
-
-    def test_fakes_table_drops_failures(self):
-        fk = pd.DataFrame(
-            {
-                "fake": ["x", "y", "z"],
-                "error": [np.nan, "Boom", ""],
-                "auto_dist_um": 1.0,
-            }
-        )
-        out = levels.fakes_table(fk)
-        self.assertEqual(out["fake"].tolist(), ["x", "z"])
-        self.assertNotIn("auto_dist_um", out)
+        planted.loc[3, "L1_bad"] = True
+        d = levels.detection(table, planted).set_index(["level", "fake"])
+        self.assertEqual(d.loc[("L1", "as recorded"), "n"], 2)
+        self.assertEqual(d.loc[("L1", "as recorded"), "detected"], 1)
+        self.assertEqual(d.loc[("L1", "a"), "detected"], 1)
+        self.assertEqual(d.loc[("L1", "b"), "percent"], 50.0)
 
 
 class TestPlantedProblems(unittest.TestCase):
-    """The planted problems: in a random sample of all insertions, not in a model's split."""
-
-    pids = [f"pid{i:04d}" for i in range(1000)]
-
     def test_fake_sources_are_a_fixed_random_sample(self):
-        a = fake_sources(self.pids, 150, seed=0)
-        self.assertEqual(len(a), 150)
-        self.assertEqual(len(set(a)), 150)
-        self.assertTrue(set(a) <= set(self.pids))
+        pids = [f"p{i:04d}" for i in range(1000)]
+        a = qp.fake_sources(pids, 50, seed=0)
+        self.assertEqual(a, qp.fake_sources(pids, 50, seed=0))
         self.assertEqual(a, sorted(a))
-        self.assertEqual(a, fake_sources(self.pids, 150, seed=0))  # reproducible
-        self.assertNotEqual(a, fake_sources(self.pids, 150, seed=1))
-        # Spread over the whole release, not a block of it.
-        idx = np.array([self.pids.index(p) for p in a])
-        self.assertLess(idx.min(), 100)
-        self.assertGreater(idx.max(), 900)
-        self.assertEqual(fake_sources(self.pids[:10], 150), self.pids[:10])
+        self.assertEqual(len(set(a)), 50)
+        self.assertNotEqual(a, qp.fake_sources(pids, 50, seed=1))
+        self.assertNotEqual(a, sorted(pids)[:50])
 
     def test_settings_have_no_model_or_auto_alignment(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            s = QCSettings(out_dir=Path(tmp))
-            fields = set(s.dump())
-        self.assertTrue({"fake_n_sources", "fake_seed"} <= fields)
-        self.assertEqual((s.fake_n_sources, s.fake_seed), (150, 0))
-        for name in ("auto_alignment_dir", "channel_model"):
-            self.assertNotIn(name, fields)
-        self.assertEqual(qp.FAKES_CSV, "fakes5.csv")
-
-    def test_stage_fakes_plants_in_the_random_sample(self):
-        class Planted(Exception):
-            pass
-
-        ds = _dataset()
-        with tempfile.TemporaryDirectory() as tmp:
-            s = QCSettings(out_dir=Path(tmp), fake_n_sources=4, fake_seed=3)
-            with mock.patch.object(qp, "make_fakes", side_effect=Planted) as make:
-                with self.assertRaises(Planted):
-                    qp.stage_fakes(ds, s, brain_atlas=None, reference=None)
-        args, kwargs = make.call_args
-        self.assertEqual(args[3], fake_sources(ds.pids, 4, seed=3))
-        self.assertEqual(kwargs["seed"], 3)
+        names = " ".join(qp.QCSettings(out_dir=Path(".")).dump())
+        for word in ("model", "auto", "split"):
+            self.assertNotIn(word, names)
 
 
 class TestFixture(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        df = level_input()
-        df.loc["p000", "h_lc_lf"] = 1e3
-        cls.table = levels.level_table(df, levels.calibrate(df))
+        df = measurements()
+        cal = levels.calibrate(df)
+        for pid, test in (("p000", "lf_level"), ("p001", "depth")):
+            df.loc[pid, test] = cal[test]["median"] + 9 * cal[test]["sd"]
+        df.loc["p002", "ap_shape"] = (
+            cal["ap_shape"]["median"] + 4.2 * cal["ap_shape"]["sd"]
+        )  # bad at L4 only
+        cls.table = levels.level_table(df, cal)
         with tempfile.TemporaryDirectory() as tmp:
-            path = write_fixture(cls.table, "2099_W01", "L2", Path(tmp) / "fx.py")
+            path = write_fixture(cls.table, "2099_W01", "L3", Path(tmp) / "fx.py")
             spec = importlib.util.spec_from_file_location("fx", path)
             cls.fx = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(cls.fx)
 
     def test_round_trip(self):
         t, fx = self.table, self.fx
-        self.assertEqual((fx.VINTAGE, fx.LEVEL), ("2099_W01", "L2"))
-        self.assertEqual(fx.excluded_pids(), sorted(t.index[t["L2_bad"]]))
+        self.assertEqual((fx.VINTAGE, fx.LEVEL), ("2099_W01", "L3"))
+        self.assertEqual(fx.excluded_pids(), sorted(t.index[t["L3_bad"]]))
         self.assertEqual(
-            fx.excluded_pids(include_review=True), sorted(t.index[t["L3_bad"]])
+            fx.excluded_pids(include_review=True), sorted(t.index[t["L4_bad"]])
         )
-        self.assertEqual(fx.excluded_pids(("lf",)), sorted(t.index[t["L2_lf"]]))
-        self.assertIn("p000", fx.excluded_pids(("lf",)))
-        self.assertNotIn("p000", fx.excluded_pids(("alignment",)))
+        self.assertEqual(fx.excluded_pids(("lf",)), ["p000"])
+        self.assertEqual(fx.excluded_pids(("alignment",)), ["p001"])
         with self.assertRaises(ValueError):
             fx.excluded_pids(("spikes",))
 
     def test_labels_and_checks(self):
-        t, fx = self.table, self.fx
-        good = next(p for p in t.index if not t.loc[p, "L3_bad"])
+        fx = self.fx
         self.assertEqual(
-            fx.qc_labels(good), {**{c: "good" for c in fx.COMPONENTS}, "checks": ""}
+            fx.qc_labels("p399"), {**{c: "good" for c in fx.COMPONENTS}, "checks": ""}
         )
         self.assertEqual(fx.qc_labels("p000")["lf"], "bad")
-        self.assertEqual(fx.qc_labels("p000")["checks"], t.loc["p000", "L2_failed"])
-        review = [p for p in t.index if t.loc[p, "L2_review"]]
-        self.assertTrue(review)
-        for p in review:  # only to review: the failure cases of the next level
-            labels = fx.qc_labels(p)
-            self.assertNotIn("bad", [labels[c] for c in fx.COMPONENTS])
-            self.assertEqual(labels["checks"], t.loc[p, "L3_failed"])
-        listed = fixture_labels(t, "L2")
-        self.assertEqual(set(listed.index), set(fx.pid_qc_filter))
+        self.assertEqual(fx.qc_labels("p000")["checks"], "lf_level")
+        labels = fx.qc_labels("p002")  # only to review: the tests of the next level
+        self.assertEqual((labels["ap"], labels["waveform"]), ("review", "review"))
+        self.assertEqual(labels["checks"], "ap_shape")
 
-
-class _AllInBrain:
-    """A brain atlas in which every position is inside the brain."""
-
-    @staticmethod
-    def get_labels(xyz, mode="clip"):
-        return np.ones(len(xyz), dtype=int)
-
-
-def _features_at(z_um: np.ndarray, rng) -> np.ndarray:
-    """``[C, F]`` features that vary smoothly with depth (period of 1.5-3 mm), plus noise."""
-    k = np.arange(len(FEATURE_LIST))
-    period = 1500.0 + 1500.0 * k / len(k)
-    f = np.sin(2 * np.pi * z_um[:, None] / period + k)
-    return f + 0.05 * rng.normal(size=f.shape)
-
-
-def _dataset(seed=0):
-    """Six reference probes along vertical tracks 50-150 µm apart (4 mm, every 20 µm), and the
-    probes of the tests: ``moved`` (recorded at one depth, placed 500 µm shallower), ``lf_off``
-    (its LF band from elsewhere) and two probes ``a`` / ``b`` recorded on each other's tracks."""
-    rng = np.random.default_rng(seed)
-    n = 200
-    z_ref = -1000.0 - 20.0 * np.arange(n)  # top first, µm
-    probes = []
-    for x in (-150.0, -100.0, -50.0, 50.0, 100.0, 150.0):
-        probes.append(
-            (np.c_[np.full(n, x), np.zeros(n), z_ref], _features_at(z_ref, rng))
-        )
-    z = z_ref[50:150]  # 2 mm in the middle of the reference
-    probes.append(
-        (np.c_[np.zeros(100), np.zeros(100), z + 500.0], _features_at(z, rng))
-    )
-    f = _features_at(z, rng)
-    lf = [FEATURE_LIST.index(c) for c in FEATURE_GROUPS["lf"]]
-    f[:, lf] = _features_at(z - 1500.0, rng)[:, lf]
-    probes.append((np.c_[np.zeros(100), np.zeros(100), z], f))
-    za, zb = z_ref[:60], z_ref[-60:]
-    xyz = np.c_[np.zeros(60), np.zeros(60), za]
-    probes.append((xyz, _features_at(zb, rng)))
-    probes.append((np.c_[np.zeros(60), np.zeros(60), zb], _features_at(za, rng)))
-    c = max(len(p[0]) for p in probes)
-    xyz = np.full((len(probes), c, 3), np.nan)
-    feats = np.full((len(probes), c, len(FEATURE_LIST)), np.nan)
-    for i, (x, f) in enumerate(probes):
-        xyz[i, : len(x)], feats[i, : len(f)] = x * 1e-6, f
-    pids = [f"ref{i}" for i in range(6)] + ["moved", "lf_off", "a", "b"]
-    return QCDataset(
-        pids=np.array(pids),
-        features=feats,
-        human_xyz=xyz,
-        planned_xyz=xyz,
-        channel_labels=np.zeros(xyz.shape[:2], dtype=np.int8),
-        probe_model=np.array(["NP1"] * len(pids)),
-        feature_names=list(FEATURE_LIST),
-    )
-
-
-class TestModelFree(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.ds = _dataset()
-        cls.local = LocalReference(cls.ds, feature_sd(cls.ds))
-        cls.local.fit_noise(cls.ds)
-
-    def probe(self, pid):
-        i = self.ds.index(pid)
-        return dict(
-            features=self.ds.features[i],
-            xyz=self.ds.human_xyz[i],
-            labels=self.ds.channel_labels[i],
-            probe=i,
-        )
-
-    def band_scores(self, pid, xyz=None):
-        p = self.probe(pid)
-        xyz = p["xyz"] if xyz is None else xyz
-        return self.local.band_scores(p["features"], xyz, p["labels"], [p["probe"]])
-
-    def test_noise_is_fitted(self):
-        noise = self.local.noise
-        self.assertEqual(noise.shape, (len(FEATURE_LIST),))
-        self.assertTrue(np.isfinite(noise).all() and (noise > 0).all())
-
-    def test_a_foreign_band_is_unusual_for_where_the_probe_is(self):
-        ok = self.band_scores("lf_off")
-        moved_back = self.ds.human_xyz[self.ds.index("moved")].copy()
-        moved_back[:, 2] -= 500e-6
-        right = self.band_scores("moved", moved_back)
-        self.assertGreater(ok["lf"], 3 * right["lf"])
-        self.assertLess(ok["ap"], 2 * right["ap"])
-
-    def test_depth_scan_finds_the_offset(self):
-        p = self.probe("moved")
-        summary, profile = depth_scan(
-            self.local, _AllInBrain(), p["features"], p["xyz"], p["labels"], p["probe"]
-        )
-        self.assertEqual(summary["depth_best"], 500.0)  # back down, deeper
-        self.assertGreater(summary["depth_gain"], 0.0)
-        self.assertEqual(set(profile), {"all", *levels.COMPONENTS})
-
-    def test_swap_gain(self):
-        a, b, ref = self.probe("a"), self.probe("b"), self.probe("ref0")
-        self.assertGreater(
-            swap_gain(self.local, a, b), 0.0
-        )  # recorded on each other's track
-        self.assertLess(swap_gain(self.local, ref, self.probe("ref5")), 0.1)
-
-    def test_robust_band_score_ignores_one_noisy_feature(self):
-        names = [f for g in FEATURE_GROUPS.values() for f in g]
-        z = pd.DataFrame({f"z{i}": [0.5, 0.5] for i in range(len(names))})
-        z["probe"], z["level"], z["n_core"], z["source"] = 0, "Beryl", 20, "Beryl"
-        z[f"z{names.index(FEATURE_GROUPS['ap'][0])}"] = 10.0  # one AP feature far off
-        self.assertAlmostEqual(
-            robust_component_scores(z, names).loc[0, "beryl_ap"], 0.5
-        )
+    def test_unknown_level(self):
+        with self.assertRaises(ValueError):
+            fixture_labels(self.table, "L9")
 
 
 class TestLoadersExcludePids(unittest.TestCase):

@@ -1,7 +1,5 @@
 """Inputs of the insertion quality control: every insertion of a feature release (its recording
-and its human-aligned positions) and the session of each. The histology auto-alignment
-(:func:`load_auto_alignment`) is no input of the QC: the example figures may draw it, as a
-diagnostic only."""
+and its human-aligned positions) and the session of each."""
 
 from __future__ import annotations
 
@@ -126,12 +124,3 @@ def insertion_sessions(
             table = pd.DataFrame(sorted(known.items()), columns=["pid", "eid"])
             table.to_csv(cache, index=False)
     return {p: known[p] for p in pids if p in known}
-
-
-def load_auto_alignment(results_dir: Path, pid: str):
-    """The histology auto-alignment of ``pid`` (an :class:`AlignmentResult`), or None. Not used
-    by any QC decision; the example figures may draw it as a diagnostic."""
-    from ephysatlas.alignment.result import AlignmentResult
-
-    path = Path(results_dir) / "results" / "histology" / f"{pid}.npz"
-    return AlignmentResult.load(path) if path.exists() else None

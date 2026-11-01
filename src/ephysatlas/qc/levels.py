@@ -1,37 +1,32 @@
-"""Insertion QC at five sensitivity levels: the failure cases, their calibration and the labels.
+"""Insertion QC at five sensitivity levels: the tests, their z-scores and the labels.
 
-**Only the data decide.** Every failure case compares a probe's recording, at the positions its
-alignment gives it, with the recordings of the other probes: with what they record around the same
-positions -- their recordings, not a model's prediction (:class:`~.modelfree.LocalReference`) --
-or, for the signal, with the signals of all probes (:mod:`.signal`). No model, no auto-alignment
-and no manual label enters a decision, so a model later trained without the flagged probes is not
-judged by itself, and nothing is calibrated on a selection made by hand.
+**Only the data decide.** Every test compares a probe's recording, at the positions its alignment
+gives it, with what the other probes record in the same brain regions (:mod:`.regions`,
+:mod:`.measures`). No model, no auto-alignment and no manual label enters a decision, so a model
+later trained without the flagged probes is not judged by itself, and nothing is calibrated on a
+selection made by hand.
 
-**Failure cases** (:data:`TESTS`), eight in three groups: how unusual each band is for where the
-probe is placed (LF, AP, waveform; medians over features and over channels, each feature scaled by
-how much it typically disagrees with its neighbours, so one noisy feature or a few odd channels do
-not flag a band); whether each band's signal is unusual wherever the probe is (robust fingerprints,
-the LF 1/f fit, a fifth of the channels dead or noisy); and whether the recording is more typical
-elsewhere (another depth along the probe, the other probe's track in a two-probe session).
+**Tests**, in three groups (:data:`GROUPS`):
 
-**z-scores.** Each measurement is robustly centred and scaled, Yeo-Johnson transformed (exponent
-fitted on the central 90% of the probes) and turned into a robust z on the transformed values, in
-two passes so that bad probes do not widen the limits. The reference is every probe, without any
-label or split.
+- *unusual for its regions* (:data:`TESTS`): for the LF band, the AP band and the waveforms, the
+  ``level`` of the band and its ``shape`` along the probe;
+- *more typical elsewhere*: the recording fits better at another depth along the probe, or sideways
+  (:data:`TESTS`), or, in a two-probe session, on the other probe's track (:data:`FIXED_TESTS`);
+- *dead or noisy channels*: at least a fifth of the channels (:data:`FIXED_TESTS`).
 
-**Levels** (:data:`LEVELS`). A probe is *bad* when at least ``m`` tests fail beyond ``k`` SDs, or
-(when given) at least ``m2`` tests fail beyond the lower ``k2``: L1, one test beyond 3 SD; L2, one
-beyond 2.5 SD; L3, L4 and L5, as L2 or two tests beyond 1.5, 1.25 and 1 SD. It is *review* when it
-is bad at the next level only. The levels are nested. What is bad: **alignment** when the depth or
-the swap test fails, or the LF and the spike band are both unusual (the probe does not belong where
-it is placed); **lf** on an LF signal failure or when the LF alone is unusual; **ap** (and
-**waveform**) on an AP signal failure or when the AP alone is unusual; **waveform** also on its
-own.
+**z-scores.** Each measurement of :data:`TESTS` becomes ``z = (x - median) / (1.4826 MAD)`` over every
+probe, without any label or split. The tests of :data:`FIXED_TESTS` have a natural limit and need no
+calibration: nearly every pair of probes fits far worse swapped, and a dead channel is dead.
 
-**Tables.** :func:`insertion_table` gathers the outputs of the pipeline's measuring stages (one
-row per insertion), :func:`level_table` adds the z-scores and every level's labels,
-:func:`bad_list` and :func:`summary` report them; :func:`~.fixture.write_fixture` publishes one
-level as ``ephysatlas.fixtures.pid_qc_filter``.
+**Levels** (:data:`LEVELS`). A probe is *bad* at a level when any test of :data:`TESTS` is beyond the
+level's limit ``k``, or any test of :data:`FIXED_TESTS` fails. It is *review* when it is bad at the
+next level only. The levels are nested. What is bad: **alignment** when the depth, the sideways or
+the swap test fails; **lf** when an LF test fails; **ap** when an AP test fails or the channels are
+dead or noisy; **waveform** when a waveform test fails, or the AP band is bad.
+
+**Tables.** :func:`level_table` adds the z-scores and every level's labels to the measurements of the
+pipeline (one row per insertion or planted problem), :func:`bad_list` and :func:`summary` report
+them; :func:`~.fixture.write_fixture` publishes one level as ``ephysatlas.fixtures.pid_qc_filter``.
 """
 
 from __future__ import annotations
@@ -41,192 +36,121 @@ from typing import Optional
 
 import numpy as np
 import pandas as pd
-from scipy.stats import yeojohnson, yeojohnson_normmax
 
 LABELS = ("alignment", "lf", "ap", "waveform")
-COMPONENTS = ("lf", "ap", "waveform")
+MAD_TO_SD = 1.4826
 
-# name -> (group, [(column, worse)], description); worse: +1 high is bad, -1 low is bad.
+# The groups of tests, as reported: {group: description}.
+GROUPS = {
+    "regions": "unusual for its regions",
+    "elsewhere": "more typical elsewhere",
+    "channels": "dead or noisy channels",
+}
+# name -> (group, component that is bad, description). The measurement of a test has the same name.
 TESTS = {
-    "lf_outlier": (
-        "lf",
-        [("h_lc_lf", 1)],
-        "LF unlike what nearby probes record",
-    ),
-    "ap_outlier": (
-        "spike",
-        [("h_lc_ap", 1)],
-        "AP unlike what nearby probes record",
-    ),
-    "wf_outlier": (
-        "spike",
-        [("h_lc_waveform", 1)],
-        "waveforms unlike those of nearby probes",
-    ),
-    "lf_signal": (
-        "lf_signal",
-        [("sig_fpr_lf", 1), ("sig_lf_fit_r2", -1)],
-        "LF signal unusual anywhere (fingerprint or 1/f fit)",
-    ),
-    "ap_signal": (
-        "ap_signal",
-        [("sig_fpr_ap", 1)],
-        "AP signal unusual anywhere (fingerprint or dead channels)",
-    ),
-    "wf_signal": (
-        "wf_signal",
-        [("sig_fpr_waveform", 1)],
-        "waveforms unusual anywhere (fingerprint)",
-    ),
-    "depth": (
-        "position",
-        [("depth_gain", 1)],
-        "more typical at another depth along the probe",
-    ),
+    "lf_level": ("regions", "lf", "LF band unlike the other probes in its regions"),
+    "lf_shape": ("regions", "lf", "LF band along the probe unlike those regions"),
+    "ap_level": ("regions", "ap", "AP band unlike the other probes in its regions"),
+    "ap_shape": ("regions", "ap", "AP band along the probe unlike those regions"),
+    "wf_level": ("regions", "waveform", "waveforms unlike those of its regions"),
+    "wf_shape": ("regions", "waveform", "waveforms along the probe unlike its regions"),
+    "depth": ("elsewhere", "alignment", "more typical deeper or shallower"),
+    "sideways": ("elsewhere", "alignment", "more typical sideways"),
+}
+# name -> (group, component, measurement, limit, description); beyond the limit at every level.
+FIXED_TESTS = {
     "swap": (
-        "position",
-        [("swap_gain_mf", 1)],
+        "elsewhere",
+        "alignment",
+        "swap_gain",
+        0.1,
         "more typical on the other probe's track",
     ),
+    "channels": (
+        "channels",
+        "ap",
+        "dead_fraction",
+        0.2,
+        "a fifth of the channels dead or noisy",
+    ),
 }
-BAD_CHANNEL_FRAC = 0.2  # a fifth of the channels dead or noisy fails the AP signal test
-# Measurements of QC version 4 at the auto-aligned positions, which cached ``mf.csv`` tables may
-# still carry: never used, dropped by :func:`insertion_table`.
-LEGACY_COLUMNS = r"^(a_lc_.*|auto_dist_um)$"
+ALL_TESTS = tuple(TESTS) + tuple(FIXED_TESTS)
 
 
 @dataclass(frozen=True)
 class Level:
-    """Bad when at least ``m`` tests fail beyond ``k`` SDs, or (when given) at least ``m2`` tests
-    fail beyond ``k2`` SDs: one strong sign, or several moderate ones."""
+    """Bad when any test of :data:`TESTS` is beyond ``k`` robust SDs."""
 
     name: str
     k: float
-    m: int
-    k2: Optional[float] = None
-    m2: int = 2
 
     @property
     def text(self) -> str:
-        def one(m, k):
-            return f"{m} test{'s' if m > 1 else ''} beyond {k:g} SD"
-
-        if self.k2 is None:
-            return one(self.m, self.k)
-        return f"{one(self.m, self.k)}, or {one(self.m2, self.k2)}"
+        return f"one test beyond {self.k:g} SD"
 
 
 LEVELS = (
-    Level("L1", 3.0, 1),
-    Level("L2", 2.5, 1),
-    Level("L3", 2.5, 1, 1.5, 2),
-    Level("L4", 2.5, 1, 1.25, 2),
-    Level("L5", 2.5, 1, 1.0, 2),
+    Level("L1", 6.0),
+    Level("L2", 5.0),
+    Level("L3", 4.5),
+    Level("L4", 4.0),
+    Level("L5", 3.5),
 )
 
 
-def measurement_columns() -> list:
-    """The measurements the failure cases read, sorted."""
-    return sorted({c for spec in TESTS.values() for c, _ in spec[1]})
-
-
-def _robust(x: np.ndarray, trim: float = 3.0) -> tuple[float, float]:
-    """Median and robust SD, in two passes (the second without the values beyond ``trim``)."""
-    x = np.asarray(x, dtype=float)
-    x = x[np.isfinite(x)]
-    if len(x) < 5:
-        return np.nan, np.nan
-    med = np.median(x)
-    sd = 1.4826 * np.median(np.abs(x - med)) or np.std(x) or 1.0
-    keep = np.abs(x - med) <= trim * sd
-    med = np.median(x[keep])
-    sd = 1.4826 * np.median(np.abs(x[keep] - med)) or np.std(x[keep]) or 1.0
-    return float(med), float(sd)
-
-
-def _fit(x) -> dict:
-    """Normalizing transform of one measurement on reference values ``x`` (see the module doc)."""
-    x = np.asarray(x, dtype=float)
-    x = x[np.isfinite(x)]
-    if len(x) < 10:
-        return dict(med=np.nan, sd=np.nan, lam=1.0, m2=np.nan, s2=np.nan)
-    med, sd = _robust(x)
-    u = (x - med) / sd
-    lo, hi = np.quantile(u, [0.05, 0.95])
-    lam = float(yeojohnson_normmax(u[(u >= lo) & (u <= hi)]))
-    m2, s2 = _robust(yeojohnson(u, lam))
-    return dict(med=med, sd=sd, lam=lam, m2=m2, s2=s2)
-
-
-def _z(x: pd.Series, p: dict) -> pd.Series:
-    u = ((pd.to_numeric(x, errors="coerce") - p["med"]) / p["sd"]).to_numpy(float)
-    t = np.full(len(u), np.nan)
-    ok = np.isfinite(u)
-    t[ok] = yeojohnson(u[ok], p["lam"])
-    return pd.Series((t - p["m2"]) / p["s2"], index=x.index)
-
-
 def _col(df: pd.DataFrame, c: str) -> pd.Series:
-    return df[c] if c in df else pd.Series(np.nan, index=df.index)
+    return (
+        pd.to_numeric(df[c], errors="coerce")
+        if c in df
+        else df.index.to_series() * 0.0 + np.nan
+    )
 
 
 def calibrate(df: pd.DataFrame) -> dict:
-    """``{column: transform}`` of every measurement the failure cases read
-    (:func:`measurement_columns`), fitted on every probe with a value: no label, no split."""
-    return {c: _fit(_col(df, c)) for c in measurement_columns()}
+    """``{test: {"median", "sd"}}`` of every test of :data:`TESTS`, on every probe with a value: no
+    label, no split."""
+    out = {}
+    for test in TESTS:
+        x = _col(df, test).to_numpy(float)
+        med = float(np.nanmedian(x))
+        out[test] = dict(
+            median=med, sd=MAD_TO_SD * float(np.nanmedian(np.abs(x - med)))
+        )
+    return out
 
 
 def zscores(df: pd.DataFrame, cal: dict) -> pd.DataFrame:
-    """z of every test, oriented so that larger is worse (the max over a test's columns)."""
-    z = pd.DataFrame(index=df.index)
-    for name, (_, cols, _) in TESTS.items():
-        parts = [worse * _z(_col(df, c), cal[c]) for c, worse in cols]
-        z[name] = pd.concat(parts, axis=1).max(axis=1)
-    return z
+    """z of every test of :data:`TESTS`; larger is worse."""
+    return pd.DataFrame(
+        {t: (_col(df, t) - cal[t]["median"]) / cal[t]["sd"] for t in TESTS},
+        index=df.index,
+    )
 
 
 def failures(df: pd.DataFrame, z: pd.DataFrame, k: float) -> pd.DataFrame:
-    """Boolean table of the failure cases at ``k`` SDs (dead channels fail the AP signal test)."""
+    """Boolean table of the tests beyond ``k`` SDs and of the fixed tests."""
     fail = z[list(TESTS)].gt(k)
-    bad_ch = pd.to_numeric(_col(df, "sig_bad_channel_frac"), errors="coerce")
-    fail["ap_signal"] = fail["ap_signal"] | (bad_ch > BAD_CHANNEL_FRAC).to_numpy()
+    for test, (_, _, column, limit, _) in FIXED_TESTS.items():
+        fail[test] = _col(df, column).gt(limit)
     return fail.fillna(False).astype(bool)
 
 
 def label(df: pd.DataFrame, z: pd.DataFrame, level: Level) -> pd.DataFrame:
-    """Failed tests, whether each component is bad, and the bad type, at one level.
-
-    The failed tests (which decide what is bad) are those of the rule that marked the probe: the
-    tests beyond ``k`` when the first rule holds, plus those beyond ``k2`` when the second does.
-    """
-    fail1 = failures(df, z, level.k)
-    rule1 = fail1.sum(axis=1) >= level.m
-    fail = fail1 & rule1.to_numpy()[:, None]
-    rule2 = pd.Series(False, index=df.index)
-    if level.k2 is not None:
-        fail2 = failures(df, z, level.k2)
-        rule2 = fail2.sum(axis=1) >= level.m2
-        fail = fail | (fail2 & rule2.to_numpy()[:, None])
-    group = {n: TESTS[n][0] for n in TESTS}
-    by = {
-        g: fail[[n for n in fail if group[n] == g]].any(axis=1)
-        for g in set(group.values())
+    """Failed tests, whether each component is bad, and the bad type, at one level."""
+    fail = failures(df, z, level.k)
+    component = {t: spec[1] for t, spec in TESTS.items()}
+    component.update({t: spec[1] for t, spec in FIXED_TESTS.items()})
+    points_to = {
+        c: fail[[t for t in fail if component[t] == c]].any(axis=1) for c in LABELS
     }
-    bad = rule1 | rule2
-    lf_mis = fail["lf_outlier"]
-    sp_mis = fail[["ap_outlier", "wf_outlier"]].any(axis=1)
-    align = bad & (by["position"] | (lf_mis & sp_mis))
-    lf = bad & (by["lf_signal"] | (lf_mis & ~sp_mis & ~align))
-    ap = bad & (by["ap_signal"] | (fail["ap_outlier"] & ~lf_mis & ~align))
-    wf = bad & (ap | by["wf_signal"] | (sp_mis & ~lf_mis & ~align))
     out = pd.DataFrame(
         {
             "n_fail": fail.sum(axis=1),
-            "bad": bad,
-            "alignment": align,
-            "lf": lf,
-            "ap": ap,
-            "waveform": wf,
+            "bad": fail.any(axis=1),
+            "alignment": points_to["alignment"],
+            "lf": points_to["lf"],
+            "ap": points_to["ap"],
+            "waveform": points_to["waveform"] | points_to["ap"],
         },
         index=df.index,
     )
@@ -273,91 +197,81 @@ BAD_GROUPS = {  # what is bad, as summarised (any other combination: several ban
 }
 
 
-def insertion_table(mf: pd.DataFrame, swap: Optional[pd.DataFrame]) -> pd.DataFrame:
-    """One row per insertion (index ``pid``, sorted): its model-free metrics (``mf``, the last row
-    of an insertion scored twice; the :data:`LEGACY_COLUMNS` dropped) and ``swap_gain_mf``, its
-    largest probe-swap gain over the pairs ``swap`` puts it in (NaN in none)."""
-    mf = mf.assign(pid=mf["pid"].astype(str)).drop_duplicates("pid", keep="last")
-    df = mf.set_index("pid").sort_index()
-    df = df.drop(columns=df.filter(regex=LEGACY_COLUMNS).columns)
-    df["swap_gain_mf"] = np.nan
-    if swap is not None and len(swap):
-        pairs = pd.concat(
-            [
-                swap[[end, "swap_gain_mf"]].rename(columns={end: "pid"})
-                for end in ("pid_a", "pid_b")
-            ]
-        )
-        best = pairs.assign(pid=pairs["pid"].astype(str)).groupby("pid")["swap_gain_mf"]
-        df["swap_gain_mf"] = best.max().reindex(df.index)
-    return df
-
-
-def fakes_table(fakes: pd.DataFrame) -> pd.DataFrame:
-    """The planted problems that could be scored (rows without an ``error``; the
-    :data:`LEGACY_COLUMNS` dropped)."""
-    error = fakes["error"] if "error" in fakes else pd.Series("", index=fakes.index)
-    out = fakes[error.fillna("").eq("")].reset_index(drop=True)
-    return out.drop(columns=out.filter(regex=LEGACY_COLUMNS).columns)
-
-
 def level_table(df: pd.DataFrame, cal: dict, levels=LEVELS) -> pd.DataFrame:
-    """``df`` with the z-scores (``z_<test>``) and every level's labels (``<level>_<column>``: the
-    columns of :func:`label`, ``review`` and ``<component>_label``, see :func:`all_levels`)."""
+    """``df`` with the z-scores (``z_<test>``), every level's labels (``<level>_<column>``: the
+    columns of :func:`label`, ``review`` and ``<component>_label``, see :func:`all_levels`) and
+    ``first_level``, the first level that marks the row bad (empty when none does)."""
     tables, z = all_levels(df, cal, levels)
+    first = pd.Series("", index=df.index, dtype=object)
+    for lv in reversed(levels):
+        first = first.where(~tables[lv.name]["bad"], lv.name)
     return pd.concat(
         [df, z.add_prefix("z_")]
-        + [t.add_prefix(f"{name}_") for name, t in tables.items()],
+        + [t.add_prefix(f"{name}_") for name, t in tables.items()]
+        + [first.rename("first_level")],
         axis=1,
     )
 
 
+def group_failures(table: pd.DataFrame, level: str) -> pd.DataFrame:
+    """Per row of a :func:`level_table`: whether it fails a test of each of :data:`GROUPS` at
+    ``level``."""
+    group = {t: spec[0] for t, spec in TESTS.items()}
+    group.update({t: spec[0] for t, spec in FIXED_TESTS.items()})
+    return pd.DataFrame(
+        {
+            g: table[[f"{level}_fail_{t}" for t in ALL_TESTS if group[t] == g]].any(
+                axis=1
+            )
+            for g in GROUPS
+        },
+        index=table.index,
+    )
+
+
 def bad_list(table: pd.DataFrame, level: str) -> pd.DataFrame:
-    """The insertions of a :func:`level_table` bad at ``level``: what is bad (``bad_type`` and
-    the label of each component), the failed tests and the z-scores; the most failed tests
-    first."""
+    """The insertions of a :func:`level_table` bad at ``level``: the first level that marks them,
+    what is bad (``bad_type`` and the label of each component), the failed tests and the z-scores;
+    the first marked first."""
     cols = {
+        "first_level": "first_level",
         f"{level}_bad_type": "bad_type",
         f"{level}_n_fail": "n_tests_failed",
         f"{level}_failed": "tests_failed",
     }
     cols.update({f"{level}_{c}_label": c for c in LABELS})
     keep = list(cols) + [f"z_{t}" for t in TESTS]
+    keep += [spec[2] for spec in FIXED_TESTS.values()]
     bad = table.loc[table[f"{level}_bad"], [c for c in keep if c in table]]
     return bad.rename(columns=cols).sort_values(
-        ["n_tests_failed", "bad_type"], ascending=[False, True]
+        ["first_level", "n_tests_failed"], ascending=[True, False]
     )
 
 
-def detection(table: pd.DataFrame, fakes: pd.DataFrame, levels=LEVELS) -> pd.DataFrame:
-    """What each level catches of the planted problems ``fakes`` (a :func:`level_table` of
-    :func:`fakes_table`), with ``table`` the level table of the insertions they were planted in.
+def detection(
+    table: pd.DataFrame, planted: pd.DataFrame, levels=LEVELS
+) -> pd.DataFrame:
+    """The share each level marks bad of the insertions as recorded and of each kind of planted
+    problem, on the same insertions and with the same tests.
 
-    One row per level and kind of planted problem (``fake``), plus ``unmodified``, the source
-    insertions themselves: ``n`` problems counted, ``detected`` of them bad at the level and
-    ``percent``. A problem counts only when its source insertion is not bad at the level itself
-    (otherwise it would be caught whatever was planted); for ``unmodified``, every source counts
-    and ``detected`` is the number bad (the flagged share of a random sample of the insertions).
-    """
-    sources = pd.Index(fakes["source_pid"].astype(str).unique())
+    One row per level and kind of problem (``planted``, a :func:`level_table` of the problems;
+    ``as recorded``: their source insertions in ``table``, a :func:`level_table` of the insertions):
+    ``n`` insertions, ``detected`` of them bad and ``percent``."""
+    sources = pd.Index(planted["source_pid"].astype(str).unique())
     rows = []
     for level in levels:
         n = level.name
-        bad = table[f"{n}_bad"].astype(bool)
-        src_bad = bad.reindex(sources).fillna(False).astype(bool)
+        bad = table[f"{n}_bad"].astype(bool).reindex(sources).fillna(False)
         rows.append(
-            dict(
-                level=n, fake="unmodified", n=len(sources), detected=int(src_bad.sum())
-            )
+            dict(level=n, fake="as recorded", n=len(sources), detected=int(bad.sum()))
         )
-        for fake, g in fakes.groupby("fake", sort=False):
-            clean = ~g["source_pid"].astype(str).map(bad).eq(True)
+        for fake, g in planted.groupby("fake", sort=False):
             rows.append(
                 dict(
                     level=n,
                     fake=fake,
-                    n=int(clean.sum()),
-                    detected=int(g.loc[clean, f"{n}_bad"].astype(bool).sum()),
+                    n=len(g),
+                    detected=int(g[f"{n}_bad"].astype(bool).sum()),
                 )
             )
     out = pd.DataFrame(rows)
@@ -366,12 +280,12 @@ def detection(table: pd.DataFrame, fakes: pd.DataFrame, levels=LEVELS) -> pd.Dat
 
 
 def summary(
-    table: pd.DataFrame, fakes: Optional[pd.DataFrame] = None, levels=LEVELS
+    table: pd.DataFrame, planted: Optional[pd.DataFrame] = None, levels=LEVELS
 ) -> pd.DataFrame:
-    """Per level: the rule, the insertions bad and to review, what is bad (:data:`BAD_GROUPS`)
-    and, with the planted problems ``fakes``, the flagged share of their unmodified source
-    insertions (``sources flagged %``) and the share of each kind of problem marked bad, among
-    those planted in insertions that are not bad themselves (:func:`detection`)."""
+    """Per level: the rule, the insertions bad and to review, what is bad (:data:`BAD_GROUPS`), the
+    insertions failing a test of each of :data:`GROUPS` and, with the planted problems ``planted``,
+    the share marked bad of their source insertions as recorded and of each kind of problem
+    (:func:`detection`)."""
     rows = []
     for level in levels:
         n = level.name
@@ -387,14 +301,17 @@ def summary(
         for name, types in BAD_GROUPS.items():
             row[name] = int(kind.isin(types).sum())
         row["several bands"] = len(kind) - sum(row[name] for name in BAD_GROUPS)
+        row.update(
+            {GROUPS[g]: int(v) for g, v in group_failures(table, n).sum().items()}
+        )
         rows.append(row)
     out = pd.DataFrame(rows).set_index("level")
-    if fakes is not None:
-        det = detection(table, fakes, levels)
-        det["fake"] = det["fake"].replace({"unmodified": "sources flagged"}) + " %"
+    if planted is not None:
+        det = detection(table, planted, levels)
+        det["fake"] = det["fake"] + " %"
         wide = det.pivot(index="level", columns="fake", values="percent")
-        order = ["sources flagged %"] + [
-            f"{k} %" for k in fakes["fake"].drop_duplicates()
+        order = ["as recorded %"] + [
+            f"{k} %" for k in planted["fake"].drop_duplicates()
         ]
         out = out.join(wide[order])
     return out
