@@ -10,7 +10,7 @@ from unittest import mock
 import numpy as np
 import pandas as pd
 
-from ephysatlas.qc import levels, measures
+from ephysatlas.qc import cases, levels, measures
 from ephysatlas.qc import pipeline as qp
 from ephysatlas.qc.fixture import fixture_labels, write_fixture
 from ephysatlas.qc.regions import (
@@ -99,6 +99,14 @@ class TestRegionReference(unittest.TestCase):
         self.assertIsNone(ref.stats("Allen", 9999))
         one = {name: v[0] for name, v in labels.items()}
         self.assertTrue(np.isfinite(ref.residuals(self.z[0], one, [0])[5:8]).all())
+
+    def test_expected_gives_the_residuals(self):
+        labels = parcel_labels(self.xyz[0], Atlas)
+        median, spread = self.ref.expected(labels, [0])
+        np.testing.assert_allclose(
+            self.ref.residuals(self.z[0], labels, [0]), (self.z[0] - median) / spread
+        )
+        self.assertTrue((spread >= self.ref.floor).all())
 
     def test_bins_outside_the_brain_have_no_residual(self):
         xyz = self.xyz[0] + np.array([0.0, 0.0, 1.0e-3])  # 1 mm too shallow
@@ -323,6 +331,52 @@ class TestLevels(unittest.TestCase):
         self.assertEqual(d.loc[("L1", "as recorded"), "detected"], 1)
         self.assertEqual(d.loc[("L1", "a"), "detected"], 1)
         self.assertEqual(d.loc[("L1", "b"), "percent"], 50.0)
+
+
+class TestExampleFigures(unittest.TestCase):
+    """Which tests the figure of an insertion shows."""
+
+    def setUp(self):
+        self.df = measurements()
+        self.cal = levels.calibrate(self.df)
+
+    def at(self, test, z):
+        c = self.cal[test]
+        return {test: c["median"] + z * c["sd"]}
+
+    def shown(self, **values):
+        t = levels.level_table(with_problem(self.df, "p000", **values), self.cal)
+        t["first_level"] = t["first_level"].fillna("")
+        return cases.tests_to_show(t.loc["p000"])
+
+    def test_the_fixed_tests_come_first(self):
+        shown = self.shown(swap_gain=0.5, **self.at("lf_level", 9))
+        self.assertEqual(shown, ["swap", "lf_level"])
+
+    def test_one_row_per_band_the_strongest(self):
+        shown = self.shown(**self.at("lf_level", 8), **self.at("lf_shape", 12))
+        self.assertEqual(shown, ["lf_shape"])
+
+    def test_a_position_test_counts_against_its_own_limit(self):
+        shown = self.shown(**self.at("lf_level", 8), **self.at("depth", 6))
+        self.assertEqual(shown, ["depth", "lf_level"])
+
+    def test_at_most_three_rows(self):
+        shown = self.shown(
+            swap_gain=0.5,
+            dead_fraction=0.5,
+            **self.at("lf_level", 9),
+            **self.at("ap_level", 9),
+        )
+        self.assertEqual(len(shown), cases.MAX_ROWS)
+
+    def test_an_insertion_no_level_marks_shows_the_test_closest_to_a_limit(self):
+        t = levels.level_table(self.df, self.cal)
+        t["first_level"] = t["first_level"].fillna("")
+        row = t[t["first_level"].eq("")].iloc[0]
+        shown = cases.tests_to_show(row)
+        self.assertEqual(len(shown), 1)
+        self.assertIn(shown[0], levels.TESTS)
 
 
 class TestPlantedProblems(unittest.TestCase):

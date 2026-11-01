@@ -358,22 +358,29 @@ def stage_examples(
     reference: RegionReference,
     pids=None,
     out_dir: Optional[Path] = None,
+    overwrite: bool = False,
 ) -> dict:
     """One figure per insertion ``pids`` (:func:`~.cases.render_examples`), by default those of
     :func:`~.cases.pick_examples`, in ``out_dir`` (by default ``examples/``)."""
     from .cases import pick_examples, render_examples
+    from .data import insertion_sessions
 
     table = pd.read_parquet(s.out_dir / "qc_levels.pqt")
+    table["first_level"] = table["first_level"].fillna("")
+    sessions = insertion_sessions(ds.pids, cache=s.out_dir / "sessions.csv")
     scans = np.load(s.out_dir / "scans.npz")
     if pids is None:
         pids = pick_examples(table)
     return render_examples(
         pids,
+        ds,
         bins,
         table,
         {k: scans[k] for k in scans.files},
         reference,
         brain_atlas,
         bands_of(ds),
+        session_pairs(ds, s, sessions),
         out_dir or s.out_dir / "examples",
+        overwrite=overwrite,
     )

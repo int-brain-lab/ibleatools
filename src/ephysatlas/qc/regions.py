@@ -174,15 +174,22 @@ class RegionReference:
                 return s
         return None
 
-    def residuals(self, z: np.ndarray, labels: dict, exclude=()) -> np.ndarray:
-        """``[B, F]`` residuals of binned features ``z`` whose bins are in the regions ``labels``
-        (``{parcellation: [B]}``), in MADs of each feature in each region; NaN where no region has
-        a reference. ``exclude``: the probes left out of the reference."""
-        out = np.full(z.shape, np.nan, dtype=np.float32)
+    def expected(self, labels: dict, exclude=()) -> tuple[np.ndarray, np.ndarray]:
+        """``[B, F]`` what is expected of bins in the regions ``labels`` (``{parcellation: [B]}``):
+        the median of their region and its robust SD, floored; NaN where no region has a reference.
+        ``exclude``: the probes left out of the reference."""
         keys = np.stack([labels[name] for name in PARCELLATIONS], axis=1)
+        median = np.full((len(keys), len(self.floor)), np.nan, dtype=np.float32)
+        spread = median.copy()
         for regions in np.unique(keys, axis=0):
             s = self._reference(regions, exclude)
             if s is not None:
                 bins = (keys == regions).all(axis=1)
-                out[bins] = (z[bins] - s[0]) / np.maximum(s[1], self.floor)
-        return out
+                median[bins], spread[bins] = s[0], np.maximum(s[1], self.floor)
+        return median, spread
+
+    def residuals(self, z: np.ndarray, labels: dict, exclude=()) -> np.ndarray:
+        """``[B, F]`` residuals of binned features ``z`` whose bins are in the regions ``labels``,
+        in MADs of each feature in each region (:meth:`expected`)."""
+        median, spread = self.expected(labels, exclude)
+        return (z - median) / spread
