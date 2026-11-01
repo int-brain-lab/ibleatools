@@ -39,19 +39,29 @@ class ChannelModel:
         repo_id (str, optional): Hugging Face repo id or a local release directory.
         revision (str, optional): Release tag.
         device (str, optional): Torch device; auto-detected when None.
+        trilinear_context, neighbour_draws: How the model predicts, see
+            :meth:`~ephysatlas.models.encoder_inpainting.SpatialEncoder.predict_xyz`.
     """
+
+    predict_options: dict = {}
 
     def __init__(
         self,
         repo_id: str = CHANNEL_MODEL_REPO_ID,
         revision: str = CHANNEL_MODEL_REVISION,
         device: Optional[str] = None,
+        *,
+        trilinear_context: bool = False,
+        neighbour_draws: int = 0,
     ):
         from ephysatlas import load_pretrained
 
         self.repo_id = str(repo_id)
         self.revision = str(revision)
         self.device = device or default_device()
+        self.predict_options = dict(
+            trilinear_context=trilinear_context, neighbour_draws=neighbour_draws
+        )
         self.encoder = load_pretrained(
             self.repo_id, revision=self.revision, device=self.device
         )
@@ -108,7 +118,7 @@ class ChannelModel:
             [np.full(len(xyz), str(pid)), np.arange(len(xyz))], names=["pid", "channel"]
         )
         df = pd.DataFrame(xyz, index=index, columns=columns)
-        out = self.encoder.predict(df, batch_size=batch_size)
+        out = self.encoder.predict(df, batch_size=batch_size, **self.predict_options)
         return out[[f"pred_{f}" for f in self.features]].to_numpy(dtype=np.float64)
 
     def predict_std(

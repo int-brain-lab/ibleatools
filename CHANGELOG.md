@@ -11,6 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `spatial_encoder.utils.LoadInsertionData`, `alignment.ChannelDataset.load` and `unit_level_encoder.prepare_data.prepare_latest_cells_encoder_data` take `exclude_pids`, the insertions to leave out, and `alignment.runner.RunSettings` passes it on. An empty list keeps every insertion
 - Documentation: *How to leave out the insertions the QC flags* (`docs/how-to/exclude-flagged-insertions.qmd`) and an API section for `ephysatlas.qc`
 - `alignment.runner.RunSettings.unit_prepared_data_dir` and `scripts/run_alignment_heldout.py --unit-prepared-data`: the prepared unit data of the unit-level model used for the unit evidence (default: its `Config.prepared_data_dir`); `--channel-revision` for the channel-level model's Hub tag
+- `SpatialEncoder.predict` and `predict_xyz` take `trilinear_context` (interpolate the 200 µm context between voxels, leaving empty voxels out, `ContextAtlasManager.sample_context_trilinear_m`) and `neighbour_draws` (average random neighbour sets as the model was trained on, reproducibly, instead of the nearest ones). Both are off by default, so existing predictions do not change. `ChannelModel(trilinear_context=True, neighbour_draws=4)` predicts this way
 
 ### Changed
 - The data loaders leave out the insertions the automatic QC marks bad by default (`pid_qc_filter.excluded_pids()`; for the unit loader, those bad for their alignment, AP band or waveforms), instead of the hand-curated `ephysatlas.fixtures.misaligned_pids`, which is kept for reference
