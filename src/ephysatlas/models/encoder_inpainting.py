@@ -15,6 +15,7 @@ module scope, and the two runtimes segfault together on macOS arm64.
 
 import logging
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -28,6 +29,8 @@ logger = logging.getLogger(__name__)
 ROLE_WEIGHTS = "weights"
 ROLE_CONTEXT = "context"
 ROLE_BANK = "neighbor_bank"
+# The seed of the random neighbour sets, so that their predictions are reproducible.
+NEIGHBOUR_DRAW_SEED = 0
 ROLE_CONFIDENCE = "confidence"
 ROLE_SPLIT = "split"
 ROLE_STATS = "stats"
@@ -439,19 +442,26 @@ class SpatialEncoder:
 
     # -- the pipeline ----------------------------------------------------------------------
 
-    def _standardised_context(self, xyz_m: np.ndarray) -> np.ndarray:
+    def _standardised_context(
+        self, xyz_m: np.ndarray, trilinear: bool = False
+    ) -> np.ndarray:
         """Sample anatomical context at each position and standardise it.
 
         Mirrors the recorded-channel path of ``build_channels_plus_emptyvoxels_with_neighbors``
         exactly, including the detail that channels whose context is all zero -- outside the
-        atlas -- are left at zero rather than standardised into a large negative number.
+        atlas -- are left at zero rather than standardised into a large negative number. With
+        ``trilinear`` the context is interpolated between voxels instead of taken from the
+        nearest one.
         """
         from ephysatlas.spatial_encoder.utils import mirror_xyz_to_left
 
         manager = self._context_manager()
-        pack = manager.sample_context_numpy_m(
-            mirror_xyz_to_left(xyz_m.copy()), mode="clip"
+        sample = (
+            manager.sample_context_trilinear_m
+            if trilinear
+            else manager.sample_context_numpy_m
         )
+        pack = sample(mirror_xyz_to_left(xyz_m.copy()), mode="clip")
         ctx = np.concatenate([pack["cell_pc"], pack["gene_pc"]], axis=1).astype(
             np.float32
         )
@@ -517,7 +527,70 @@ class SpatialEncoder:
                 mask[i, :taken] = True
         return e_n, p_n, mask
 
-    def predict(self, df, batch_size: int = 1024) -> pd.DataFrame:
+    def prediction_options(
+        self,
+        trilinear_context: Optional[bool] = None,
+        neighbour_draws: Optional[int] = None,
+    ) -> tuple[bool, int]:
+        """``(trilinear_context, neighbour_draws)`` of a prediction: those given, else the release's.
+
+        A release records them in ``config.prediction``; a release without that block predicts from
+        the nearest voxel and the nearest neighbours, as it did when it was published.
+        """
+        release = self.config.get("prediction") or {}
+        if trilinear_context is None:
+            trilinear_context = release.get("trilinear_context", False)
+        if neighbour_draws is None:
+            neighbour_draws = release.get("neighbour_draws", 0)
+        return bool(trilinear_context), int(neighbour_draws)
+
+    def _neighbour_draws(self, xyz_m: np.ndarray, pids: np.ndarray, draws: int):
+        """Random neighbour sets for each query position, as the model was trained on.
+
+        The training collate drew ``m_max`` of the nearest ``8 * m_max`` channels in the radius.
+        This yields ``draws`` such selections, from a fixed seed so predictions are reproducible.
+
+        Yields:
+            tuple: ``(e_n, p_n, mask)``, as :meth:`_neighbours`.
+        """
+        from ephysatlas.spatial_encoder.utils import ChannelNN
+
+        bank = self._neighbor_bank()
+        neighbourhood = self.config.get("neighbourhood") or {}
+        m_max = int(neighbourhood.get("m_max", 64))
+        radius_m = float(neighbourhood.get("radius_um", 600.0)) * 1e-6
+        allow_same_probe = bool(neighbourhood.get("allow_same_probe", False))
+        if getattr(self, "_bank_nn", None) is None:
+            self._bank_nn = ChannelNN(bank["xyz"])
+        candidates = self._bank_nn.query_radius(
+            xyz_m.astype(np.float64), r_m=radius_m, k_cap=8 * m_max
+        )
+        pool = np.full((xyz_m.shape[0], 8 * m_max), -1, dtype=np.int64)
+        for i, cand in enumerate(candidates):
+            cand = np.asarray(cand, dtype=int)
+            if not allow_same_probe and cand.size:
+                cand = cand[bank["pid"][cand] != str(pids[i])]
+            pool[i, : cand.size] = cand[: pool.shape[1]]
+        rng = np.random.default_rng(NEIGHBOUR_DRAW_SEED)
+        for _ in range(draws):
+            keys = rng.random(pool.shape)
+            keys[pool < 0] = np.inf
+            order = np.argsort(keys, axis=1)[:, :m_max]
+            chosen = np.take_along_axis(pool, order, axis=1)
+            mask = chosen >= 0
+            safe = np.where(mask, chosen, 0)
+            e_n = (bank["feat"][safe] * mask[:, :, None]).astype(np.float32)
+            p_n = (bank["xyz"][safe] * mask[:, :, None]).astype(np.float32)
+            yield e_n, p_n, mask
+
+    def predict(
+        self,
+        df,
+        batch_size: int = 1024,
+        *,
+        trilinear_context: Optional[bool] = None,
+        neighbour_draws: Optional[int] = None,
+    ) -> pd.DataFrame:
         """Predict electrophysiological features for each channel position.
 
         The model was trained on positions mirrored to the left hemisphere (``x -> -|x|``): its
@@ -529,6 +602,7 @@ class SpatialEncoder:
                 manifest names in ``inputs.columns`` (``x, y, z``, in metres), in either
                 hemisphere. The feature columns are *not* read -- they are what this predicts.
             batch_size (int, optional): Rows per forward pass.
+            trilinear_context, neighbour_draws: See :meth:`predict_xyz`.
 
         Returns:
             pd.DataFrame: Indexed exactly like ``df``, one ``pred_<feature>`` column per entry in
@@ -556,6 +630,8 @@ class SpatialEncoder:
             df.loc[:, columns].to_numpy(dtype=np.float32),
             df.index.get_level_values(0).to_numpy().astype(str),
             batch_size=batch_size,
+            trilinear_context=trilinear_context,
+            neighbour_draws=neighbour_draws,
         )
         return pd.DataFrame(
             predictions,
@@ -564,7 +640,14 @@ class SpatialEncoder:
         )
 
     def predict_xyz(
-        self, xyz_m, pids=None, batch_size: int = 1024, standardized: bool = False
+        self,
+        xyz_m,
+        pids=None,
+        batch_size: int = 1024,
+        standardized: bool = False,
+        *,
+        trilinear_context: Optional[bool] = None,
+        neighbour_draws: Optional[int] = None,
     ) -> np.ndarray:
         """Predict the features at an array of positions (the array form of :meth:`predict`).
 
@@ -576,6 +659,13 @@ class SpatialEncoder:
             batch_size (int, optional): Rows per forward pass.
             standardized (bool, optional): Return the model's standardised output instead of
                 feature units.
+            trilinear_context (bool, optional): Interpolate the context between the voxels of its
+                200 µm grid, instead of taking the nearest voxel. By default, what the release
+                says (:meth:`prediction_options`).
+            neighbour_draws (int, optional): Average this many random neighbour sets, as the
+                model was trained on (reproducible; 4 draws take about twice as long on one probe),
+                instead of the nearest ``m_max`` neighbours. 0 keeps the nearest. By default, what
+                the release says.
 
         Returns:
             np.ndarray: ``[N, n_features]`` float32 predictions, in ``outputs.columns`` order.
@@ -592,8 +682,15 @@ class SpatialEncoder:
         if pids is None or isinstance(pids, str):
             pids = np.full(xyz.shape[0], "" if pids is None else pids)
         pids = np.asarray(pids).astype(str)
-        ctx = self._standardised_context(xyz)
-        e_n, p_n, mask = self._neighbours(xyz, pids)
+        trilinear_context, neighbour_draws = self.prediction_options(
+            trilinear_context, neighbour_draws
+        )
+        ctx = self._standardised_context(xyz, trilinear=trilinear_context)
+        neighbours = (
+            self._neighbour_draws(xyz, pids, neighbour_draws)
+            if neighbour_draws
+            else [self._neighbours(xyz, pids)]
+        )
 
         model = self.model
         device = (
@@ -602,24 +699,27 @@ class SpatialEncoder:
             else next(model.parameters()).device
         )
         model = model.to(device)
-        chunks = []
-        with torch.no_grad():
-            for start in range(0, xyz.shape[0], batch_size):
-                stop = start + batch_size
-                _, mu = model(
-                    torch.from_numpy(ctx[start:stop]).to(device),
-                    torch.from_numpy(xyz[start:stop]).to(device),
-                    torch.from_numpy(e_n[start:stop]).to(device),
-                    torch.from_numpy(p_n[start:stop]).to(device),
-                    torch.from_numpy(mask[start:stop]).to(device),
-                )
-                if not standardized:
-                    # Back into feature units with the statistics the checkpoint shipped.
-                    mu = unstandardize(mu.float(), model.e_mean, model.e_std)
-                chunks.append(mu.float().cpu().numpy())
-        if not chunks:
+        if xyz.shape[0] == 0:
             return np.zeros((0, int(model.e_mean.numel())), dtype=np.float32)
-        return np.concatenate(chunks, axis=0).astype(np.float32)
+        predictions = []
+        for e_n, p_n, mask in neighbours:
+            chunks = []
+            with torch.no_grad():
+                for start in range(0, xyz.shape[0], batch_size):
+                    stop = start + batch_size
+                    _, mu = model(
+                        torch.from_numpy(ctx[start:stop]).to(device),
+                        torch.from_numpy(xyz[start:stop]).to(device),
+                        torch.from_numpy(e_n[start:stop]).to(device),
+                        torch.from_numpy(p_n[start:stop]).to(device),
+                        torch.from_numpy(mask[start:stop]).to(device),
+                    )
+                    if not standardized:
+                        # Back into feature units with the statistics the checkpoint shipped.
+                        mu = unstandardize(mu.float(), model.e_mean, model.e_std)
+                    chunks.append(mu.float().cpu().numpy())
+            predictions.append(np.concatenate(chunks, axis=0))
+        return np.mean(predictions, axis=0).astype(np.float32)
 
     def selftest(self, rtol: float = 1e-4, atol: float = 1e-5) -> bool:
         """Reproduce the shipped golden predictions, if the model ships an example.

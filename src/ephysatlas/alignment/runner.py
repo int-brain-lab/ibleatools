@@ -22,6 +22,7 @@ import pandas as pd
 from .metrics import alignment_metrics
 from .models import (
     CHANNEL_MODEL_REPO_ID,
+    CHANNEL_MODEL_REVISION,
     UNIT_MODEL_REPO_ID,
     UNIT_MODEL_REVISION,
     VINTAGE,
@@ -43,28 +44,36 @@ class RunSettings:
         out_dir: Output directory.
         methods: Any of :data:`METHODS`.
         trace: Histology trace for the histology methods, one of :data:`TRACES`.
-        vintage: Feature release and channel-model tag.
+        vintage: Feature release.
+        channel_revision: Hub tag of the channel-level model (ignored for a local release dir).
         channel_repo_id, unit_repo_id: Released models (Hub repo ids or local release dirs).
         unit_revision: Tag of the unit-level model on the Hub (ignored for a local release dir).
+        unit_prepared_data_dir: Prepared unit data of the unit-level model (None: the unit
+            model's default ``Config.prepared_data_dir``).
         save_results: Write each result's ``.npz``.
         save_figures: Draw each result's figure (slower).
         overwrite: Recompute rows already in the CSV.
         limit: Process at most this many insertions (for a quick check).
         ephys_only_kwargs: Keyword arguments for :func:`.ephys_only.localize_ephys_only`.
+        exclude_pids: Insertions the dataset leaves out (None: the QC filter's default; an empty
+            list keeps every insertion, e.g. to align the whole release).
     """
 
     out_dir: Path
     methods: Sequence[str] = ("histology", "ephys_only")
     trace: str = "picks"
     vintage: str = VINTAGE
+    channel_revision: str = CHANNEL_MODEL_REVISION
     channel_repo_id: str = CHANNEL_MODEL_REPO_ID
     unit_repo_id: str = UNIT_MODEL_REPO_ID
     unit_revision: str = UNIT_MODEL_REVISION
+    unit_prepared_data_dir: Optional[Path] = None
     save_results: bool = True
     save_figures: bool = False
     overwrite: bool = False
     limit: Optional[int] = None
     ephys_only_kwargs: dict = field(default_factory=dict)
+    exclude_pids: Optional[list] = None
 
 
 def _done(csv_path: Path) -> set:
@@ -115,16 +124,20 @@ def run_alignments(
     done = set() if settings.overwrite else _done(csv_path)
 
     print(
-        f"[alignment] loading models {settings.channel_repo_id}@{settings.vintage} ..."
+        f"[alignment] loading models {settings.channel_repo_id}@{settings.channel_revision} ..."
     )
-    channel_model = ChannelModel(settings.channel_repo_id, settings.vintage)
+    channel_model = ChannelModel(settings.channel_repo_id, settings.channel_revision)
     unit_model = None
     if "histology_unit" in settings.methods:
         print(
             f"[alignment] loading {settings.unit_repo_id}@{settings.unit_revision} and its unit data ..."
         )
-        unit_model = UnitModel.load(settings.unit_repo_id, settings.unit_revision)
-    dataset = ChannelDataset.load(settings.vintage)
+        unit_model = UnitModel.load(
+            settings.unit_repo_id,
+            settings.unit_revision,
+            prepared_data_dir=settings.unit_prepared_data_dir,
+        )
+    dataset = ChannelDataset.load(settings.vintage, exclude_pids=settings.exclude_pids)
     brain_atlas = AllenAtlas()
     traces = HistologyTraces()
     if "ephys_only" in settings.methods:
@@ -239,7 +252,7 @@ def run_alignments(
             print(
                 f"    {method}: cosmos={row.get('cosmos_acc', np.nan):.3f} "
                 f"beryl={row.get('beryl_acc', np.nan):.3f} "
-                f"distance={row.get('mean_distance_um', np.nan):.0f} um "
+                f"distance={row.get('median_distance_um', np.nan):.0f} um "
                 f"({row['seconds']:.1f} s)",
                 flush=True,
             )
@@ -247,7 +260,8 @@ def run_alignments(
 
 
 def summarize(csv_path: Path) -> pd.DataFrame:
-    """Mean and median of the main scores per method (successful rows only)."""
+    """Median over the probes of the main scores per method (successful rows only); the distance
+    of a probe is the median distance of its channels."""
     df = pd.read_csv(csv_path)
     df = df[df["error"].fillna("") == ""]
     cols = [
@@ -255,12 +269,12 @@ def summarize(csv_path: Path) -> pd.DataFrame:
         for c in (
             "cosmos_acc",
             "beryl_acc",
-            "mean_distance_um",
+            "median_distance_um",
             "cosmos_acc_high_conf",
             "beryl_acc_high_conf",
-            "mean_distance_um_high_conf",
+            "median_distance_um_high_conf",
             "high_conf_fraction",
         )
         if c in df.columns
     ]
-    return df.groupby("method")[cols].agg(["mean", "median", "count"])
+    return df.groupby("method")[cols].agg(["median", "count"])

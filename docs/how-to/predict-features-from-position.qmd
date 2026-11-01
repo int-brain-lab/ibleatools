@@ -21,7 +21,7 @@ their nominal anatomy.
 from ephysatlas import load_pretrained
 
 encoder = load_pretrained(
-    "int-brain-lab/ea-encoder-channel", revision="2026_W42"
+    "int-brain-lab/ea-encoder-channel", revision="2026_W45"
 )
 
 print(encoder.index["task"])            # spatial-encoding
@@ -168,23 +168,31 @@ encoder.preprocessing_stats()    # standardisation, and the per-feature clipping
 encoder.load_confidence_model()  # the probe-confidence model, in eval() mode
 ```
 
-For `2026_W42` the split is 528 / 76 / 151 insertions, plus 294 excluded as misaligned.
-The neighbour bank holds 202,752 training channels: positions mirrored to the left
+For `2026_W45` the split is 663 / 97 / 196 insertions, plus 93 the QC marks bad.
+The neighbour bank holds 254,592 training channels: positions mirrored to the left
 hemisphere, features clipped and standardised exactly as the model saw them.
 
 Neighbours are drawn from *other* probes only (`allow_same_probe: False`), so a
 prediction for a probe already in the training bank does not use that probe's own
 features.
 
-Neighbour selection is **deterministic nearest-M**. Training-time collation drew a random
-subset when more than `m_max` candidates fell inside the radius; serving does not, so
-predictions do not depend on the global NumPy seed. Two runs give identical numbers.
+Neighbour selection is **deterministic**. Training-time collation drew a random subset when
+more than `m_max` candidates fell inside the radius. Serving takes the nearest `m_max`, or
+averages such random subsets from a fixed seed (below), so predictions do not depend on the
+global NumPy seed. Two runs give identical numbers.
+
+From `2026_W45` the release says how it predicts, in `config.prediction` of its manifest: the
+context interpolated between the voxels of its 200 µm grid (`trilinear_context`), and the mean over
+four random neighbour sets, as in training, from a fixed seed (`neighbour_draws`). On its held-out
+insertions this raises R² in every tissue, the root regions included, and takes about twice as long.
+Pass either argument to `predict` or `predict_xyz` to override it; a release without the block
+predicts from the nearest voxel and the nearest neighbours, as it did when it was published.
 
 ## Controlling the device and batch size
 
 ```python
 encoder = load_pretrained(
-    "int-brain-lab/ea-encoder-channel", revision="2026_W42", device="cuda"
+    "int-brain-lab/ea-encoder-channel", revision="2026_W45", device="cuda"
 )
 
 pred = encoder.predict(df_channels, batch_size=4096)

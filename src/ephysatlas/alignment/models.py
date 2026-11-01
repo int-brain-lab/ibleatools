@@ -18,11 +18,12 @@ import numpy as np
 
 CHANNEL_MODEL_REPO_ID = "int-brain-lab/ea-encoder-channel"
 UNIT_MODEL_REPO_ID = "int-brain-lab/ea-encoder-unit"
-# The channel-level release and the feature release it was trained on.
+# The feature release the models were trained on, and the Hub tags of the releases: both are
+# trained on the automatic split of every 2026_W42 insertion, without those the QC marks bad
+# (ephysatlas.fixtures.pid_qc_filter).
 VINTAGE = "2026_W42"
-# The unit-level release, trained on the units, split and context volumes of 2026_W41 (the
-# channel-level release 2026_W42 reuses that split and those volumes).
-UNIT_MODEL_REVISION = "2026_W42"
+CHANNEL_MODEL_REVISION = "2026_W45"
+UNIT_MODEL_REVISION = "2026_W45"
 
 
 def default_device() -> str:
@@ -38,24 +39,36 @@ class ChannelModel:
         repo_id (str, optional): Hugging Face repo id or a local release directory.
         revision (str, optional): Release tag.
         device (str, optional): Torch device; auto-detected when None.
+        trilinear_context, neighbour_draws: How the model predicts; by default, what the release
+            says. See :meth:`~ephysatlas.models.encoder_inpainting.SpatialEncoder.predict_xyz`.
     """
+
+    predict_options: dict = {}
 
     def __init__(
         self,
         repo_id: str = CHANNEL_MODEL_REPO_ID,
-        revision: str = VINTAGE,
+        revision: str = CHANNEL_MODEL_REVISION,
         device: Optional[str] = None,
+        *,
+        trilinear_context: Optional[bool] = None,
+        neighbour_draws: Optional[int] = None,
     ):
         from ephysatlas import load_pretrained
 
         self.repo_id = str(repo_id)
         self.revision = str(revision)
         self.device = device or default_device()
+        self.predict_options = dict(
+            trilinear_context=trilinear_context, neighbour_draws=neighbour_draws
+        )
         self.encoder = load_pretrained(
             self.repo_id, revision=self.revision, device=self.device
         )
         self.model = self.encoder.model.to(self.device).eval()
         self.features = list(self.encoder.features)
+        # The feature release the model was trained on (its manifest), which its Hub tag need not be.
+        self.vintage = str((self.encoder.index or {}).get("vintage") or VINTAGE)
         self.e_mean = self.model.e_mean.detach().cpu().numpy().astype(np.float64)
         self.e_std = self.model.e_std.detach().cpu().numpy().astype(np.float64)
 
@@ -105,7 +118,7 @@ class ChannelModel:
             [np.full(len(xyz), str(pid)), np.arange(len(xyz))], names=["pid", "channel"]
         )
         df = pd.DataFrame(xyz, index=index, columns=columns)
-        out = self.encoder.predict(df, batch_size=batch_size)
+        out = self.encoder.predict(df, batch_size=batch_size, **self.predict_options)
         return out[[f"pred_{f}" for f in self.features]].to_numpy(dtype=np.float64)
 
     def predict_std(

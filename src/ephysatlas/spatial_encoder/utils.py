@@ -207,6 +207,46 @@ class ContextAtlasManager:
             "allen_ix": self.allen_idx[yi, xi, zi].astype(np.int32),
         }
 
+    def sample_context_trilinear_m(self, xyz_m: np.ndarray, mode="clip", mirror=True):
+        """The context interpolated between the 8 voxels around each position.
+
+        :meth:`sample_context_numpy_m` takes the nearest voxel of the 200 µm grid. Here empty
+        voxels are left out and the weights renormalised, so the brain's edge is not pulled to
+        zero; a position with 8 empty voxels stays zero. ``mirror`` folds positions onto the left
+        hemisphere, as the model was trained.
+        """
+        xyz_m = xyz_m.copy()
+        if mirror:
+            xyz_m[:, 0] = -np.abs(xyz_m[:, 0])
+        grid = self.bc.xyz2i(xyz_m.astype(np.float64), round=False, mode=mode) / 8.0
+        _, n_x, n_z, n_y = self.cell_pca.shape
+        limits = np.array([n_x, n_y, n_z]) - 1
+        low = np.clip(np.floor(grid).astype(int), 0, limits)
+        frac = grid - low
+        n_pcs = self.cell_pca.shape[0] + self.gene_pca.shape[0]
+        total = np.zeros((len(grid), n_pcs), dtype=np.float64)
+        weights = np.zeros(len(grid), dtype=np.float64)
+        for corner in np.ndindex(2, 2, 2):
+            i = np.clip(low + np.array(corner), 0, limits)
+            w = np.prod(np.where(corner, frac, 1 - frac), axis=1)
+            values = np.concatenate(
+                [
+                    self.cell_pca[:, i[:, 0], i[:, 2], i[:, 1]].T,
+                    self.gene_pca[:, i[:, 0], i[:, 2], i[:, 1]].T,
+                ],
+                axis=1,
+            ).astype(np.float64)
+            w = np.where(np.any(values != 0, axis=1), w, 0.0)
+            total += w[:, None] * values
+            weights += w
+        filled = weights > 0
+        total[filled] /= weights[filled, None]
+        n_cell = self.cell_pca.shape[0]
+        return {
+            "cell_pc": total[:, :n_cell].astype(np.float32),
+            "gene_pc": total[:, n_cell:].astype(np.float32),
+        }
+
     def sample_context_numpy_i(
         self, xyz_i: np.ndarray, s_xyz: np.ndarray = np.array([8, 8, 8])
     ):
@@ -243,8 +283,9 @@ def LoadInsertionData(
     Loads table-based ephys features and concatenates per-channel averaged waveform latents
     assigned by nearest channel in xyz for each probe.
 
-    ``exclude_pids``: insertions left out; None leaves out ``ephysatlas.fixtures.misaligned_pids``
-    (the training data), an empty list keeps every insertion.
+    ``exclude_pids``: insertions left out; None leaves out those the automatic QC marks bad on
+    any component (``ephysatlas.fixtures.pid_qc_filter.excluded_pids()``), an empty list keeps
+    every insertion.
 
     Returns:
       unique_pids, context [N,C,(cell_pc+gene_pc)], allen_ix [N,C],
@@ -300,9 +341,9 @@ def LoadInsertionData(
     # PIDs in the df order
     unique_pids = df_features.index.get_level_values("pid").unique()
 
-    # Filter bad/misaligned
+    # Leave out the insertions the QC marks bad (by default)
     if exclude_pids is None:
-        exclude_pids = ephysatlas.fixtures.misaligned_pids
+        exclude_pids = ephysatlas.fixtures.pid_qc_filter.excluded_pids()
     block_set = set(map(str, exclude_pids))
 
     filter_indices = [i for i, item in enumerate(unique_pids) if item not in block_set]

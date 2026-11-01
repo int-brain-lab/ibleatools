@@ -751,8 +751,9 @@ def prepare_latest_cells_encoder_data(
 ) -> dict:
     """Prepare the unit arrays of the good units of ``project``.
 
-    ``exclude_pids``: insertions left out; None leaves out ``ephysatlas.fixtures.misaligned_pids``
-    (the training data), an empty list keeps every insertion.
+    ``exclude_pids``: insertions left out; None leaves out those the automatic QC marks bad for
+    their alignment, AP band or waveforms (``ephysatlas.fixtures.pid_qc_filter``; LF problems do
+    not affect the units), an empty list keeps every insertion.
     """
     root_path = Path(root_path).expanduser().resolve()
     out_dir = Path(out_dir).expanduser().resolve()
@@ -819,10 +820,12 @@ def prepare_latest_cells_encoder_data(
         df_good, ["pid", "probe_insertion", "probe_insertion_id", "insertion_id"]
     )
 
-    # Remove the excluded (by default, known misaligned) probes before waveform / ACG loading
+    # Remove the excluded (by default, QC-flagged) probes before waveform / ACG loading
     try:
         if exclude_pids is None:
-            from ephysatlas.fixtures import misaligned_pids as exclude_pids
+            from ephysatlas.fixtures import pid_qc_filter
+
+            exclude_pids = pid_qc_filter.excluded_pids(("alignment", "ap", "waveform"))
 
         excluded = set(map(str, exclude_pids))
         keep = ~df_good[pid_col].astype(str).isin(excluded).to_numpy()

@@ -229,6 +229,10 @@ recomputed downstream:
 | `split` | The insertion split used in training |
 | `results` | Validation metrics, for the record |
 
+`config.prediction`, when a release has it, says how the release predicts:
+`trilinear_context` and `neighbour_draws`, the defaults of `SpatialEncoder.predict`. Without it, a
+release predicts from the nearest voxel and the nearest neighbours.
+
 `config.neighbourhood` is not reconstructible from the weights, so the manifest is the only
 record of it. `allow_same_probe: false` means neighbours come from *other* probes only,
 so a prediction for a probe already in the bank does not use that probe's own features.
