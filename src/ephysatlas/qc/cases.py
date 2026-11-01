@@ -121,8 +121,9 @@ def figure_case(pid, bins, table, scans, reference, brain_atlas, bands):
         f"Gain elsewhere: z {row['z_depth']:.1f} / {row['z_sideways']:.1f}", fontsize=6
     )
     ax.tick_params(labelsize=5)
+    ax.yaxis.tick_right()  # clear of the colour bar
     ax.legend(frameon=False, fontsize=4.5, loc="best")
-    ax.spines[["top", "right"]].set_visible(False)
+    ax.spines[["top", "left"]].set_visible(False)
     cbar = fig.colorbar(im, cax=axes[4])
     cbar.ax.tick_params(labelsize=5)
     cbar.set_label("Residual (MADs)", fontsize=5)
