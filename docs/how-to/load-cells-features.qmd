@@ -21,9 +21,9 @@ aggregates/atlas/projects/{project}/
 │
 ├── df_probe_details.pqt                  one row per insertion
 │
-└── cells_aggregates/
+└── cells_aggregates/{year_Www}/         versioned release, e.g. 2026_W42 (`label=` argument)
     ├── clusters.table.pqt                all cells: QC + anatomy + waveform features   (n_cells × ~59)
-    ├── clusters_good.table.pqt           QC-passing cells (bitwise_fail == 0)          (n_good × ~61)
+    ├── clusters_good.table.pqt           QC-passing cells (bitwise_fail == 0)          (n_good × ~65)
     ├── clusters.acgs_log.npy             log-binned ACGs, normalised by spike_count    (n_cells × 128) float16
     ├── acgs_log.times.npy                ACG bin centres, seconds                      (128,) float64
     ├── clusters.waveforms_peak.npy       peak-channel waveform per cell                (n_cells × 128) float16

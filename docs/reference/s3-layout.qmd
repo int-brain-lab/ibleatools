@@ -42,9 +42,9 @@ aggregates/atlas/
 │
 └── projects/{project}/                      ← per-project cell/LFP aggregates
     ├── df_probe_details.pqt                 one row per probe insertion
-    ├── cells_aggregates/
-    │   ├── clusters.table.pqt               all cells (n_cells × ~59)
-    │   ├── clusters_good.table.pqt          QC-passing cells (n_good × ~61)
+    ├── cells_aggregates/{year_Www}/          ← versioned release, e.g. 2026_W42 (older versions keep only their cluster tables)
+    │   ├── clusters.table.pqt               all cells (n_cells × ~65)
+    │   ├── clusters_good.table.pqt          QC-passing cells (n_good × ~65)
     │   ├── clusters.acgs_log.npy            log-binned ACGs, normalised  (n_cells × 128) float16
     │   ├── acgs_log.times.npy               ACG bin centres, seconds     (128,) float64
     │   ├── clusters.waveforms_peak.npy      peak-channel waveform        (n_cells × 128) float16
@@ -146,7 +146,7 @@ rather than assuming.
 | [`download_encoding_volume`](../api/data.download_encoding_volume.qmd) | `encoding_volumes/{project}/{label}/` |
 | [`download_edges_volume`](../api/data.download_edges_volume.qmd) | `encoding_volumes/{project}/{label}/` (`brainwide_ephys_edges_*`) |
 | [`download_probe_details`](../api/data.download_probe_details.qmd) | `projects/{project}/df_probe_details.pqt` |
-| [`download_cells_features`](../api/data.download_cells_features.qmd) | `projects/{project}/cells_aggregates/` |
+| [`download_cells_features`](../api/data.download_cells_features.qmd) | `projects/{project}/cells_aggregates/{label}/` |
 | [`download_project_data`](../api/data.download_project_data.qmd) | probe details + cell aggregates (convenience wrapper) |
 | [`download_lfp_features`](../api/data.download_lfp_features.qmd) | `projects/{project}/lfp_aggregates/` |
 

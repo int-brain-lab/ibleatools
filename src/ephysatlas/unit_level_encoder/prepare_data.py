@@ -779,7 +779,9 @@ def prepare_latest_cells_encoder_data(
     out_dir.mkdir(parents=True, exist_ok=True)
 
     path_project = root_path / project
-    cells_agg_path = path_project / "cells_aggregates"
+    cells_agg_path = (
+        path_project / "cells_aggregates" / ephysatlas.data.CELLS_AGGREGATES_LABEL
+    )
 
     need_small = not (cells_agg_path / "clusters.table.pqt").exists()
     need_acg3d = use_acg3d and not (cells_agg_path / "clusters.acgs_3d.npy").exists()
@@ -814,7 +816,9 @@ def prepare_latest_cells_encoder_data(
             large_files=True,
         )
 
-    data = ephysatlas.data.read_cells_features(path_project)
+    data = ephysatlas.data.read_cells_features(
+        path_project
+    )  # default label, as cells_agg_path
     print("Available read_cells_features keys:")
     print(sorted(data.keys()))
 
