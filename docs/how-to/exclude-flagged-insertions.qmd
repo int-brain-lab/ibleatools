@@ -42,9 +42,9 @@ component.
 ```python
 from ephysatlas.fixtures import pid_qc_filter
 
-channel_bad = pid_qc_filter.excluded_pids()   # any component: 76 of 1,049 for 2026_W42
-unit_bad = pid_qc_filter.excluded_pids(("alignment", "ap", "waveform"))   # 51
-cautious = pid_qc_filter.excluded_pids(include_review=True)   # also those to review: 100
+channel_bad = pid_qc_filter.excluded_pids()   # any component: 75 of 1,049 for 2026_W42
+unit_bad = pid_qc_filter.excluded_pids(("alignment", "ap", "waveform"))   # 48
+cautious = pid_qc_filter.excluded_pids(include_review=True)   # also those to review: 98
 ```
 
 Pass the list as `exclude_pids` to the loaders:
@@ -72,8 +72,8 @@ insertion.
 ## How an insertion is judged
 
 A probe's channels are reduced to 100 µm depth bins. Each bin's region comes from its position, in
-the finest Allen parcellation that at least eight other insertions cover (cortical layers,
-hippocampal strata), else in Beryl. The reference of a region is the median and the MAD of what the
+the finest parcellation that at least eight other insertions cover: the Allen regions (cortical
+layers, hippocampal strata), else Beryl, else Cosmos. The reference of a region is the median and the MAD of what the
 other insertions record there, so a bin's residual says how far it is from them, in MADs of that
 feature in that region. The tests come in three groups:
 
@@ -95,9 +95,9 @@ written at **L3**, which marks 7% of the 2026_W42 insertions; an insertion is *r
 bad only at L4.
 
 To see what a level catches, the same problems are planted in 150 random insertions. At L3, 7% of
-those insertions are marked bad as recorded, and with a problem planted: 31% of those moved 1 mm
-sideways, 49% and 31% of those with their LF or AP band replaced, 59% and 41% with noise added to
-it. A 500 µm shift along the probe is the hardest (12%): many insertions as recorded are displaced
+those insertions are marked bad as recorded, and with a problem planted: 30% of those moved 1 mm
+sideways, 48% and 31% of those with their LF or AP band replaced, 57% and 39% with noise added to
+it. A 500 µm shift along the probe is the hardest (14%): many insertions as recorded are displaced
 by a few hundred µm already.
 
 To rebuild the filter, or write it at another level (the measurements are cached, and only

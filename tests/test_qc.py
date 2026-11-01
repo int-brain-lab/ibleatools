@@ -27,14 +27,16 @@ N_BINS, N_FEATURES = 38, 6
 
 class Atlas:
     """Regions in layers 500 µm thick and columns 2 mm wide. Allen regions are the layers of a
-    column, Beryl regions join two layers. Above z = 0 is outside the brain."""
+    column, Beryl regions join two layers, Cosmos regions are the columns. Above z = 0 is outside
+    the brain."""
 
     @staticmethod
     def get_labels(xyz, mapping="Allen", mode="clip"):
         xyz = np.asarray(xyz)
         layer = np.floor(-xyz[..., 2] / 500e-6).astype(int)
         column = np.floor((xyz[..., 0] + 4e-3) / 2e-3).astype(int)
-        ids = 1 + column * 100 + (layer if mapping == "Allen" else layer // 2)
+        fine = {"Allen": layer, "Beryl": layer // 2, "Cosmos": 0 * layer}[mapping]
+        ids = 1 + column * 100 + fine
         return np.where(xyz[..., 2] > 0, 0, ids)
 
 

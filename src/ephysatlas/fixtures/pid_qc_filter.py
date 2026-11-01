@@ -1,8 +1,8 @@
 """Quality-control filter of the Ephys Atlas insertions -- GENERATED, do not edit by hand.
 
-Built by ``scripts/build_pid_qc_filter.py`` (2026-11-01, ibleatools a495d45) from feature release
-2026_W42, at level L3 of ``ephysatlas.qc.levels``: 1049 insertions, 76 with at least one bad
-component (21 alignment, 25 lf only, 28 ap/waveform, 2 several bands), 24 to review.
+Built by ``scripts/build_pid_qc_filter.py`` (2026-11-01, ibleatools b514f7e) from feature release
+2026_W42, at level L3 of ``ephysatlas.qc.levels``: 1049 insertions, 75 with at least one bad
+component (15 alignment, 27 lf only, 31 ap/waveform, 2 several bands), 23 to review.
 
 An insertion is bad at L3 when it fails one test beyond 4.5 SD, or a test without a limit in SDs
 (its tracks swapped with the session's other probe, a fifth of its channels dead or noisy). The
@@ -29,7 +29,14 @@ COMPONENTS = ("alignment", "lf", "ap", "waveform")
 # pid: (alignment, lf, ap, waveform, tests failed)
 pid_qc_filter = {
     "03fc9668-046c-445f-953a-ee9258520ea0": ("bad", "good", "good", "good", "swap"),
-    "04db6b9e-a80c-4507-a98e-ad76294ac444": ("good", "good", "good", "bad", "wf_shape"),
+    "04db6b9e-a80c-4507-a98e-ad76294ac444": (
+        "good",
+        "good",
+        "good",
+        "review",
+        "wf_shape",
+    ),
+    "0925fb1b-cf83-4f55-bfb7-aa52f993a404": ("good", "good", "bad", "bad", "ap_level"),
     "0a85a28b-e9e3-44ec-ad4d-88ba9116ff63": (
         "good",
         "review",
@@ -46,16 +53,15 @@ pid_qc_filter = {
     ),
     "0ece5c6a-7d1e-4365-893d-ac1cc04f1d7b": ("good", "bad", "good", "good", "lf_level"),
     "0fed7207-f747-428b-b4c0-854cabb50d9e": ("good", "bad", "good", "good", "lf_level"),
-    "100433fa-2c59-4432-8295-aa27657fe3fb": (
-        "good",
-        "good",
-        "bad",
-        "bad",
-        "ap_level;ap_shape",
-    ),
     "16ad5eef-3fa6-4c75-9296-29bf40c5cfaa": ("good", "good", "bad", "bad", "channels"),
     "176b4fe3-f570-4d9f-9e25-a5d218f75c8b": ("good", "bad", "good", "good", "lf_shape"),
-    "19e0bf1e-018e-40cb-9acd-af8f0f66bd4a": ("good", "good", "good", "bad", "wf_shape"),
+    "19e0bf1e-018e-40cb-9acd-af8f0f66bd4a": (
+        "good",
+        "good",
+        "review",
+        "bad",
+        "wf_shape",
+    ),
     "1dd218c9-ac97-4d91-80d0-a8a660bf7395": (
         "review",
         "good",
@@ -63,21 +69,8 @@ pid_qc_filter = {
         "good",
         "sideways",
     ),
-    "1fa9efcf-def3-40b1-86ae-ca411da98ef2": (
-        "good",
-        "review",
-        "good",
-        "good",
-        "lf_level",
-    ),
     "24572b57-a9c0-463b-8ef9-d232760d9792": ("good", "good", "bad", "bad", "ap_level"),
-    "25e75514-43e1-4c07-9fea-581bd203b55c": (
-        "good",
-        "review",
-        "good",
-        "good",
-        "lf_shape",
-    ),
+    "25e75514-43e1-4c07-9fea-581bd203b55c": ("good", "bad", "good", "good", "lf_shape"),
     "2781c08e-a356-4a0d-8c28-4f94d1c87f69": (
         "good",
         "bad",
@@ -115,13 +108,20 @@ pid_qc_filter = {
         "review",
         "depth",
     ),
-    "3cf66b31-9f69-4050-93d8-c0de1b7ce944": ("good", "good", "bad", "bad", "ap_level"),
-    "3d12814e-594a-4685-9f7c-5a2f0a53b686": (
+    "38874a20-5e60-4ac9-a379-31179d0d31c0": (
         "good",
         "good",
         "review",
         "review",
         "ap_shape",
+    ),
+    "3cf66b31-9f69-4050-93d8-c0de1b7ce944": ("good", "good", "bad", "bad", "ap_level"),
+    "3d12814e-594a-4685-9f7c-5a2f0a53b686": (
+        "good",
+        "good",
+        "bad",
+        "bad",
+        "ap_level;ap_shape",
     ),
     "43436b4b-0431-407f-b83d-d657ec22b5c6": ("good", "bad", "good", "good", "lf_level"),
     "47da98a8-f282-4830-92c2-af0e1d4f00e2": ("good", "bad", "good", "good", "lf_level"),
@@ -137,14 +137,7 @@ pid_qc_filter = {
         "bad",
         "bad",
         "bad",
-        "lf_level;ap_level;wf_level",
-    ),
-    "4e6dfe08-cab0-4a05-903b-94283cb9f8e7": (
-        "good",
-        "review",
-        "good",
-        "good",
-        "lf_shape",
+        "lf_level;ap_level;ap_shape;wf_level",
     ),
     "4f46198d-c54d-4627-9e4e-3c8fd4c3c070": (
         "good",
@@ -174,6 +167,7 @@ pid_qc_filter = {
         "ap_level;wf_level",
     ),
     "5eebb5d6-cf9b-49a0-b297-0701c4d90173": ("bad", "good", "good", "good", "depth"),
+    "6638cfb3-3831-4fc2-9327-194b76cf22e1": ("good", "bad", "good", "good", "lf_level"),
     "697b57b7-e332-455b-b958-90e4e1f2b43f": (
         "good",
         "review",
@@ -181,15 +175,15 @@ pid_qc_filter = {
         "good",
         "lf_level",
     ),
-    "697d9e03-edc6-430a-ae76-94628c510161": (
+    "697d9e03-edc6-430a-ae76-94628c510161": ("good", "bad", "good", "good", "lf_level"),
+    "6a098711-5423-4072-8909-7cff0e2d4531": ("good", "good", "bad", "bad", "ap_level"),
+    "6e61f777-90b9-4656-af30-9ed54d426c5a": (
+        "good",
         "good",
         "bad",
-        "good",
-        "good",
-        "lf_level;lf_shape",
+        "bad",
+        "ap_level;ap_shape",
     ),
-    "6a098711-5423-4072-8909-7cff0e2d4531": ("good", "good", "bad", "bad", "ap_level"),
-    "6e61f777-90b9-4656-af30-9ed54d426c5a": ("good", "good", "bad", "bad", "ap_shape"),
     "759860bc-732d-4b9e-aeb4-154ef37c056b": ("good", "bad", "good", "good", "lf_level"),
     "75d5e438-b08c-47d3-8ac0-992ec63c9c1b": ("good", "good", "bad", "bad", "ap_level"),
     "7649b822-e9ed-409c-b325-05235fede18b": (
@@ -202,9 +196,9 @@ pid_qc_filter = {
     "76de0e1a-30aa-4713-9fe5-25ad2dff653f": (
         "review",
         "good",
-        "good",
         "review",
-        "wf_level;depth",
+        "bad",
+        "wf_level",
     ),
     "76f16631-cbf7-4883-9437-4e8d8c4f34a3": ("good", "good", "bad", "bad", "ap_shape"),
     "7a02c052-ce65-4d60-99d7-4723cdb334a3": (
@@ -216,8 +210,7 @@ pid_qc_filter = {
     ),
     "80624507-4be6-4689-92df-0e2c26c3faf3": ("bad", "good", "good", "good", "depth"),
     "810416d1-ce3c-4b2e-a827-6cdc65c8cd5c": ("good", "bad", "good", "good", "lf_level"),
-    "81f0087b-2bd1-4e48-8e86-e8206aee3d9d": ("bad", "good", "good", "good", "depth"),
-    "88fe9ed9-9e3e-431a-8ecc-4cb2fe5bf448": ("review", "good", "good", "good", "depth"),
+    "81f0087b-2bd1-4e48-8e86-e8206aee3d9d": ("review", "good", "good", "good", "depth"),
     "89606895-287e-4559-8536-9830b047af34": (
         "good",
         "bad",
@@ -234,6 +227,13 @@ pid_qc_filter = {
         "bad",
         "ap_level;ap_shape",
     ),
+    "91fb4ed3-ee27-4d7e-ba5d-f61202ed9884": (
+        "review",
+        "good",
+        "good",
+        "good",
+        "sideways",
+    ),
     "9486a103-c53e-4a60-b202-4efcc6278d44": (
         "good",
         "review",
@@ -249,24 +249,18 @@ pid_qc_filter = {
         "bad",
         "ap_level;wf_level",
     ),
-    "9ac90b86-fc72-4ca0-9389-c8b3a77da437": ("bad", "good", "good", "good", "depth"),
+    "9ac90b86-fc72-4ca0-9389-c8b3a77da437": ("review", "good", "good", "good", "depth"),
     "9bd71ac6-c455-41f3-8c56-59987a649ac4": ("bad", "good", "good", "good", "swap"),
     "a226c68d-55d8-4b53-9596-7c88a3ffa259": (
-        "review",
+        "good",
         "review",
         "good",
         "good",
-        "lf_shape;sideways",
+        "lf_shape",
     ),
     "a3ebc7f4-813a-4f06-a33e-9825c878f9c2": ("good", "good", "bad", "bad", "ap_shape"),
+    "a6fe3779-2b77-4b66-a625-a6078720e412": ("review", "good", "good", "good", "depth"),
     "a85b9795-f99c-4c1d-a376-8b5ef095ffd7": ("good", "good", "bad", "bad", "ap_level"),
-    "aac3b928-e99a-4039-ace1-af45d0130d82": (
-        "review",
-        "good",
-        "good",
-        "good",
-        "sideways",
-    ),
     "ad5277e5-933d-45e4-bade-c9bd0e1f144a": (
         "bad",
         "bad",
@@ -282,8 +276,14 @@ pid_qc_filter = {
         "lf_level;sideways",
     ),
     "af775340-53d0-43cd-9cda-48e32b95adca": ("good", "bad", "good", "good", "lf_shape"),
+    "afecbc7f-10e3-40af-b091-cca9e8df6108": (
+        "good",
+        "good",
+        "good",
+        "review",
+        "wf_shape",
+    ),
     "b3065f45-7227-4099-9f8c-7e81e677d8cf": ("good", "good", "bad", "bad", "ap_shape"),
-    "babba401-64eb-4861-a144-c60f68a04ae6": ("good", "bad", "good", "good", "lf_shape"),
     "bae9adba-8064-4f42-a7c5-57173c6f4c51": ("good", "good", "bad", "bad", "ap_level"),
     "bef05a5c-68c3-4513-87c7-b3151c88da8e": (
         "bad",
@@ -292,7 +292,7 @@ pid_qc_filter = {
         "bad",
         "ap_level;ap_shape;sideways",
     ),
-    "bfc32fc4-9077-4806-a544-94291f8217de": ("bad", "good", "good", "good", "depth"),
+    "bfc32fc4-9077-4806-a544-94291f8217de": ("review", "good", "good", "good", "depth"),
     "c3ef78d5-7c75-48a4-96b7-f8ecc91c2eca": ("review", "good", "good", "good", "depth"),
     "c4f6665f-8be5-476b-a6e8-d81eeae9279d": (
         "good",
@@ -300,13 +300,6 @@ pid_qc_filter = {
         "good",
         "good",
         "lf_shape",
-    ),
-    "c64201ea-262e-45fe-8f41-5a074780cd59": (
-        "good",
-        "good",
-        "good",
-        "review",
-        "wf_shape",
     ),
     "c9664185-d3fd-4e0e-89cf-77c402038938": ("good", "good", "good", "bad", "wf_shape"),
     "c9669829-36cb-400d-bd77-01c56e3f5378": (
@@ -318,14 +311,20 @@ pid_qc_filter = {
     ),
     "ca073754-be17-43b7-a38a-0c1e5563ff32": ("review", "good", "good", "good", "depth"),
     "d3507787-60c8-4cea-a61e-0c708b4361d8": (
-        "bad",
+        "review",
         "good",
         "bad",
         "bad",
-        "ap_level;ap_shape;wf_level;wf_shape;sideways",
+        "ap_level;ap_shape;wf_shape",
+    ),
+    "d461eaec-f2cf-4a57-9a8c-e3eba6387359": (
+        "good",
+        "good",
+        "bad",
+        "bad",
+        "ap_level;ap_shape",
     ),
     "d8c7d3f2-f8e7-451d-bca1-7800f4ef52ed": ("good", "bad", "good", "good", "lf_level"),
-    "da17779f-7728-4c51-8b54-b88764c0908d": ("bad", "good", "good", "good", "depth"),
     "dae7e5b4-7792-4792-8bbb-d5c0fd6a5c5e": ("good", "bad", "good", "good", "lf_level"),
     "db078408-671a-4dae-ab58-e231ecaafc71": (
         "bad",
@@ -336,13 +335,6 @@ pid_qc_filter = {
     ),
     "db1965cb-e836-4b87-8c42-ee6abf0b784d": ("good", "bad", "good", "good", "lf_level"),
     "dc50c3de-5d84-4408-9725-22ae55b93522": ("good", "good", "bad", "bad", "ap_level"),
-    "dd643cc7-3f64-4986-bfc8-52f00d110cca": (
-        "good",
-        "good",
-        "good",
-        "review",
-        "wf_shape",
-    ),
     "e22d047c-5beb-4e5b-9a3d-53b637743856": (
         "bad",
         "good",
@@ -352,11 +344,11 @@ pid_qc_filter = {
     ),
     "e6402305-5028-42aa-975b-c540c882b131": ("good", "good", "bad", "bad", "ap_level"),
     "ecd07b7e-6450-4e31-bef1-f195129eb3d3": (
-        "bad",
+        "review",
         "bad",
         "good",
         "good",
-        "lf_level;sideways",
+        "lf_level",
     ),
     "edc82c06-83fd-44be-a41e-52fdeea728b4": (
         "bad",
@@ -366,31 +358,31 @@ pid_qc_filter = {
         "lf_level;wf_shape;depth",
     ),
     "f72e60c3-3593-466a-afaf-91145c44fb2b": ("good", "good", "good", "bad", "wf_shape"),
-    "f77a3e90-df1f-4c25-b423-fb2f8a0bcbc9": ("good", "good", "bad", "bad", "ap_shape"),
+    "f77a3e90-df1f-4c25-b423-fb2f8a0bcbc9": (
+        "good",
+        "good",
+        "review",
+        "review",
+        "ap_shape",
+    ),
     "f93bfce4-e814-4ae3-9cdf-59f4dcdedf51": ("good", "good", "bad", "bad", "channels"),
     "fb0de39b-c750-4adc-af18-12bf8a22ed41": ("good", "bad", "good", "good", "lf_level"),
     "fb2f994b-5be8-4c1c-81dd-aad4b19ddcf7": (
         "good",
         "bad",
-        "good",
+        "review",
         "bad",
         "lf_level;lf_shape;wf_level",
     ),
-    "fcc167d6-cb53-4dc7-a58f-06a53cfabc84": (
-        "good",
-        "good",
-        "review",
-        "review",
-        "ap_level",
-    ),
+    "fcc167d6-cb53-4dc7-a58f-06a53cfabc84": ("good", "good", "bad", "bad", "ap_level"),
     "fcd89a5b-30a1-4829-8f51-a72b73534141": ("good", "good", "bad", "bad", "ap_level"),
     "fdeff6df-7216-4b83-ab64-241e9fd173da": ("good", "bad", "good", "good", "lf_level"),
     "fe9c2533-d7cd-48d9-b208-837282961f2e": (
         "good",
         "review",
-        "good",
-        "good",
-        "lf_level",
+        "review",
+        "review",
+        "lf_level;ap_level",
     ),
 }
 

@@ -5,7 +5,7 @@ The unit of comparison is the probe, not the channel (channels of one probe are 
 1. A probe's channels are reduced to 100 µm depth bins (:func:`bin_probe`, the median of the channels
    with a signal), each feature in robust units over all bins (:func:`bin_dataset`). Every bin gets
    its region from its position, in the finest parcellation first (:data:`PARCELLATIONS`: the Allen
-   regions, with cortical layers and hippocampal strata, then Beryl).
+   regions, with cortical layers and hippocampal strata, then Beryl and Cosmos).
 2. For each probe and each region with at least ``MIN_BINS`` bins, the median of every feature over
    those bins is one *probe-region value*.
 3. The reference of a region is the median and the MAD of the probe-region values of the *other*
@@ -26,7 +26,7 @@ import numpy as np
 
 BAD_CHANNEL_LABELS = (1, 2)  # dead, noisy
 BIN_CHANNELS = 10  # channels of a depth bin (100 µm)
-PARCELLATIONS = ("Allen", "Beryl")  # the finest first
+PARCELLATIONS = ("Allen", "Beryl", "Cosmos")  # the finest first
 MIN_BINS = 2  # bins of a probe in a region for a probe-region value
 MIN_PROBES = 8  # other probes for the reference of a region
 MAD_FLOOR = 0.5  # of a feature's typical MAD over the regions

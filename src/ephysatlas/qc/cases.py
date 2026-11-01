@@ -68,9 +68,9 @@ def figure_case(pid, bins, table, scans, reference, brain_atlas, bands):
     e = reference.residuals(bins.z[i], parcel_labels(bins.xyz[i], brain_atlas), [i])
     fig, axes = plt.subplots(
         1,
-        5,
-        figsize=(7.0, 2.9),
-        gridspec_kw=dict(width_ratios=[0.35, 1.5, 0.6, 0.9, 1.0], wspace=0.28),
+        6,
+        figsize=(7.4, 2.9),
+        gridspec_kw=dict(width_ratios=[0.35, 1.5, 0.6, 0.9, 0.06, 1.15], wspace=0.28),
     )
     _region_stripe(axes[0], bins.xyz[i], brain_atlas)
     for ax, (name, band) in zip(axes[1:4], bands.items()):
@@ -91,7 +91,7 @@ def figure_case(pid, bins, table, scans, reference, brain_atlas, bands):
         ax.set_xticks([])
         ax.set_xlabel("Features", fontsize=5.5)
     k = np.flatnonzero(scans["pids"].astype(str) == str(pid))[0]
-    ax = axes[4]
+    ax = axes[5]
     ax.axhline(0, color="0.7", lw=0.5)
     ax.plot(
         SHIFTS_UM,
@@ -123,7 +123,7 @@ def figure_case(pid, bins, table, scans, reference, brain_atlas, bands):
     ax.tick_params(labelsize=5)
     ax.legend(frameon=False, fontsize=4.5, loc="best")
     ax.spines[["top", "right"]].set_visible(False)
-    cbar = fig.colorbar(im, ax=axes[1:4], fraction=0.02, pad=0.015)
+    cbar = fig.colorbar(im, cax=axes[4])
     cbar.ax.tick_params(labelsize=5)
     cbar.set_label("Residual (MADs)", fontsize=5)
     first = row["first_level"] if isinstance(row["first_level"], str) else ""

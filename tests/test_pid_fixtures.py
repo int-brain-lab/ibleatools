@@ -12,8 +12,8 @@ class TestPidsFixtures(unittest.TestCase):
     def test_pid_qc_filter(self):
         qc = ephysatlas.fixtures.pid_qc_filter
         self.assertEqual((qc.VINTAGE, qc.LEVEL), ("2026_W42", "L3"))
-        self.assertEqual(len(qc.excluded_pids()), 76)
-        self.assertEqual(len(qc.excluded_pids(("alignment", "ap", "waveform"))), 51)
-        self.assertEqual(len(qc.excluded_pids(include_review=True)), 100)
+        self.assertEqual(len(qc.excluded_pids()), 75)
+        self.assertEqual(len(qc.excluded_pids(("alignment", "ap", "waveform"))), 48)
+        self.assertEqual(len(qc.excluded_pids(include_review=True)), 98)
         labels = {label for entry in qc.pid_qc_filter.values() for label in entry[:4]}
         self.assertLessEqual(labels, {"good", "review", "bad"})
