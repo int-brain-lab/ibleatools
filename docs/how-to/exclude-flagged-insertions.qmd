@@ -1,0 +1,118 @@
+---
+title: "How to leave out the insertions the QC flags"
+---
+
+Some IBL insertions should not be used to train or evaluate a model: the probe is not where
+its alignment places it, or a band of the recording is broken. `ephysatlas.qc` checks every
+insertion of a feature release automatically and labels it per component. The labels ship
+with the package as `ephysatlas.fixtures.pid_qc_filter`; reading them needs no account and
+no data.
+
+## The labels
+
+Each insertion gets one label per component, `good`, `review` or `bad`:
+
+| Component | Bad when |
+|---|---|
+| `alignment` | the recording is more typical somewhere else: deeper or shallower along the probe, sideways, on the track of another insertion, or swapped with another probe of the mouse |
+| `lf` | the LF band is unusual for the brain regions the probe is in |
+| `ap` | the AP band is unusual for those regions, or a fifth of the channels are dead or noisy |
+| `waveform` | the AP band is bad, or the waveforms are unusual for those regions |
+
+*Unusual for the brain regions* compares the recording with what the other insertions record
+in the same regions, in MADs of each feature in each region, never with a model's prediction.
+Only the data decide: no model, no auto-alignment and no manual label enters the QC.
+
+```python
+from ephysatlas.fixtures import pid_qc_filter
+
+pid_qc_filter.VINTAGE, pid_qc_filter.LEVEL   # ('2026_W42', 'L3')
+pid_qc_filter.qc_labels("16ad5eef-3fa6-4c75-9296-29bf40c5cfaa")
+# {'alignment': 'good', 'lf': 'good', 'ap': 'bad', 'waveform': 'bad', 'checks': 'channels'}
+```
+
+`checks` lists the tests the insertion fails; their definitions are
+`ephysatlas.qc.levels.TESTS`, `TRACK_TEST` and `FIXED_TESTS`. Unlisted insertions are good on every
+component.
+
+## Leave them out of a dataset
+
+`excluded_pids` returns the insertions bad on any of the components you name:
+
+```python
+from ephysatlas.fixtures import pid_qc_filter
+
+channel_bad = pid_qc_filter.excluded_pids()   # any component: 93 of 1,049 for 2026_W42
+unit_bad = pid_qc_filter.excluded_pids(("alignment", "ap", "waveform"))   # 71
+cautious = pid_qc_filter.excluded_pids(include_review=True)   # also those to review: 130
+```
+
+Pass the list as `exclude_pids` to the loaders:
+
+```python
+from ephysatlas.spatial_encoder.utils import LoadInsertionData
+
+pids, features, xyz, planned_xyz = LoadInsertionData(
+    VINTAGE="2026_W42", exclude_pids=pid_qc_filter.excluded_pids()
+)
+```
+
+`alignment.ChannelDataset.load` and
+`unit_level_encoder.prepare_data.prepare_latest_cells_encoder_data` take the same argument.
+
+::: {.callout-note}
+## The default is unchanged
+
+Without `exclude_pids`, the loaders still leave out `ephysatlas.fixtures.misaligned_pids`, the
+hand-curated list the published `2026_W42` models were trained without. `exclude_pids`
+*replaces* that list: insertions on it that the QC clears are kept. An empty list keeps every
+insertion.
+:::
+
+## How an insertion is judged
+
+A probe's channels are reduced to 100 µm depth bins. Each bin's region comes from its position, in
+the finest parcellation that at least eight other insertions cover: the Allen regions (cortical
+layers, hippocampal strata), else Beryl, else Cosmos. The reference of a region is the median and the MAD of what the
+other insertions record there, so a bin's residual says how far it is from them, in MADs of that
+feature in that region. The tests of position use one measure of fit: how well the recording follows,
+along the probe, the profile expected from the regions it crosses (the correlation over the bins of
+each feature, averaged over the features of a band and then over the bands). The tests come in three
+groups:
+
+| Group | Tests |
+|---|---|
+| Unusual for its regions | For the LF band, the AP band and the waveforms: the `level` of the band, and its `shape` along the probe, which ignores an offset over the whole probe |
+| More typical elsewhere | The recording fits better up to 2 mm deeper or shallower (`depth`) or up to 1 mm sideways (`sideways`); it follows its own track no better than the tracks of the other insertions (`track`); or it and another probe of the mouse, at least 1 mm away, both fit better swapped (`swap`) |
+| Dead or noisy channels | A fifth of the channels (`channels`) |
+
+The band tests, `depth` and `sideways` become z-scores, `(x - median) / (1.4826 MAD)` over all the
+insertions. The others have natural limits. `track` is a share of tracks: a typical recording fits
+fewer than 3% of the other tracks as well as its own, and needs no calibration, because a track that
+changes little along the probe fits no better than the others. `swap` is the sum of the gains of the
+two probes, both positive, and a dead channel is dead.
+
+## Levels
+
+The QC has five nested levels of sensitivity: an insertion is bad when a band test is beyond 7, 6,
+5, 4.5 or 4 (L1 to L5), `depth` or `sideways` beyond 5, 4, 3.5, 3 or 2.5, more than 90, 80, 65, 55 or
+45% of the other tracks fit it as well as its own, or when `swap` or `channels` fails. The position
+tests have their own limit because their z-scores have short tails. The fixture is written at
+**L3**, which marks 9% of the 2026_W42 insertions; an insertion is *review* when it is bad only at
+L4.
+
+To see what a level catches, the same problems are planted in 150 random insertions. At L3, 9% of
+those insertions are marked bad as recorded, and with a problem planted: 48% of those moved 1 mm
+along the probe, 74% of those moved 2 mm, 37% of those moved 1 mm sideways, 45% and 38% of those with
+their LF or AP band replaced, 54% and 36% with noise added to it. A 500 µm shift along the probe is
+the hardest (20%): many insertions as recorded are displaced by a few hundred µm already.
+
+To rebuild the filter, or write it at another level (the measurements are cached, and only
+the last stage runs):
+
+```bash
+python scripts/build_pid_qc_filter.py --stages levels --level L3 --write-fixture
+```
+
+The first run measures every insertion of the release (minutes). It needs the release's
+features only, and Alyx once for the mouse of each insertion; see the script's docstring.

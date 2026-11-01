@@ -53,11 +53,13 @@ class ChannelDataset:
         project: str = "ea_active",
         agg: str = "agg_full",
         data_dir: Optional[Path] = None,
+        exclude_pids=None,
     ) -> "ChannelDataset":
         """Load the release's features (downloaded from IBL S3 on first use; ONE credentials).
 
         Insertions on the misaligned list (``ephysatlas.fixtures.misaligned_pids``) are left
-        out, exactly as for model training.
+        out, exactly as for model training, unless ``exclude_pids`` lists others (an empty list
+        keeps every insertion).
         """
         from ephysatlas.spatial_encoder.utils import LoadInsertionData
 
@@ -66,6 +68,7 @@ class ChannelDataset:
             agg=agg,
             VINTAGE=vintage,
             path_data=data_dir or default_data_dir(),
+            exclude_pids=exclude_pids,
         )
         return cls(
             pids=np.asarray(pids).astype(str),
