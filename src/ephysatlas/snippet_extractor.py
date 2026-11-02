@@ -21,7 +21,7 @@ File layout (``n`` snippets, ``c`` channels, sync channel removed)::
           sample2volts          float64 (c,)
           meta                  uint8 (n_bytes,)   the original .ap.meta file, exact bytes
         lf/                     as ap/, plus attrs source="recorded" and latency_samples;
-                                only when the probe records LF and the LF file was found
+                                required for probes that record a separate LF band
 
 Channel rows follow the order of ``spikeglx.Reader`` (``sr[...]`` and ``sr.geometry``).
 """
@@ -157,7 +157,7 @@ def extract_snippets(
 
     Args:
         ap_file: The SpikeGLX ``.ap.bin`` or ``.ap.cbin`` file. Its ``.meta`` file must be next
-            to it, and the LF file is looked for next to it as well.
+            to it. NP1/3A also require matching LF data and metadata next to it.
         output_file: ``.h5`` file to write; its folder is created. If it exists, it must be a
             snippet file, and the recording is added to it.
         name: Name of the recording inside the file, stored under ``recordings/<name>``. If
@@ -179,7 +179,7 @@ def extract_snippets(
             the probe type is not supported, the ``.meta`` file has no channel map, the
             recording is too short for automatic times, explicit snippets overlap or reach
             outside the data.
-        FileNotFoundError: The AP file does not exist.
+        FileNotFoundError: The AP file or a required NP1/3A LF file does not exist.
     """
     ap_file, output_file = Path(ap_file), Path(output_file)
     if ".ap." not in ap_file.name or ap_file.suffix not in (".bin", ".cbin"):
@@ -223,7 +223,6 @@ def extract_snippets(
     neuropixel_version = int(version)
     probe_has_lf_band = version == 1
 
-    readers = {"ap": spikeglx.Reader(ap_file)}
     lf_base = ap_file.with_name(ap_file.name.replace(".ap.", ".lf."))
     other_suffix = {".bin": ".cbin", ".cbin": ".bin"}[ap_file.suffix]
     lf_candidates = (lf_base, lf_base.with_suffix(other_suffix))
@@ -234,8 +233,14 @@ def extract_snippets(
             LOGGER.info("%s was ignored: this probe records no LF band", lf_file)
         lf_file = None
     elif lf_file is None:
-        LOGGER.warning("No LF file found next to %s, storing AP only", ap_file)
-    else:
+        raise FileNotFoundError(
+            f"No LF file found next to {ap_file}; NP1/3A extraction requires a matching "
+            ".lf.bin or .lf.cbin file with its .meta file."
+        )
+
+    # Validate required bands before opening readers, so missing LF leaves no reader open.
+    readers = {"ap": spikeglx.Reader(ap_file)}
+    if lf_file is not None:
         readers["lf"] = spikeglx.Reader(lf_file)
     sr_ap = readers["ap"]
     # AP and LF files share the channel order on disk, but an LF meta can lack the

@@ -1,7 +1,7 @@
 """Test support: write tiny SpikeGLX recordings for the snippet extractor tests.
 
 The ``.meta`` files in ``tests/fixtures/snippet_extractor`` are copies of real recordings
-(an NP1.0 and an NP2.4 single-shank file). ``write_spikeglx_recording`` pairs them with random
+(NP1.0, 3A and an NP2.4 single-shank file). ``write_spikeglx_recording`` pairs them with random
 int16 data, so the extractor can be tested without the real recordings of hundreds of GB.
 """
 

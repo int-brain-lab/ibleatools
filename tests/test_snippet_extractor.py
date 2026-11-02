@@ -12,6 +12,7 @@ from pathlib import Path
 from unittest import mock
 
 import h5py
+import mtscomp
 import numpy as np
 import scipy.fft
 import spikeglx
@@ -335,6 +336,64 @@ class TestProbeTypes(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.tmp)
 
+    def test_compressed_input_matches_uncompressed(self):
+        """Match packed samples and metadata for generated .bin and .cbin recordings."""
+        cases = (
+            ("np1", "3B2", 1, True),
+            ("3a", "3A", 1, True),
+            ("np24_shank", "NP2.4", 2, False),
+        )
+        for template, probe_version, major_version, has_lf in cases:
+            with self.subTest(template=template):
+                ap = write_spikeglx_recording(
+                    self.tmp / template, template, 1.0, with_lf=has_lf
+                )
+                times = [0.12, 0.53]
+                uncompressed = extract_snippets(
+                    ap, self.tmp / f"{template}_bin.h5", t_starts=times, duration=0.1
+                )
+                with spikeglx.Reader(ap) as reader:
+                    self.assertEqual(reader.version, probe_version)
+                for binary in sorted(ap.parent.glob("*.bin")):
+                    with spikeglx.Reader(binary) as reader:
+                        # Short chunks force snippet reads across compression boundaries.
+                        mtscomp.compress(
+                            binary,
+                            out=binary.with_suffix(".cbin"),
+                            outmeta=binary.with_suffix(".ch"),
+                            sample_rate=reader.fs,
+                            n_channels=reader.nc,
+                            dtype=np.int16,
+                            chunk_duration=0.05,
+                            n_threads=1,
+                        )
+                compressed = extract_snippets(
+                    ap.with_suffix(".cbin"),
+                    self.tmp / f"{template}_cbin.h5",
+                    t_starts=times,
+                    duration=0.1,
+                )
+                with (
+                    h5py.File(uncompressed) as reference,
+                    h5py.File(compressed) as packed,
+                ):
+                    expected, actual = reference[REC], packed[REC]
+                    self.assertEqual(actual.attrs["neuropixel_version"], major_version)
+                    self.assertEqual("lf" in actual, has_lf)
+                    np.testing.assert_array_equal(actual["t_start"][:], times)
+                    for key in expected["geometry"]:
+                        np.testing.assert_array_equal(
+                            actual[f"geometry/{key}"][:], expected[f"geometry/{key}"][:]
+                        )
+                    for band in ("ap", "lf") if has_lf else ("ap",):
+                        self.assertEqual(
+                            dict(actual[band].attrs), dict(expected[band].attrs)
+                        )
+                        for key in ("data", "sample2volts", "first_sample", "meta"):
+                            np.testing.assert_array_equal(
+                                actual[f"{band}/{key}"][:], expected[f"{band}/{key}"][:]
+                            )
+
     def test_np24_stores_wideband_ap_only(self):
         ap = write_spikeglx_recording(
             self.tmp, "np24_shank", 1.0
@@ -370,15 +429,24 @@ class TestProbeTypes(unittest.TestCase):
                 volts *= f[REC]["ap/sample2volts"][()][:, np.newaxis]
                 np.testing.assert_array_equal(volts, sr[n0 : n0 + 3000, :96].T)
 
-    def test_np1_without_lf_file_stores_ap_only_and_warns(self):
-        ap = write_spikeglx_recording(self.tmp, "np1", 1.0, with_lf=False)
-        with self.assertLogs("ephysatlas.snippet_extractor", level="WARNING"):
-            out = extract_snippets(
-                ap, self.tmp / "nolf.h5", t_starts=[0.1], duration=0.1
-            )
-        with h5py.File(out) as f:
-            self.assertNotIn("lf", f)
-            self.assertTrue(f[REC].attrs["probe_has_lf_band"])
+    def test_recorded_lf_is_required_before_opening_readers(self):
+        """Reject missing NP1/3A LF before opening data or creating an output folder."""
+        for template in ("np1", "3a"):
+            with self.subTest(template=template):
+                ap = write_spikeglx_recording(
+                    self.tmp / template, template, 1.0, with_lf=False
+                )
+                output = self.tmp / f"{template}_output" / "snippets.h5"
+                with mock.patch(
+                    "ephysatlas.snippet_extractor.spikeglx.Reader"
+                ) as reader:
+                    with self.assertRaisesRegex(
+                        FileNotFoundError, "No LF file found"
+                    ) as error:
+                        extract_snippets(ap, output, t_starts=[0.1], duration=0.1)
+                self.assertIn(str(ap), str(error.exception))
+                reader.assert_not_called()
+                self.assertFalse(output.parent.exists())
 
     def test_unknown_probe_type_raises_clear_error(self):
         ap = write_spikeglx_recording(
