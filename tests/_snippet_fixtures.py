@@ -3,12 +3,14 @@
 The ``.meta`` files in ``tests/fixtures/snippet_extractor`` are copies of real recordings
 (NP1.0, 3A and an NP2.4 single-shank file). ``write_spikeglx_recording`` pairs them with random
 int16 data, so the extractor can be tested without the real recordings of hundreds of GB.
+``channel_locations_dict`` makes a matching IBL ``channel_locations.json``.
 """
 
 from collections.abc import Mapping
 from pathlib import Path
 
 import numpy as np
+import spikeglx
 
 FIXTURES = Path(__file__).parent / "fixtures" / "snippet_extractor"
 
@@ -72,3 +74,48 @@ def write_spikeglx_recording(
         meta_text = "".join(f"{key}={value}\n" for key, value in meta.items())
         bin_file.with_suffix(".meta").write_text(meta_text, newline="\r\n")
     return folder / "rec_g0_t0.imec0.ap.bin"
+
+
+def channel_locations_dict(
+    ap_meta: Path, convention: str = "spikeglx", with_index: bool = True
+) -> dict:
+    """Make the content of an IBL ``channel_locations.json`` for every channel of a recording.
+
+    The brain coordinates and regions are made up from each channel's index ``ind`` in the
+    recorded file, so a test can tell which entry ended up on which data row:
+    ``x = 1000 + ind``, ``y = -2000 + ind``, ``z = -3000 - ind`` (um), and the regions cycle
+    through STR (477), CP (672) and void (0).
+
+    Args:
+        ap_meta: The recording's ``.ap.meta`` file. Each channel of its geometry gets an entry
+            ``channel_<ind>``, in the geometry's row order.
+        convention: How ``axial`` and ``lateral`` describe the probe. ``"spikeglx"`` copies the
+            ibl-neuropixel geometry, as in the Nuo Li files. ``"probeinterface"`` uses
+            ``axial = y - min(y)`` and ``lateral = max(x) - x``, as in the Cazettes files.
+        with_index: Add ``original_channel_idx`` to each entry.
+
+    Returns:
+        The json content as a dict, with ``origin.bregma`` set to the IBL bregma.
+    """
+    geometry = spikeglx.geometry_from_meta(spikeglx.read_meta_data(ap_meta))
+    x, y = geometry["x"].astype(float), geometry["y"].astype(float)
+    axial, lateral = {
+        "spikeglx": (y, x),
+        "probeinterface": (y - y.min(), x.max() - x),
+    }[convention]
+    content = {}
+    for row, ind in enumerate(geometry["ind"].tolist()):
+        entry = {
+            "x": 1000.0 + ind,
+            "y": -2000.0 + ind,
+            "z": -3000.0 - ind,
+            "axial": float(axial[row]),
+            "lateral": float(lateral[row]),
+            "brain_region_id": (477, 672, 0)[ind % 3],
+            "brain_region": ("STR", "CP", "void")[ind % 3],
+        }
+        if with_index:
+            entry["original_channel_idx"] = ind
+        content[f"channel_{ind}"] = entry
+    content["origin"] = {"bregma": [5739, 5400, 332]}
+    return content
