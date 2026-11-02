@@ -131,6 +131,7 @@ quartodoc:
         - feature_calculators.IBLPIDFeatureCalculator
         - feature_calculators.LFPackFeatureCalculator
         - feature_calculators.NumpyArrayFeatureCalculator
+        - feature_calculators.SnippetFileFeatureCalculator
         - feature_calculators.BaseFeatureCalculator
     - title: "Snippet extraction"
       desc: "Pack raw snippets of one SpikeGLX probe recording into a small HDF5 file."
