@@ -39,8 +39,12 @@ dependencies = [
     "numpy",
     "pandas",
     "scipy",
+    "h5py>=3.15.1",           # snippet_extractor.py writes the snippet files
     "huggingface_hub>=0.34"
 ]
+
+[project.scripts]
+ibleatools-snippets = "ephysatlas.snippet_extractor:main"
 
 [project.optional-dependencies]
 # Explicit alias so `pip install ibleatools[lite]` (e.g. the GUI dependency line) is
