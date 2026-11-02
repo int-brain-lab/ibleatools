@@ -2,7 +2,7 @@
 title: "How to extract raw snippets to send to the IBL"
 ---
 
-This guide is for labs that share Neuropixels recordings with the IBL. Large raw recordings are reduced to short AP and LF snippets, with probe geometry and metadata, in a transferable HDF5 file. **One `.h5` file can contain recordings from multiple subjects, acquisition dates, sessions and probes.** Run extraction once per recording, using the same output path to build a collection. Original AP samples and recorded NP1/3A LF samples are stored unchanged. For NP2, the file also includes LF derived from the wideband AP using `ibl-neuropixel`'s `NP2Converter`.
+This guide is for labs that share Neuropixels recordings with the IBL. Large raw recordings are reduced to short AP and LF snippets, with probe geometry, metadata and optional histology, in a transferable HDF5 file. **One `.h5` file can contain recordings from multiple subjects, acquisition dates, sessions and probes.** Run extraction once per recording, using the same output path to build a collection. Original AP samples and recorded NP1/3A LF samples are stored unchanged. For NP2, the file also includes LF derived from the wideband AP using `ibl-neuropixel`'s `NP2Converter`.
 
 ## Prerequisites
 
@@ -23,11 +23,23 @@ Run the command once per recording:
 ``` bash
 ibleatools-snippets /data/subjectA/2026-01-15/probe00/run_g0_t0.imec0.ap.cbin \
     -o /data/to_send/collection.h5 \
-    --name subjectA_2026-01-15_probe00
+    --name subjectA_2026-01-15_probe00 \
+    --histology-raw /data/subjectA/2026-01-15/alf/probe00/channel_locations.json \
+    --trajectory 2243 -2000 -200 4000 15 180
 ```
 
 - `-o` is the collection to write. The first call creates it; later calls append independent recordings. A collection name such as `collection.h5` or `lab_batch_01.h5` need not describe one subject or date.
 - `--name` is the recording's identifier inside that collection. Use a stable, unique name such as `subjectA_2026-01-15_probe00`; include a session or run identifier when the same probe was recorded more than once that day. Without `--name`, the AP filename without `.ap.bin` / `.ap.cbin` is used. Those filenames often repeat across subjects and dates.
+- `--histology-raw` is optional. List files or folders of this recording's histology, for
+  example tracing CSVs or a `channel_locations.json`. They are copied as they are for later
+  interpretation; this option does not populate a structured channel table. The total is
+  limited to 100 MB per recording, so whole-brain image volumes are rejected.
+- `--trajectory` is optional (the numbers above are only an example). It is the planned
+  insertion, six numbers: `x y z depth theta phi`. Use the IBL Alyx convention: `x`, `y`, `z`
+  in um relative to bregma (`x` is mediolateral, right positive; `y` is anterior-posterior,
+  anterior positive; `z` is dorsoventral, dorsal positive), `depth` in um along the probe,
+  `theta` (from straight up) and `phi` (from the +x axis) in degrees. If your lab uses other
+  conventions, convert the numbers first.
 
 By default the command takes 5 snippets of 5 s, spread over the recording and leaving out the first and last 5 minutes. Options for other cases:
 
@@ -69,7 +81,7 @@ collection.h5
     subjectB_2026-02-20_probe00/
 ```
 
-Each recording has its own source paths, geometry, sampling rates, snippet windows and original metadata. There is no shared subject or acquisition-date requirement. The file-level `created` timestamp describes when the collection was created, not when all its recordings were acquired. Subject/date identifiers in `--name` are chosen by you; the extractor does not parse them into separate metadata fields.
+Each recording has its own source paths, geometry, sampling rates, snippet windows and original metadata. Optional histology and trajectory are also stored per recording; supply the matching inputs in each extraction command. There is no shared subject or acquisition-date requirement. The file-level `created` timestamp describes when the collection was created, not when all its recordings were acquired. Subject/date identifiers in `--name` are chosen by you; the extractor does not parse them into separate metadata fields.
 
 An existing recording name is rejected, never overwritten. Reusing a name for another subject/date does not add a second recording. Choose a distinct name for the distinct recording; keep that name unchanged when retrying. Run only one writer on an output file at a time.
 
@@ -104,6 +116,7 @@ In this case, preserve a copy before attempting recovery and verify the stored r
 
 - Raw AP samples and recorded NP1/3A LF or converter-derived NP2 LF, compressed without loss, with the gains to convert them to volts.
 - The probe geometry, each channel's shank, the original `.meta` text, and the start time of each snippet in your recording.
+- The original files of `--histology-raw` and the planned trajectory, when given.
 
 The SpikeGLX sync channel is not included. A Neuropixels 1.0 probe adds about 0.23 GB to the file with the defaults (5 snippets of 5 s).
 

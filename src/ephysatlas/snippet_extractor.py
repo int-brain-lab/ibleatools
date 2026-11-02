@@ -1,7 +1,7 @@
 """Pack raw AP and recorded or converter-derived LF snippets into one small HDF5 file.
 
 Partner labs run :func:`extract_snippets` on their raw recordings (hundreds of GB each) and
-send us the output, with the raw samples and their metadata kept together.
+send us the output, which the snippet-file feature calculator reads back.
 
 File layout (``n`` snippets, ``c`` channels, sync channel removed)::
 
@@ -24,6 +24,8 @@ File layout (``n`` snippets, ``c`` channels, sync channel removed)::
                                 source="recorded" for NP1/3A, "derived" for NP2
                                 derived LF has no original .meta; the method attribute
                                 and filter_sos record the NP2Converter filter instead
+        histology/raw/<name>    uint8 (n_bytes,)   original histology bytes, attrs source_path
+        trajectory              group, attrs x, y, z, depth, theta, phi; only when given
 
 Channel rows follow the order of ``spikeglx.Reader`` (``sr[...]`` and ``sr.geometry``).
 """
@@ -32,6 +34,7 @@ import argparse
 import datetime
 import importlib.metadata
 import logging
+import numbers
 import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -44,6 +47,7 @@ from neuropixel import NP2Converter
 
 from ephysatlas import __version__ as ibleatools_version
 from ephysatlas._snippet_bands import _write_band, _write_np2_lf
+from ephysatlas._snippet_histology import _collect_histology_files
 from ephysatlas.feature_calculators import (
     SnippetWindow,
     check_snippet_overlap,
@@ -53,6 +57,7 @@ from ephysatlas.feature_calculators.spikeglx_like import LF_LATENCY_SAMPLES
 
 LOGGER = logging.getLogger(__name__)
 
+TRAJECTORY_KEYS = ("x", "y", "z", "depth", "theta", "phi")
 # Seed of the stratified draw in get_snippet_start_times (its default).
 SNIPPET_SEED = 0
 
@@ -85,10 +90,12 @@ def extract_snippets(
     ap_file: str | Path,
     output_file: str | Path,
     name: str | None = None,
+    histology_raw: Sequence[str | Path] | None = None,
     t_starts: Sequence[float] | None = None,
     n_snippets: int = 5,
     duration: float = 5.0,
     margin: float = 300.0,
+    trajectory: Mapping[str, float] | None = None,
 ) -> Path:
     """Write raw AP and recorded or derived LF snippets of one SpikeGLX probe recording.
 
@@ -106,11 +113,17 @@ def extract_snippets(
             snippet file, and the recording is added to it.
         name: Name of the recording inside the file, stored under ``recordings/<name>``. If
             None, the AP file name without ``.ap.bin`` / ``.ap.cbin``.
+        histology_raw: Other histology files or folders to copy into the output as raw bytes,
+            e.g. track CSVs of this probe. A folder is copied with everything under it.
+            The total is limited to 100 MB, which keeps image volumes out.
         t_starts: Snippet start times in seconds. If None, ``n_snippets`` start times are
             chosen by ``get_snippet_start_times`` over the length of the data in the files.
         n_snippets: Number of snippets when ``t_starts`` is None.
         duration: Length of each snippet in seconds, for both bands.
         margin: Seconds skipped at each end of the recording by automatic times.
+        trajectory: Planned probe insertion with the keys ``TRAJECTORY_KEYS``: x, y, z in um
+            relative to bregma, depth in um along the probe, theta and phi in degrees (IBL
+            Alyx units). Other keys are ignored.
 
     Returns:
         Path of the written file.
@@ -119,9 +132,11 @@ def extract_snippets(
         ValueError: ``ap_file`` is not a SpikeGLX AP data file, ``output_file`` already
             holds a recording called ``name``, the probe type is not supported, the
             ``.meta`` file has no channel map, the recording is too short for automatic
-            times, explicit snippets overlap or reach outside the data.
-        FileNotFoundError: The ``.meta`` file of ``ap_file`` or a required NP1/3A LF file
-            does not exist (raised by ``spikeglx``).
+            times, explicit snippets overlap or reach outside the data, two histology
+            files get the same name, the histology is over 100 MB, or trajectory keys or
+            values are invalid.
+        FileNotFoundError: The ``.meta`` file of ``ap_file``, a required NP1/3A LF file
+            (both raised by ``spikeglx``), or a histology path does not exist.
     """
     ap_file, output_file = Path(ap_file), Path(output_file)
     if ".ap." not in ap_file.name or ap_file.suffix not in (".bin", ".cbin"):
@@ -141,6 +156,28 @@ def extract_snippets(
                     "different recording, give it another name with --name (name=... in "
                     "Python)."
                 )
+
+    # Validate small optional inputs before opening the recording or creating output.
+    histology_files = _collect_histology_files(histology_raw or ())
+    if trajectory is not None:
+        missing = [key for key in TRAJECTORY_KEYS if key not in trajectory]
+        if missing:
+            raise ValueError(
+                f"trajectory is missing {missing}, it needs all of {list(TRAJECTORY_KEYS)}"
+            )
+        # bool is an int subclass, so True would pass as a number.
+        not_numbers = [
+            key
+            for key in TRAJECTORY_KEYS
+            if isinstance(trajectory[key], bool)
+            or not isinstance(trajectory[key], numbers.Real)
+        ]
+        if not_numbers:
+            raise ValueError(
+                "trajectory values must be numbers, got "
+                + ", ".join(f"{key}={trajectory[key]!r}" for key in not_numbers)
+            )
+        trajectory = {key: float(trajectory[key]) for key in TRAJECTORY_KEYS}
 
     # Probe facts come from the meta: spikeglx.Reader fails with unclear errors on
     # probe types it doesn't know.
@@ -256,6 +293,16 @@ def extract_snippets(
             if converter is not None:
                 raw_bytes += _write_np2_lf(rec, converter, order, *reads["lf"])
 
+            if histology_files:
+                group = rec.create_group("histology")
+                for hist_name, path in histology_files.items():
+                    dataset = group.create_dataset(
+                        f"raw/{hist_name}",
+                        data=np.frombuffer(path.read_bytes(), dtype=np.uint8),
+                    )
+                    dataset.attrs["source_path"] = str(path)
+            if trajectory is not None:
+                rec.create_group("trajectory").attrs.update(trajectory)
         size = partial.stat().st_size
         LOGGER.info(
             "Recording %s: %.1f MB, %.2fx smaller than the raw data",
@@ -319,6 +366,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         ".ap.bin/.ap.cbin",
     )
     parser.add_argument(
+        "--histology-raw",
+        type=Path,
+        nargs="+",
+        metavar="PATH",
+        help="other histology files or folders of this probe, copied as they are",
+    )
+    parser.add_argument(
         "--t-starts",
         type=float,
         nargs="+",
@@ -340,6 +394,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=300.0,
         help="seconds skipped at each end when the start times are automatic",
     )
+    parser.add_argument(
+        "--trajectory",
+        type=float,
+        nargs=6,
+        metavar=("X", "Y", "Z", "DEPTH", "THETA", "PHI"),
+        help="planned insertion, as in IBL Alyx trajectories: x y z in um relative to "
+        "bregma (x: ML, right positive; y: AP, anterior positive; z: DV, dorsal "
+        "positive), depth in um along the probe, theta (from straight up) and phi "
+        "(from the +x axis) in degrees. Your own conventions may differ; convert "
+        "them first",
+    )
     args = parser.parse_args(argv)
 
     # Handler on the package logger, added once, so repeated calls do not duplicate messages
@@ -351,15 +416,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         package_logger.addHandler(handler)
     package_logger.setLevel(logging.INFO)
 
+    trajectory = (
+        dict(zip(TRAJECTORY_KEYS, args.trajectory)) if args.trajectory else None
+    )
     try:
         extract_snippets(
             args.ap_file,
             args.output,
             name=args.name,
+            histology_raw=args.histology_raw,
             t_starts=args.t_starts,
             n_snippets=args.n_snippets,
             duration=args.duration,
             margin=args.margin,
+            trajectory=trajectory,
         )
     except Exception as err:
         LOGGER.error("%s", err)
