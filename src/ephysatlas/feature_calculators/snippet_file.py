@@ -1,8 +1,9 @@
 """Feature calculator for snippet files written by ``ephysatlas.snippet_extractor``.
 
-The file holds a few short raw AP (and, for NP1, LF) snippets of one or more recordings as
-int16 with the gains to convert them to volts. The snippets of the selected recording are the
-only windows that can be read.
+The file holds short AP and LF snippets of one or more recordings as int16 with the gains
+to convert them to volts. NP2 LF is derived during extraction; this reader loads the stored
+samples for both bands. The snippets of the selected recording are the only windows that
+can be read.
 
 Functions
 ---------
@@ -24,7 +25,6 @@ import h5py
 import ibldsp.voltage
 import numpy as np
 import pandas as pd
-import scipy.signal
 import scipy.stats
 
 from ephysatlas.feature_computation import add_target_coordinates
@@ -54,25 +54,6 @@ def list_recordings(h5_file: str | Path) -> list[str]:
         return list(f["recordings"])
 
 
-def derive_lf(ap: np.ndarray, fs_ap: float) -> tuple[np.ndarray, float]:
-    """Derive the LF band from NP2 wideband AP data.
-
-    Args:
-        ap (np.ndarray): AP data in volts, shaped ``(channels, samples)``.
-        fs_ap (float): AP sampling rate in Hz (30 kHz for NP2).
-
-    Returns:
-        tuple[np.ndarray, float]: float32 LF data shaped ``(channels, samples // 12)``
-        and its sampling rate ``fs_ap / 12``.
-    """
-    # NP2Converter's filter as it is now (neuropixel.py:336, :741). butter() gets no fs, so
-    # Wn=0.2 is relative to the 15 kHz Nyquist of the 30 kHz input: the real cutoff is ~3 kHz,
-    # not 1 kHz. Kept to match the existing NP2 LF data; see CLAUDE.md, "LF for NP2".
-    sos = scipy.signal.butter(N=2, Wn=1000 / 2500 / 2, btype="lowpass", output="sos")
-    lf = scipy.signal.sosfiltfilt(sos, ap, axis=-1)[:, ::12]
-    return lf.astype(np.float32), fs_ap / 12
-
-
 class SnippetFileFeatureCalculator(BaseFeatureCalculator):
     """Feature calculator for one recording of a snippet file.
 
@@ -97,7 +78,8 @@ class SnippetFileFeatureCalculator(BaseFeatureCalculator):
     Raises:
         ValueError: If the file has no recordings group, holds several recordings
             and ``recording`` is not given, does not hold the requested recording, holds several
-            shanks and ``shank`` is not given, or does not hold the requested shank.
+            shanks and ``shank`` is not given, does not hold the requested shank, or the
+            selected recording is missing AP or LF data.
     """
 
     def __init__(
@@ -126,8 +108,14 @@ class SnippetFileFeatureCalculator(BaseFeatureCalculator):
         # Only the small arrays are read here. The snippets are read in load_raw_snippet.
         with h5py.File(self.h5_file, "r") as file:
             f = file["recordings"][recording]
+            # Extraction always stores both bands, including derived LF for NP2.
+            for band in ("ap", "lf"):
+                if band not in f:
+                    raise ValueError(
+                        f"{self.h5_file} recording {recording!r} is missing "
+                        f"required band {band!r}"
+                    )
             neuropixel_version = int(f.attrs["neuropixel_version"])
-            self._probe_has_lf_band = bool(f.attrs["probe_has_lf_band"])
             self._duration = float(f.attrs["duration"])
             self._probe_model = str(f.attrs["probe_model"]) or pd.NA
             self._referencing_scheme = str(f.attrs["referencing_scheme"]) or pd.NA
@@ -139,7 +127,6 @@ class SnippetFileFeatureCalculator(BaseFeatureCalculator):
                     "sample2volts": f[band]["sample2volts"][:],
                 }
                 for band in ("ap", "lf")
-                if band in f
             }
             self.trajectory = (
                 {key: float(value) for key, value in f["trajectory"].attrs.items()}
@@ -171,7 +158,6 @@ class SnippetFileFeatureCalculator(BaseFeatureCalculator):
         super().__init__(
             name=name or default_name, neuropixel_version=neuropixel_version
         )
-        self._warned_no_lf = False
         self._vote_labels = None
         self.windows = [
             SnippetWindow(float(t), self._duration, self._duration)
@@ -185,10 +171,9 @@ class SnippetFileFeatureCalculator(BaseFeatureCalculator):
             window (SnippetWindow): One of ``self.windows``.
 
         Returns:
-            RawSnippet: AP and LF arrays shaped ``(channels, samples)`` in volts. The LF
-            is the stored one if the file has it. For a probe without an LF band (NP2) it
-            is derived from the AP data. ``raw_lf`` is None for an NP1 file without LF:
-            NP1 AP is high-pass filtered in hardware, so LF cannot be derived from it.
+            RawSnippet: Stored AP and LF arrays shaped ``(channels, samples)`` in volts,
+            with their sampling rates. LF sample positions already include the extraction
+            offset; no further shift or derivation is applied here.
 
         Raises:
             ValueError: If the window is not one of the stored snippets.
@@ -214,22 +199,12 @@ class SnippetFileFeatureCalculator(BaseFeatureCalculator):
                 data = f[band]["data"][index][self._rows].astype(np.float32)
                 data *= info["sample2volts"][self._rows, np.newaxis]
                 raw[band] = data
-        fs_ap = self._bands["ap"]["fs"]
-        if "lf" in self._bands:
-            raw_lf, fs_lf = raw["lf"], self._bands["lf"]["fs"]
-        elif not self._probe_has_lf_band:
-            raw_lf, fs_lf = derive_lf(raw["ap"], fs_ap)
-        else:
-            raw_lf, fs_lf = None, None
-            if not self._warned_no_lf:
-                LOGGER.warning(
-                    "%s recording %r has no LF data although the probe records LF; "
-                    "no LF features",
-                    self.h5_file,
-                    self.recording,
-                )
-                self._warned_no_lf = True
-        return RawSnippet(raw_ap=raw["ap"], raw_lf=raw_lf, fs_ap=fs_ap, fs_lf=fs_lf)
+        return RawSnippet(
+            raw_ap=raw["ap"],
+            raw_lf=raw["lf"],
+            fs_ap=self._bands["ap"]["fs"],
+            fs_lf=self._bands["lf"]["fs"],
+        )
 
     def load_geometry(self) -> dict[str, np.ndarray]:
         """Return the stored geometry of the selected channels.
@@ -264,18 +239,15 @@ class SnippetFileFeatureCalculator(BaseFeatureCalculator):
         )
         return channels
 
-    def available_duration(self) -> tuple[float, float | None]:
+    def available_duration(self) -> tuple[float, float]:
         """Return the end of the last stored snippet for AP and LF.
 
         Returns:
-            tuple[float, float | None]: ``(duration_ap, duration_lf)``. ``duration_lf`` is
-            None for an NP1 file without LF data. LF is available when it is stored or
-            derivable (probe without an LF band).
+            tuple[float, float]: The end time of the last snippet for each band, measured
+            from the original recording's start. Gaps between snippets are not readable.
         """
         end = float(self._t_start.max() + self._duration)
-        return end, (
-            end if "lf" in self._bands or not self._probe_has_lf_band else None
-        )
+        return end, end
 
     def _resolve_channel_labels(
         self,

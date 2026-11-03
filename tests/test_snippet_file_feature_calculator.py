@@ -9,12 +9,10 @@ from unittest import mock
 import h5py
 import numpy as np
 import pandas as pd
-from neuropixel import NP2Converter
 
 from ephysatlas.feature_calculators import SpikeGLXFileFeatureCalculator
 from ephysatlas.feature_calculators.snippet_file import (
     SnippetFileFeatureCalculator,
-    derive_lf,
     list_recordings,
 )
 from ephysatlas.feature_calculators.types import (
@@ -174,44 +172,33 @@ class TestSnippetFileFeatureCalculator(unittest.TestCase):
         self.assertEqual(len(calc.load_geometry()["x"]), 48)
         self.assertTrue(calc.name.endswith("_shank1"))
 
-    def test_derive_lf_matches_np2converter(self):
-        conv = NP2Converter(self.np2_ap, compress=False)
-        x = np.random.default_rng(0).standard_normal((96, 30000)) * 1e-4
-        ours, fs_lf = derive_lf(x.copy(), 30000.0)
-        theirs = conv.extract_lfp(
-            x.copy()
-        )  # tapers its input in place, hence the copies
-        self.assertEqual(fs_lf, 2500.0)
-        np.testing.assert_allclose(
-            ours[:, 50:-50], theirs[:, 50:-50], rtol=1e-5, atol=1e-9
-        )
-
-    def test_np2_file_derives_lf(self):
+    def test_np2_reads_stored_lf(self):
+        """Use the saved LF samples and gains without filtering or shifting them again."""
         calc = SnippetFileFeatureCalculator(self.np2_h5)
-        raw = calc.load_raw_snippet(calc.windows[0])
-        self.assertEqual(raw.fs_lf, raw.fs_ap / 12)
-        self.assertEqual(raw.raw_lf.dtype, np.float32)
         self.assertEqual(calc.available_duration(), (0.6, 0.6))
         self.assertIsNone(calc.trajectory)
-        self.assertEqual(raw.raw_lf.shape, (96, 250))
+        with h5py.File(self.np2_h5, "r") as file:
+            lf = file[f"{REC}/lf"]
+            for index, window in enumerate(calc.windows):
+                raw = calc.load_raw_snippet(window)
+                expected = lf["data"][index].astype(np.float32)
+                expected *= lf["sample2volts"][:][:, np.newaxis]
+                np.testing.assert_array_equal(raw.raw_lf, expected)
+                self.assertEqual(raw.fs_lf, float(lf.attrs["fs"]))
+                self.assertEqual(raw.raw_lf.dtype, np.float32)
+                self.assertEqual(raw.raw_lf.shape, (96, 250))
 
-    def test_np1_without_lf_returns_none_and_never_derives(self):
-        """An incomplete NP1 file never causes the reader to derive LF from AP."""
-        # The extractor requires LF; remove it from a copy to exercise the reader's guard.
-        incomplete = self.tmp / "np1_nolf.h5"
-        shutil.copy(self.np1_h5, incomplete)
-        with h5py.File(incomplete, "r+") as file:
-            del file[f"{REC}/lf"]
-        calc = SnippetFileFeatureCalculator(incomplete)
-        self.assertEqual(calc.available_duration(), (0.6, None))
-        target = "ephysatlas.feature_calculators.snippet_file"
-        with mock.patch(f"{target}.derive_lf") as m:
-            with self.assertLogs(target, level="WARNING") as logs:
-                for window in calc.windows:
-                    raw = calc.load_raw_snippet(window)
-                    self.assertIsNone(raw.raw_lf)
-        m.assert_not_called()
-        self.assertEqual(len(logs.records), 1)  # once per calculator, not per snippet
+    def test_missing_band_raises(self):
+        """Reject incomplete recordings for either probe type before reading snippets."""
+        for source in (self.np1_h5, self.np2_h5):
+            for band in ("ap", "lf"):
+                with self.subTest(source=source.name, band=band):
+                    incomplete = self.tmp / f"{source.stem}_no_{band}.h5"
+                    shutil.copy(source, incomplete)
+                    with h5py.File(incomplete, "r+") as file:
+                        del file[f"{REC}/{band}"]
+                    with self.assertRaisesRegex(ValueError, f"required band '{band}'"):
+                        SnippetFileFeatureCalculator(incomplete)
 
     def test_labels_majority_vote_computed_once(self):
         calc = SnippetFileFeatureCalculator(self.np1_3snip_h5)
