@@ -36,7 +36,9 @@ sns.set_theme(context="notebook")
 PROJECT = "ibl_neuropixel_brainwide_01"
 ROOT_PATH = Path("/Users/olivier/Documents/datadisk/paper-ephys-atlas")
 PATH_PROJECT = ROOT_PATH.joinpath(PROJECT)
-CELLS_AGG_PATH = PATH_PROJECT.joinpath("cells_aggregates")
+CELLS_AGG_PATH = PATH_PROJECT.joinpath(
+    "cells_aggregates", ephysatlas.data.CELLS_AGGREGATES_LABEL
+)
 SAMPLING_RATE = 30_000  # Hz
 FIGURES_PATH = Path.home().joinpath("Documents", "figures")
 

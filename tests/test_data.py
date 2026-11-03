@@ -107,7 +107,7 @@ def _make_cluster_aggregates(path, n=10):
     """Write synthetic cell-aggregate files to path/cells_aggregates/."""
     import ephysatlas.cells
 
-    agg_path = path / "cells_aggregates"
+    agg_path = path / "cells_aggregates" / ephysatlas.data.CELLS_AGGREGATES_LABEL
     agg_path.mkdir(parents=True, exist_ok=True)
     df = _schema_example(ephysatlas.cells.ModelClusters, n=n)
     df.to_parquet(agg_path / "clusters.table.pqt")
@@ -171,7 +171,11 @@ class TestProjectDataIO(unittest.TestCase):
         self.assertNotIn("acgs_3d_times", r)
 
     def test_read_cells_features_with_acgs_3d(self):
-        agg_path = self.project_path / "cells_aggregates"
+        agg_path = (
+            self.project_path
+            / "cells_aggregates"
+            / ephysatlas.data.CELLS_AGGREGATES_LABEL
+        )
         _write_acg3d_files(agg_path, n=10)
         r = ephysatlas.data.read_cells_features(self.project_path)
         self.assertIn("acgs_3d", r)
@@ -182,7 +186,11 @@ class TestProjectDataIO(unittest.TestCase):
 
     def test_read_cells_features_with_waveforms(self):
         n_traces = 50
-        agg_path = self.project_path / "cells_aggregates"
+        agg_path = (
+            self.project_path
+            / "cells_aggregates"
+            / ephysatlas.data.CELLS_AGGREGATES_LABEL
+        )
         np.save(
             agg_path / "waveforms.voltage.npy",
             np.zeros((n_traces, 128), dtype=np.float16),
@@ -232,7 +240,8 @@ class TestProjectDataIO(unittest.TestCase):
         )
         self.assertFalse(any("waveforms.voltage" in k for k in s3_keys))
         self.assertFalse(any("acgs_3d" in k for k in s3_keys))
-        self.assertTrue(all("cells_aggregates" in k for k in s3_keys))
+        label = ephysatlas.data.CELLS_AGGREGATES_LABEL
+        self.assertTrue(all(f"cells_aggregates/{label}/" in k for k in s3_keys))
 
     def test_download_cells_features_acg3d(self):
         mock_one = MagicMock()
@@ -287,6 +296,7 @@ class TestProjectDataIO(unittest.TestCase):
             overwrite=False,
             large_files=False,
             acg3d=False,
+            label=ephysatlas.data.CELLS_AGGREGATES_LABEL,
         )
         self.assertEqual(result, self.tmp / "dl" / self.project)
 

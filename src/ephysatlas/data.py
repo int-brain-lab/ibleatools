@@ -21,7 +21,10 @@ CLUSTERS_ATTRIBUTES = ["channels", "depths", "metrics"]
 
 EXTRACT_RADIUS_UM = 200  # for localisation , the default extraction radius in um
 
-# Files in cells_aggregates/ that are always downloaded (standard set, ~1 GB)
+# Version of the cells_aggregates/ release, a ``year_Www`` folder: cells_aggregates/{label}/
+CELLS_AGGREGATES_LABEL = "2026_W42"
+
+# Files in cells_aggregates/{label}/ that are always downloaded (standard set, ~1 GB)
 _CELLS_AGGREGATES_FILES = [
     "clusters.table.pqt",
     "clusters_good.table.pqt",
@@ -733,8 +736,9 @@ def download_cells_features(
     overwrite=False,
     large_files=False,
     acg3d=False,
+    label=CELLS_AGGREGATES_LABEL,
 ):
-    """Download cluster-level aggregates from S3 (``cells_aggregates/`` subfolder, ~1 GB).
+    """Download cluster-level aggregates from S3 (``cells_aggregates/{label}/`` subfolder, ~1 GB).
 
     Downloads the standard cluster files. The large waveform files
     (``waveforms.voltage.npy`` and ``waveforms.table.pqt``, ~8 GB combined) are only
@@ -745,7 +749,7 @@ def download_cells_features(
     :func:`download_project_data` to get both in one call.
 
     Args:
-        local_path (Path): Local root; files are placed under local_path/project/cells_aggregates/.
+        local_path (Path): Local root; files are placed under local_path/project/cells_aggregates/label/.
         project (str): Project name.
         one (one.api.ONE, optional): ONE instance for AWS credentials.
         overwrite (bool): Re-download files that already exist locally.
@@ -753,14 +757,15 @@ def download_cells_features(
             (~8 GB). Defaults to False.
         acg3d (bool): If True, also download clusters.acgs_3d.npy and acgs_3d.times.npy
             (~3.5 GB). Not every historical dataset has these. Defaults to False.
+        label (str): Release version, a ``year_Www`` folder, e.g. "2026_W42".
 
     Returns:
-        Path: local_path/project/cells_aggregates/ directory.
+        Path: local_path/project/cells_aggregates/label/ directory.
     """
     s3, bucket_name, local_project_path = _project_s3(local_path, project, one)
-    dest = local_project_path / "cells_aggregates"
+    dest = local_project_path / "cells_aggregates" / label
     dest.mkdir(parents=True, exist_ok=True)
-    s3_prefix = f"aggregates/atlas/projects/{project}/cells_aggregates"
+    s3_prefix = f"aggregates/atlas/projects/{project}/cells_aggregates/{label}"
     files_to_download = (
         _CELLS_AGGREGATES_FILES
         + (_WAVEFORMS_FILES if large_files else [])
@@ -784,6 +789,7 @@ def download_project_data(
     overwrite=False,
     large_files=False,
     acg3d=False,
+    label=CELLS_AGGREGATES_LABEL,
 ):
     """Download all project data (probe details + cell aggregates) from S3.
 
@@ -796,6 +802,7 @@ def download_project_data(
         overwrite (bool): Re-download files that already exist locally.
         large_files (bool): If True, also download the large waveform files (~8 GB). Defaults to False.
         acg3d (bool): If True, also download the 3D ACG files (~3.5 GB). Defaults to False.
+        label (str): Cells aggregates release version, a ``year_Www`` folder.
 
     Returns:
         Path: local_path/project directory.
@@ -808,6 +815,7 @@ def download_project_data(
         overwrite=overwrite,
         large_files=large_files,
         acg3d=acg3d,
+        label=label,
     )
     return Path(local_path) / project
 
@@ -830,13 +838,15 @@ def read_probe_details(path_project, strict=True):
     return df
 
 
-def read_cells_features(path_project):
+def read_cells_features(path_project, label=CELLS_AGGREGATES_LABEL):
     """Read cluster-level features and associated arrays from cells_aggregates/.
 
     Parameters
     ----------
     path_project : Path
         Path to the project folder (parent of cells_aggregates/).
+    label : str
+        Release version, a ``year_Www`` folder of cells_aggregates/, e.g. "2026_W42".
 
     Returns
     -------
@@ -850,7 +860,7 @@ def read_cells_features(path_project):
     --------
     docs/how-to/load-cells-features.qmd : full file reference, shapes and dtypes.
     """
-    path = Path(path_project) / "cells_aggregates"
+    path = Path(path_project) / "cells_aggregates" / label
     result = {
         "df_clusters": pd.read_parquet(path / "clusters.table.pqt"),
         "df_clusters_good": pd.read_parquet(path / "clusters_good.table.pqt"),
