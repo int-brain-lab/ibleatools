@@ -10,6 +10,7 @@ import unittest
 import numpy as np
 import pandas as pd
 
+from ephysatlas.alignment.ephys_only import default_fit_dir, used_feature_names
 from ephysatlas.alignment.models import ChannelModel
 from ephysatlas.alignment.plotting import trace_depth_mm, values_on_trace
 
@@ -107,3 +108,23 @@ class TestTraceStripes(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestEphysOnlyFeatureSets(unittest.TestCase):
+    def test_no_detection_set_drops_only_the_spike_features(self):
+        full = used_feature_names("lf_ap")
+        reduced = used_feature_names("lf_ap_no_detection")
+        self.assertEqual(len(full), 30)
+        self.assertEqual(
+            sorted(set(full) - set(reduced)), ["alpha_mean", "alpha_std", "spike_count"]
+        )
+        self.assertEqual(reduced, [f for f in full if f in reduced])  # order kept
+        self.assertIn("rms_ap", reduced)
+
+    def test_each_feature_set_has_its_own_fit_dir(self):
+        self.assertEqual(default_fit_dir("abc").name, "abc")
+        self.assertEqual(
+            default_fit_dir("abc", "lf_ap_no_detection").name, "abc_lf_ap_no_detection"
+        )
+        with self.assertRaises(ValueError):
+            used_feature_names("waveforms")

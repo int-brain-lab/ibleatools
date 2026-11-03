@@ -7,7 +7,9 @@ method ``student_t_mahalanobis_plan_posterior`` (research section 5.3) of the lo
 ported from ``ephys-localization-agents`` and refitted on the released channel model:
 
 - **Features** -- the 30 LF + AP features (by name), clipped to the release percentiles and
-  standardised; bin means ``x_b`` over the channels with a signal.
+  standardised; bin means ``x_b`` over the channels with a signal. ``feature_set=
+  "lf_ap_no_detection"`` drops the three spike-detection features (27 left), for recordings
+  whose features come from the raw LF and AP bands alone, as in real-time acquisition.
 - **Predictions** -- the channel model's standardised predictions ``G`` on a 200 µm lattice of the
   left hemisphere (Cosmos id >= 1), interpolated trilinearly at any point (:class:`DenseGrid`).
 - **Likelihood** -- whitened multivariate Student-t of each bin's residual,
@@ -48,6 +50,11 @@ from .result import AlignmentResult
 
 # The likelihood features: every LF and AP feature, selected by name (the release order varies).
 FEATURE_GROUPS_USED = ("lf", "ap")
+# AP-group features that need spike detection (DARTsort subtraction): the "lf_ap_no_detection"
+# feature set leaves them out.
+DETECTION_FEATURES = ("alpha_mean", "alpha_std", "spike_count")
+# Named likelihood feature sets; the first is the default.
+FEATURE_SETS = ("lf_ap", "lf_ap_no_detection")
 # Annealing snapshots kept by ``localize(record_history=True)``: every this many iterations.
 HISTORY_EVERY = 10
 # Files in the fit directory.
@@ -152,20 +159,33 @@ def _configs(overrides: dict) -> tuple[ScoreConfig, AnnealConfig]:
     return configs
 
 
-def default_fit_dir(model_commit: str) -> Path:
-    """``~/ephys-atlas/results/alignment/ephys_only_fit/<model_commit>``."""
+def _check_feature_set(feature_set: str) -> str:
+    if feature_set not in FEATURE_SETS:
+        raise ValueError(
+            f"unknown feature set {feature_set!r}; choose from {FEATURE_SETS}"
+        )
+    return feature_set
+
+
+def default_fit_dir(model_commit: str, feature_set: str = FEATURE_SETS[0]) -> Path:
+    """``~/ephys-atlas/results/alignment/ephys_only_fit/<model_commit>``, with a
+    ``_<feature_set>`` suffix for a feature set other than the default."""
     from ephysatlas.unit_level_encoder.config import DEFAULT_RESULTS_DIR
 
-    return (
-        Path(DEFAULT_RESULTS_DIR) / "alignment" / "ephys_only_fit" / str(model_commit)
-    )
+    name = str(model_commit)
+    if _check_feature_set(feature_set) != FEATURE_SETS[0]:
+        name = f"{name}_{feature_set}"
+    return Path(DEFAULT_RESULTS_DIR) / "alignment" / "ephys_only_fit" / name
 
 
-def used_feature_names() -> list[str]:
-    """The 30 likelihood features (LF then AP)."""
+def used_feature_names(feature_set: str = FEATURE_SETS[0]) -> list[str]:
+    """The likelihood features (LF then AP): 30 for ``lf_ap``, 27 for ``lf_ap_no_detection``."""
     from ephysatlas.spatial_encoder.utils import FEATURE_GROUPS
 
-    return [name for group in FEATURE_GROUPS_USED for name in FEATURE_GROUPS[group]]
+    names = [name for group in FEATURE_GROUPS_USED for name in FEATURE_GROUPS[group]]
+    if _check_feature_set(feature_set) == "lf_ap_no_detection":
+        names = [name for name in names if name not in DETECTION_FEATURES]
+    return names
 
 
 def stable_seed(*parts) -> int:
@@ -1065,8 +1085,12 @@ class EphysOnlyLocalizer:
         channel_model: :class:`~ephysatlas.alignment.models.ChannelModel`.
         brain_atlas: ``iblatlas.atlas.AllenAtlas``.
         fit_dir: Where the fitted parameters and the lattice predictions are cached; default
-            ``~/ephys-atlas/results/alignment/ephys_only_fit/<model_commit>``. Fitted with
-            :meth:`fit` when absent (needs the feature release, i.e. ONE credentials).
+            ``~/ephys-atlas/results/alignment/ephys_only_fit/<model_commit>`` (see
+            :func:`default_fit_dir`). Fitted with :meth:`fit` when absent (needs the feature
+            release, i.e. ONE credentials).
+        feature_set: Likelihood features, one of :data:`FEATURE_SETS`: ``"lf_ap"`` (the 30 LF
+            and AP features) or ``"lf_ap_no_detection"`` (without the 3 spike-detection
+            features). Each feature set has its own fit.
         n_restarts: Annealing restarts from the planned trajectory.
         seed: Base seed of the restarts' random streams (restart r uses ``seed + 1000003 r``).
         progress: ``progress(fraction, message)`` callback for the first use, when the lattice
@@ -1081,6 +1105,7 @@ class EphysOnlyLocalizer:
         brain_atlas,
         *,
         fit_dir=None,
+        feature_set: str = FEATURE_SETS[0],
         n_restarts: int = 10,
         seed: int = 0,
         progress: Optional[ProgressCallback] = None,
@@ -1092,10 +1117,13 @@ class EphysOnlyLocalizer:
         self.seed = int(seed)
         self.score_cfg, self.anneal_cfg = _configs(overrides)
         self.model_commit = str(channel_model.model_commit)
+        self.feature_set = _check_feature_set(feature_set)
         self.fit_dir = (
-            Path(fit_dir) if fit_dir is not None else default_fit_dir(self.model_commit)
+            Path(fit_dir)
+            if fit_dir is not None
+            else default_fit_dir(self.model_commit, self.feature_set)
         )
-        self.feature_names = used_feature_names()
+        self.feature_names = used_feature_names(self.feature_set)
         missing = [f for f in self.feature_names if f not in channel_model.features]
         if missing:
             raise ValueError(f"the channel model does not predict {missing}")

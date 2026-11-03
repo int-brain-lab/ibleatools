@@ -589,6 +589,7 @@ def fit_localizer(
     summary = dict(
         method="student_t_mahalanobis_plan_posterior (research 5.3), ephys-only localization",
         model_commit=localizer.model_commit,
+        feature_set=localizer.feature_set,
         channel_model=f"{getattr(cm, 'repo_id', '')}@{getattr(cm, 'revision', '')}",
         fitted_at=time.strftime("%Y-%m-%d %H:%M:%S"),
         fit_key=fit_key(localizer),

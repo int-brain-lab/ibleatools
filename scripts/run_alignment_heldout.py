@@ -45,6 +45,8 @@ TRACE = "picks"
 SPLIT = "test"  # "test" (held out), or "validation"
 OUT_DIR = DEFAULT_RESULTS_DIR / "alignment" / f"heldout_{CHANNEL_MODEL_REVISION}"
 SAVE_FIGURES = False  # one figure per insertion and method (slower)
+# Ephys-only likelihood features: "lf_ap" (30) or "lf_ap_no_detection" (27, no spike detection).
+EPHYS_ONLY_FEATURE_SET = "lf_ap"
 
 
 def main():
@@ -58,7 +60,13 @@ def main():
         "--out-dir",
         type=Path,
         default=None,
-        help="output directory (default: OUT_DIR, with a _human suffix for --trace human)",
+        help="output directory (default: OUT_DIR, with a _human suffix for --trace human "
+        "and a _<feature set> suffix for a non-default ephys-only feature set)",
+    )
+    parser.add_argument(
+        "--ephys-only-features",
+        default=EPHYS_ONLY_FEATURE_SET,
+        choices=("lf_ap", "lf_ap_no_detection"),
     )
     parser.add_argument("--vintage", default=VINTAGE)
     parser.add_argument("--channel-model", default=CHANNEL_MODEL_REPO_ID)
@@ -89,9 +97,12 @@ def main():
     from ephysatlas.alignment.data import split_pids
     from ephysatlas.alignment.models import ChannelModel
 
-    out_dir = args.out_dir or (
-        OUT_DIR if args.trace == "picks" else OUT_DIR.with_name(OUT_DIR.name + "_human")
-    )
+    out_dir = args.out_dir
+    if out_dir is None:
+        name = OUT_DIR.name + ("" if args.trace == "picks" else "_human")
+        if args.ephys_only_features != "lf_ap":
+            name += f"_{args.ephys_only_features}"
+        out_dir = OUT_DIR.with_name(name)
     pids = split_pids(
         ChannelModel(args.channel_model, args.channel_revision), args.split
     )
@@ -111,6 +122,7 @@ def main():
             save_figures=args.figures,
             overwrite=args.overwrite,
             limit=args.limit,
+            ephys_only_kwargs=dict(feature_set=args.ephys_only_features),
         ),
         split_of={p: args.split for p in pids},
     )
