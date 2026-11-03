@@ -1,4 +1,4 @@
-"""Extract short raw AP and LF snippets from a SpikeGLX recording into one small HDF5 file.
+"""Pack raw AP and recorded or converter-derived LF snippets into one small HDF5 file.
 
 Partner labs run :func:`extract_snippets` on their raw recordings (hundreds of GB each) and
 send us the output, with the raw samples and their metadata kept together.
@@ -20,8 +20,10 @@ File layout (``n`` snippets, ``c`` channels, sync channel removed)::
           first_sample          int64 (n,)         first sample read from the original file
           sample2volts          float64 (c,)
           meta                  uint8 (n_bytes,)   the original .ap.meta file, exact bytes
-        lf/                     as ap/, plus attrs source="recorded" and latency_samples;
-                                required for probes that record a separate LF band
+        lf/                     always present; as ap/, plus attrs source and latency_samples
+                                source="recorded" for NP1/3A, "derived" for NP2
+                                derived LF has no original .meta; filter_sos and conversion
+                                attributes record the NP2Converter processing instead
 
 Channel rows follow the order of ``spikeglx.Reader`` (``sr[...]`` and ``sr.geometry``).
 """
@@ -38,8 +40,10 @@ import h5py
 import numpy as np
 import scipy.fft
 import spikeglx
+from neuropixel import NP2Converter
 
 from ephysatlas import __version__ as ibleatools_version
+from ephysatlas._snippet_bands import _write_band, _write_np2_lf
 from ephysatlas.feature_calculators import (
     SnippetWindow,
     check_snippet_overlap,
@@ -51,7 +55,6 @@ LOGGER = logging.getLogger(__name__)
 
 # Seed of the stratified draw in get_snippet_start_times (its default).
 SNIPPET_SEED = 0
-COMPRESSION = {"compression": "gzip", "compression_opts": 4, "shuffle": True}
 
 
 def _check_output_accepts(output_file: Path, name: str) -> None:
@@ -80,64 +83,27 @@ def _check_output_accepts(output_file: Path, name: str) -> None:
 
 
 def _plan_reads(
-    readers: Mapping[str, spikeglx.Reader], t_starts: np.ndarray, duration: float
+    bands: Mapping[str, tuple[float, int]], t_starts: np.ndarray, duration: float
 ) -> dict[str, tuple[np.ndarray, int]]:
     """Calculate band offsets and FFT lengths, rejecting windows outside the data."""
     reads = {}
-    for band, sr in readers.items():
-        ns = scipy.fft.next_fast_len(int(sr.fs * duration), real=True)
+    for band, (fs, available_samples) in bands.items():
+        ns = scipy.fft.next_fast_len(int(fs * duration), real=True)
         latency = LF_LATENCY_SAMPLES if band == "lf" else 0
         first_sample = np.array(
-            [int(sr.fs * t) + latency for t in t_starts], dtype=np.int64
+            [int(fs * t) + latency for t in t_starts], dtype=np.int64
         )
-        outside = (first_sample < 0) | (first_sample + ns > sr.ns)
+        outside = (first_sample < 0) | (first_sample + ns > available_samples)
         if outside.any():
             i = np.flatnonzero(outside)[0]
             raise ValueError(
                 f"The snippet at t = {t_starts[i]:g} s needs {band.upper()} "
                 f"samples {first_sample[i]} to {first_sample[i] + ns}, but the data has "
-                f"{sr.ns} samples ({sr.ns / sr.fs:.3f} s)."
+                f"{available_samples} samples ({available_samples / fs:.3f} s)."
             )
         reads[band] = (first_sample, ns)
 
     return reads
-
-
-def _write_band(
-    rec: h5py.Group,
-    band: str,
-    sr: spikeglx.Reader,
-    order: np.ndarray,
-    first_sample: np.ndarray,
-    ns: int,
-) -> int:
-    """Write one raw band in AP geometry order and return its uncompressed byte count."""
-    fs = float(sr.fs)
-
-    group = rec.create_group(band)
-    group.attrs["fs"] = fs
-    if band == "lf":
-        group.attrs["source"] = "recorded"
-        group.attrs["latency_samples"] = LF_LATENCY_SAMPLES
-    data = group.create_dataset(
-        "data",
-        shape=(len(first_sample), order.size, ns),
-        dtype=np.int16,
-        chunks=(1, order.size, min(ns, int(fs))),
-        **COMPRESSION,
-    )
-    for i, n0 in enumerate(first_sample):
-        data[i] = sr._raw[n0 : n0 + ns][:, order].T
-    raw_bytes = data.size * data.dtype.itemsize
-    group.create_dataset("first_sample", data=first_sample)
-    group.create_dataset("sample2volts", data=sr.sample2volts[order].astype(np.float64))
-    group.create_dataset(
-        "meta",
-        # Exact file bytes: a decode would fail on a meta in another encoding.
-        data=np.frombuffer(sr.file_meta_data.read_bytes(), dtype=np.uint8),
-    )
-
-    return raw_bytes
 
 
 def extract_snippets(
@@ -149,11 +115,13 @@ def extract_snippets(
     duration: float = 5.0,
     margin: float = 300.0,
 ) -> Path:
-    """Write raw AP and LF snippets of one SpikeGLX probe recording to an HDF5 file.
+    """Write raw AP and recorded or derived LF snippets of one SpikeGLX probe recording.
 
-    The samples read are the ones ``SpikeGlxLikeFeatureCalculator.load_raw_snippet`` reads for
-    the same window, stored as int16 with the gains to convert them to volts. The LF band is
-    read ``LF_LATENCY_SAMPLES`` late, and ``first_sample`` records where it was read.
+    AP and NP1/3A LF samples are copied unchanged. NP2 LF matches the int16 output of
+    ``neuropixel.NP2Converter`` on the original recording, including chunk boundaries,
+    tapering and quantization; only the chunks needed for these snippets are processed.
+    All LF windows start ``LF_LATENCY_SAMPLES`` late, matching the direct SpikeGLX feature
+    calculator. ``first_sample`` records the exact source-band sample indices.
 
     Args:
         ap_file: The SpikeGLX ``.ap.bin`` or ``.ap.cbin`` file. Its ``.meta`` file must be next
@@ -223,39 +191,43 @@ def extract_snippets(
     neuropixel_version = int(version)
     probe_has_lf_band = version == 1
 
-    lf_base = ap_file.with_name(ap_file.name.replace(".ap.", ".lf."))
-    other_suffix = {".bin": ".cbin", ".cbin": ".bin"}[ap_file.suffix]
-    lf_candidates = (lf_base, lf_base.with_suffix(other_suffix))
-    lf_file = next((p for p in lf_candidates if p.exists()), None)
-    if not probe_has_lf_band:
-        # NP2 never records LF, so an .lf file next to it was derived by someone else.
-        if lf_file is not None:
-            LOGGER.info("%s was ignored: this probe records no LF band", lf_file)
-        lf_file = None
-    elif lf_file is None:
-        raise FileNotFoundError(
-            f"No LF file found next to {ap_file}; NP1/3A extraction requires a matching "
-            ".lf.bin or .lf.cbin file with its .meta file."
-        )
-
-    # Validate required bands before opening readers, so missing LF leaves no reader open.
-    readers = {"ap": spikeglx.Reader(ap_file)}
-    if lf_file is not None:
-        readers["lf"] = spikeglx.Reader(lf_file)
-    sr_ap = readers["ap"]
-    # AP and LF files share the channel order on disk, but an LF meta can lack the
-    # geometry keys, so the AP order is used for both bands. It also drops the sync
-    # channel.
-    order = sr_ap.raw_channel_order[: sr_ap.nc - sr_ap.nsync]
+    lf_file = None
+    if probe_has_lf_band:
+        lf_base = ap_file.with_name(ap_file.name.replace(".ap.", ".lf."))
+        other_suffix = {".bin": ".cbin", ".cbin": ".bin"}[ap_file.suffix]
+        lf_candidates = (lf_base, lf_base.with_suffix(other_suffix))
+        lf_file = next((p for p in lf_candidates if p.exists()), None)
+        if lf_file is None:
+            raise FileNotFoundError(
+                f"No LF file found next to {ap_file}; NP1/3A extraction requires a matching "
+                ".lf.bin or .lf.cbin file with its .meta file."
+            )
 
     # The recording is always written to its own temporary file first, then renamed or
     # copied into the output, so a failure never leaves a half-written output.
     partial = output_file.with_name(f"{output_file.name}.{name}.partial")
     raw_bytes = 0
+    readers = {}
+    converter = None
     try:
+        readers["ap"] = spikeglx.Reader(ap_file)
+        if probe_has_lf_band:
+            readers["lf"] = spikeglx.Reader(lf_file)
+        else:
+            # Always derive NP2 LF from the original AP, regardless of adjacent LF files.
+            converter = NP2Converter(ap_file, compress=False)
+        sr_ap = readers["ap"]
+        order = sr_ap.raw_channel_order[: sr_ap.nc - sr_ap.nsync]
+        bands = {band: (sr.fs, sr.ns) for band, sr in readers.items()}
+        if converter is not None:
+            # The full converter keeps every ratio-th sample, including a partial last bin.
+            bands["lf"] = (
+                converter.fs_lf,
+                (converter.sr.ns + converter.ratio - 1) // converter.ratio,
+            )
         # The length of the data, not fileTimeSecs: the meta can claim more than the file
         # holds, and spikeglx.Reader corrects ns for that.
-        length = min(sr.ns / sr.fs for sr in readers.values())
+        length = min(ns / fs for fs, ns in bands.values())
         if automatic_times:
             try:
                 t_starts = get_snippet_start_times(
@@ -274,7 +246,7 @@ def extract_snippets(
 
         # Same offsets and sample counts as the SpikeGLX feature calculator. Every read
         # is checked against the data before any file is created.
-        reads = _plan_reads(readers, t_starts, duration)
+        reads = _plan_reads(bands, t_starts, duration)
 
         LOGGER.info(
             "Extracting snippets from %s (imDatPrb_pn %s, imDatPrb_type %s, probe version %s, "
@@ -321,6 +293,8 @@ def extract_snippets(
             for band, sr in readers.items():
                 first_sample, ns = reads[band]
                 raw_bytes += _write_band(rec, band, sr, order, first_sample, ns)
+            if converter is not None:
+                raw_bytes += _write_np2_lf(rec, converter, order, *reads["lf"])
 
         size = partial.stat().st_size
         LOGGER.info(
@@ -341,6 +315,8 @@ def extract_snippets(
         partial.unlink(missing_ok=True)
         for sr in readers.values():
             sr.close()
+        if converter is not None:
+            converter.sr.close()
 
     with h5py.File(output_file) as f:
         n_recordings = len(f["recordings"])
@@ -365,7 +341,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     """
     parser = argparse.ArgumentParser(
         prog="ibleatools-snippets",
-        description="Extract raw AP and LF snippets of one SpikeGLX probe recording into an HDF5 file.",
+        description="Pack AP and LF snippets of one SpikeGLX probe recording into HDF5; "
+        "NP2 LF is derived using ibl-neuropixel's NP2Converter.",
     )
     parser.add_argument(
         "ap_file", type=Path, help="the .ap.bin or .ap.cbin file of the probe"

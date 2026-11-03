@@ -2,6 +2,7 @@
 
 Edit the inputs and run by # %% cells. Rerunning skips recordings already present in
 an intact output file. See the how-to for recovery after an interruption during append.
+Each recording stores AP and LF; NP2 LF is derived with NP2Converter while AP stays raw.
 """
 
 # %% Imports and configuration
