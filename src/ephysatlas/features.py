@@ -801,6 +801,14 @@ def _remap_waveform_shape_arrays(get):
     dict
         Maps each `ModelSpikeShapeFeatures` column name to its array.
     """
+    # The reparametrisation itself lives next to the feature extraction in ibl-neuropixel
+    shape = ibldsp.waveforms.waveform_shape_features(
+        peak_time=get("peak_time_secs"),
+        trough_time=get("trough_time_secs"),
+        tip_time=get("tip_time_secs"),
+        peak_val=get("peak_val"),
+        trough_val=get("trough_val"),
+    )
     # Keyed in ModelSpikeShapeFeatures.to_schema() column order (inherited
     # ModelSpikeSharedFeatures fields first, then this schema's own).
     return {
@@ -816,10 +824,10 @@ def _remap_waveform_shape_arrays(get):
         "spatial_spread_um_std": get("spatial_spread_um_std"),
         "spike_count": get("spike_count"),
         "tip_val": get("tip_val"),
-        "spike_width_secs": get("trough_time_secs") - get("peak_time_secs"),
-        "predepolarisation_width_secs": get("peak_time_secs") - get("tip_time_secs"),
-        "spike_amplitude": get("trough_val") - get("peak_val"),
-        "peak_to_trough_ratio_log": np.log(np.abs(get("peak_val") / get("trough_val"))),
+        "spike_width_secs": shape["spike_width"],
+        "predepolarisation_width_secs": shape["predepolarisation_width"],
+        "spike_amplitude": shape["spike_amplitude"],
+        "peak_to_trough_ratio_log": shape["peak_to_trough_ratio_log"],
     }
 
 
