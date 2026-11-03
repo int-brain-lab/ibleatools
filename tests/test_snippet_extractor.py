@@ -16,6 +16,7 @@ import mtscomp
 import numpy as np
 import scipy.fft
 import spikeglx
+from neuropixel import NP2Converter
 
 from ephysatlas.snippet_extractor import extract_snippets, main
 from tests._snippet_fixtures import (
@@ -379,35 +380,133 @@ class TestProbeTypes(unittest.TestCase):
                 ):
                     expected, actual = reference[REC], packed[REC]
                     self.assertEqual(actual.attrs["neuropixel_version"], major_version)
-                    self.assertEqual("lf" in actual, has_lf)
+                    self.assertIn("lf", actual)
                     np.testing.assert_array_equal(actual["t_start"][:], times)
                     for key in expected["geometry"]:
                         np.testing.assert_array_equal(
                             actual[f"geometry/{key}"][:], expected[f"geometry/{key}"][:]
                         )
-                    for band in ("ap", "lf") if has_lf else ("ap",):
+                    for band in ("ap", "lf"):
                         self.assertEqual(
                             dict(actual[band].attrs), dict(expected[band].attrs)
                         )
-                        for key in ("data", "sample2volts", "first_sample", "meta"):
+                        self.assertEqual(set(actual[band]), set(expected[band]))
+                        for key in expected[band]:
                             np.testing.assert_array_equal(
                                 actual[f"{band}/{key}"][:], expected[f"{band}/{key}"][:]
                             )
 
-    def test_np24_stores_wideband_ap_only(self):
-        ap = write_spikeglx_recording(
-            self.tmp, "np24_shank", 1.0
-        )  # an .lf file sits next to it
-        with self.assertLogs("ephysatlas.snippet_extractor", level="INFO") as logs:
-            out = extract_snippets(
-                ap, self.tmp / "np2.h5", t_starts=[0.1], duration=0.1
+    def test_np24_stores_derived_lf_without_changing_input(self):
+        """NP2 always gets converter LF; an unrelated adjacent LF is left untouched."""
+        ap = write_spikeglx_recording(self.tmp, "np24_shank", 1.0)
+        lf = ap.with_name(ap.name.replace(".ap.", ".lf."))
+        originals = {path: path.read_bytes() for path in (ap, lf)}
+        out = extract_snippets(ap, self.tmp / "np2.h5", t_starts=[0.1], duration=0.1)
+        for path, content in originals.items():
+            self.assertEqual(path.read_bytes(), content)
+        with h5py.File(out) as file:
+            rec = file[REC]
+            self.assertFalse(rec.attrs["probe_has_lf_band"])
+            self.assertEqual(rec.attrs["neuropixel_version"], 2)
+            self.assertEqual(rec.attrs["source_lf_file"], "")
+            self.assertEqual(rec["lf/data"].shape, (1, 96, 250))
+            self.assertEqual(rec["lf"].attrs["source"], "derived")
+            self.assertEqual(
+                rec["lf"].attrs["method"], "neuropixel.NP2Converter.extract_lfp"
             )
-        self.assertTrue(any("ignored" in line for line in logs.output))
-        with h5py.File(out) as f:
-            self.assertNotIn("lf", f)
-            self.assertFalse(f[REC].attrs["probe_has_lf_band"])
-            self.assertEqual(f[REC].attrs["neuropixel_version"], 2)
-            self.assertEqual(f[REC].attrs["source_lf_file"], "")
+            self.assertEqual(rec["lf"].attrs["latency_samples"], 3)
+            np.testing.assert_array_equal(rec["lf/first_sample"][:], [253])
+            self.assertNotIn(
+                "meta", rec["lf"]
+            )  # No original LF meta exists for this stream.
+
+    def test_np2_lf_exactly_matches_full_converter_output(self):
+        """Match all samples across chunk seams and recording ends, for one or four shanks."""
+        for n_shanks in (1, 4):
+            with self.subTest(shanks=n_shanks):
+                # The template contains the original four-shank map; restore its full
+                # channel count to represent an unsplit probe.
+                edits = (
+                    {
+                        "NP2.4_shank": None,
+                        "nSavedChans": "385",
+                        "snsApLfSy": "384,0,1",
+                        "snsSaveChanSubset": "0:384",
+                    }
+                    if n_shanks == 4
+                    else None
+                )
+                folder = self.tmp / f"np2_{n_shanks}"
+                # Exercise a partial final LF bin: the AP length is not divisible by 12.
+                ap = write_spikeglx_recording(
+                    folder, "np24_shank", 4.1001, edits=edits, with_lf=False
+                )
+                # The middle interval crosses a converter seam; the last reaches the LF end.
+                times = [0.0, 1.9501, 3.9992]
+                out = extract_snippets(
+                    ap, self.tmp / f"np2_{n_shanks}.h5", t_starts=times, duration=0.1
+                )
+                converter = NP2Converter(ap, post_check=False, compress=False)
+                self.addCleanup(converter.sr.close)
+                if n_shanks == 1:
+                    # process() refuses already-split NP2.4 input; its LF-only path still
+                    # provides the reference conversion for these existing files.
+                    status = converter._process_NP21(assert_shanks=False)
+                else:
+                    status = converter.process()
+                self.assertEqual(status, 1)
+                # Reassemble the converter's actual on-disk output into original channel order.
+                reference = np.empty(
+                    (
+                        (converter.sr.ns + converter.ratio - 1) // converter.ratio,
+                        converter.napch,
+                    ),
+                    dtype=np.int16,
+                )
+                for info in converter.shank_info.values():
+                    channels = info["chns"]
+                    recorded = channels < converter.napch
+                    values = np.fromfile(info["lf_file"], dtype=np.int16).reshape(
+                        -1, len(channels)
+                    )
+                    reference[:, channels[recorded]] = values[:, recorded]
+                with spikeglx.Reader(ap) as reader, h5py.File(out) as file:
+                    rec = file[REC]
+                    order = reader.raw_channel_order[: converter.napch]
+                    self.assertEqual(len(np.unique(rec["geometry/shank"][:])), n_shanks)
+                    np.testing.assert_array_equal(
+                        rec["lf/filter_sos"][:], converter.sos_lp
+                    )
+                    np.testing.assert_array_equal(
+                        rec["lf/sample2volts"][:],
+                        converter.sr.channel_conversion_sample2v["lf"][order],
+                    )
+                    for i, first in enumerate(rec["lf/first_sample"][:]):
+                        expected = reference[first : first + 250, order].T
+                        np.testing.assert_array_equal(rec["lf/data"][i], expected)
+                    for i, first in enumerate(rec["ap/first_sample"][:]):
+                        np.testing.assert_array_equal(
+                            rec["ap/data"][i],
+                            reader._raw[first : first + 3000][:, order].T,
+                        )
+
+    def test_np2_only_converts_intersecting_chunks(self):
+        """A small extraction must not filter the whole recording."""
+        ap = write_spikeglx_recording(self.tmp, "np24_shank", 6.1, with_lf=False)
+        original = NP2Converter.extract_lfp
+        with mock.patch.object(
+            NP2Converter, "extract_lfp", autospec=True, side_effect=original
+        ) as convert:
+            extract_snippets(ap, self.tmp / "np2.h5", t_starts=[2.5, 2.8], duration=0.1)
+        self.assertEqual(convert.call_count, 1)
+
+    def test_np2_rejects_lf_window_past_end(self):
+        """Validate derived LF bounds, including the existing three-sample offset."""
+        ap = write_spikeglx_recording(self.tmp, "np24_shank", 1.0, with_lf=False)
+        output = self.tmp / "new" / "np2.h5"
+        with self.assertRaisesRegex(ValueError, "LF samples"):
+            extract_snippets(ap, output, t_starts=[0.9], duration=0.1)
+        self.assertFalse(output.parent.exists())
 
     def test_np24_channel_order_matches_reader(self):
         ap = write_spikeglx_recording(self.tmp, "np24_shank", 1.0)
