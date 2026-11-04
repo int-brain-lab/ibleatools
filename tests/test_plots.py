@@ -19,6 +19,7 @@ REGIONS.add_new_region(NEW_VOID)
 
 class _TestAtlas(BrainAtlas):
     """A small atlas, symmetric about its origin."""
+
     imidline = 6
 
 
