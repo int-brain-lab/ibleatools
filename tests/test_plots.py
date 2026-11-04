@@ -16,6 +16,13 @@ from ephysatlas.anatomy import NEW_VOID, ClassifierRegions  # noqa: E402
 REGIONS = ClassifierRegions()
 REGIONS.add_new_region(NEW_VOID)
 
+
+class _TestAtlas(BrainAtlas):
+    """A small atlas, symmetric about its origin."""
+
+    imidline = 6
+
+
 # Cosmos ids of the regions used below, and Allen ids that map onto them
 ISOCORTEX, HPF, TH, VOID_FLUID = 315, 1089, 549, 2000
 VISP, CA1, LGD = 385, 382, 170  # Allen: Isocortex, HPF and TH at the Cosmos level
@@ -378,7 +385,7 @@ class TestFigureEncoderCoronal(unittest.TestCase):
         label = np.zeros((10, 12, 8), dtype=np.int16)
         label[:, 2:10, 1:4] = np.flatnonzero(br.id == ISOCORTEX)[0]
         label[:, 2:10, 4:7] = np.flatnonzero(br.id == TH)[0]
-        self.ba = BrainAtlas(
+        self.ba = _TestAtlas(
             np.ones(label.shape, dtype=np.float32),
             label,
             dxyz=np.array([100e-6, -100e-6, -100e-6]),
