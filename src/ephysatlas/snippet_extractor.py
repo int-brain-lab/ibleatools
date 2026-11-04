@@ -24,8 +24,21 @@ File layout (``n`` snippets, ``c`` channels, sync channel removed)::
                                 source="recorded" for NP1/3A, "derived" for NP2
                                 derived LF has no original .meta; filter_sos and conversion
                                 attributes record the NP2Converter processing instead
-        histology/raw/<name>    uint8 (n_bytes,)   original histology bytes, attrs source_path
-        trajectory              group, attrs x, y, z, depth, theta, phi; only when given
+        histology/              only when histology was given
+          raw/<name>            uint8 (n_bytes,)   a histology file as stored on disk, attrs
+                                source_path; a folder's files are <folder name>/<relative
+                                path>; the given channel_locations and xyz_picks files are
+                                stored here too
+          channels/             the channel table converted from channel_locations; attrs
+                                source, atlas, bregma_ccf_um, iblatlas_version,
+                                ibleatools_version
+            x, y, z             float64 (c,)       metres, IBL coordinates relative to bregma
+            atlas_id            int64 (c,)         Allen CCF 2017 region id, 0 is void
+            acronym             string (c,)        from iblatlas
+          xyz_picks             float64 (k, 3)     the traced track in metres, IBL coordinates,
+                                                   attrs source; only when xyz_picks was given
+        trajectory              group, attrs x, y, z, depth, theta, phi as floats; only when
+                                given
 
 Channel rows follow the order of ``spikeglx.Reader`` (``sr[...]`` and ``sr.geometry``).
 """
@@ -47,7 +60,13 @@ from neuropixel import NP2Converter
 
 from ephysatlas import __version__ as ibleatools_version
 from ephysatlas._snippet_bands import _write_band, _write_np2_lf
-from ephysatlas._snippet_histology import _collect_histology_files
+from ephysatlas._snippet_histology import (
+    _collect_histology_files,
+    _read_channel_locations,
+    _read_xyz_picks,
+    _write_channel_table,
+    add_channel_locations as add_channel_locations,
+)
 from ephysatlas.feature_calculators import (
     SnippetWindow,
     check_snippet_overlap,
@@ -115,6 +134,8 @@ def extract_snippets(
     ap_file: str | Path,
     output_file: str | Path,
     name: str | None = None,
+    channel_locations: str | Path | None = None,
+    xyz_picks: str | Path | None = None,
     histology_raw: Sequence[str | Path] | None = None,
     t_starts: Sequence[float] | None = None,
     n_snippets: int = 5,
@@ -138,9 +159,16 @@ def extract_snippets(
         name: Name of the recording inside the file, stored under ``recordings/<name>``. If
             None, the AP file name without ``.ap.bin`` / ``.ap.cbin``. It may not be empty
             or ``.``, and may not contain ``/``.
+        channel_locations: IBL ``channel_locations.json`` of this probe. It is converted to
+            the channel table ``histology/channels`` (see ``_read_channel_locations``) and
+            also stored as raw bytes. It needs a single-shank recording and an entry for
+            every channel.
+        xyz_picks: IBL ``xyz_picks.json`` of this probe, the traced track in um. It is stored
+            in metres as ``histology/xyz_picks`` and also as raw bytes.
         histology_raw: Other histology files or folders to copy into the output as raw bytes,
             e.g. track CSVs of this probe. A folder is copied with everything under it.
-            The total is limited to 100 MB, which keeps image volumes out.
+            Together with the two json files, the total is limited to
+            ``MAX_HISTOLOGY_BYTES``, which keeps image volumes out.
         t_starts: Snippet start times in seconds. If None, ``n_snippets`` start times are
             chosen by ``get_snippet_start_times`` over the length of the data in the files.
         n_snippets: Number of snippets when ``t_starts`` is None.
@@ -160,7 +188,11 @@ def extract_snippets(
             the probe type is not supported, the ``.meta`` file has no channel map, the
             recording is too short for automatic times, explicit snippets overlap or reach
             outside the data, two histology files get the same name, the histology is over
-            100 MB, or trajectory keys or values are invalid.
+            ``MAX_HISTOLOGY_BYTES``, ``channel_locations`` is given for a multi-shank
+            recording, doesn't fit the recording or is not shaped as expected,
+            ``xyz_picks`` holds fewer than 2 points of 3 values or is not shaped as
+            expected, ``trajectory`` lacks a key or has a value that is not a number, or
+            the channel order of the ``.meta`` file and of ``spikeglx.Reader`` differ.
         FileNotFoundError: The AP file, a required NP1/3A LF file, or a histology path
             does not exist.
     """
@@ -185,8 +217,12 @@ def extract_snippets(
     # An existing output is checked before anything is read, and again before it is changed.
     _check_output_accepts(output_file, name)
 
-    # Validate small optional inputs before opening the recording or creating output.
-    histology_files = _collect_histology_files(histology_raw or ())
+    # Histology and trajectory are checked before the recording is opened and before any
+    # file or folder is created. The given json files are stored as raw bytes as well, so
+    # the converted histology can be rebuilt from them.
+    histology_paths = list(histology_raw or ())
+    histology_paths.extend(p for p in (channel_locations, xyz_picks) if p is not None)
+    histology_files = _collect_histology_files(histology_paths)
     if trajectory is not None:
         missing = [key for key in TRAJECTORY_KEYS if key not in trajectory]
         if missing:
@@ -228,6 +264,31 @@ def extract_snippets(
     neuropixel_version = int(version)
     probe_has_lf_band = version == 1
 
+    # The histology is converted on the geometry from the meta, the same geometry and row
+    # order as spikeglx.Reader's, so a file that doesn't fit the recording stops the run
+    # before the recording is opened.
+    channel_table = None
+    if channel_locations is not None:
+        channel_locations = Path(channel_locations)
+        meta_geometry = spikeglx.geometry_from_meta(md)
+        # IBL aligns each shank on its own, so a json describes one shank. A multi-shank
+        # recording is refused before the json is read, with the clearer message.
+        if np.unique(meta_geometry["shank"]).size > 1:
+            raise ValueError(
+                "channel_locations needs a single-shank recording; pass the file with "
+                "--histology-raw instead"
+            )
+        channel_table = _read_channel_locations(channel_locations, meta_geometry)
+        LOGGER.info(
+            "Converted %s to the channel table of %d channels",
+            channel_locations.name,
+            meta_geometry["ind"].size,
+        )
+    picks = None
+    if xyz_picks is not None:
+        xyz_picks = Path(xyz_picks)
+        picks = _read_xyz_picks(xyz_picks)
+
     lf_file = None
     if probe_has_lf_band:
         lf_base = ap_file.with_name(ap_file.name.replace(".ap.", ".lf."))
@@ -254,6 +315,15 @@ def extract_snippets(
             # Always derive NP2 LF from the original AP, regardless of adjacent LF files.
             converter = NP2Converter(ap_file, compress=False)
         sr_ap = readers["ap"]
+        if channel_table is not None and not np.array_equal(
+            meta_geometry["ind"], sr_ap.geometry["ind"]
+        ):
+            raise ValueError(
+                "The channel order from the meta file and from spikeglx.Reader differ "
+                f"(ibl-neuropixel {ibl_neuropixel_version}), so the channel table can't be "
+                "matched to the data rows. Please report this to the ibleatools maintainers."
+            )
+
         order = sr_ap.raw_channel_order[: sr_ap.nc - sr_ap.nsync]
         bands = {band: (sr.fs, sr.ns) for band, sr in readers.items()}
         if converter is not None:
@@ -341,6 +411,11 @@ def extract_snippets(
                         data=np.frombuffer(path.read_bytes(), dtype=np.uint8),
                     )
                     dataset.attrs["source_path"] = str(path)
+                if channel_table is not None:
+                    _write_channel_table(group, channel_table, channel_locations.name)
+                if picks is not None:
+                    dataset = group.create_dataset("xyz_picks", data=picks / 1e6)
+                    dataset.attrs["source"] = xyz_picks.name
             if trajectory is not None:
                 rec.create_group("trajectory").attrs.update(trajectory)
         size = partial.stat().st_size
@@ -407,6 +482,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         ".ap.bin/.ap.cbin",
     )
     parser.add_argument(
+        "--channel-locations",
+        type=Path,
+        metavar="FILE",
+        help="IBL channel_locations.json of this probe, converted to the channel table; "
+        "see the how-to for the format",
+    )
+    parser.add_argument(
+        "--xyz-picks",
+        type=Path,
+        metavar="FILE",
+        help="IBL xyz_picks.json of this probe, the traced track",
+    )
+    parser.add_argument(
         "--histology-raw",
         type=Path,
         nargs="+",
@@ -465,6 +553,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.ap_file,
             args.output,
             name=args.name,
+            channel_locations=args.channel_locations,
+            xyz_picks=args.xyz_picks,
             histology_raw=args.histology_raw,
             t_starts=args.t_starts,
             n_snippets=args.n_snippets,

@@ -24,12 +24,17 @@ Run the command once per recording:
 ibleatools-snippets /data/subjectA/2026-01-15/probe00/run_g0_t0.imec0.ap.cbin \
     -o /data/to_send/collection.h5 \
     --name subjectA_2026-01-15_probe00 \
-    --histology-raw /data/subjectA/2026-01-15/alf/probe00/channel_locations.json \
+    --channel-locations /data/subjectA/2026-01-15/alf/probe00/channel_locations.json \
+    --xyz-picks /data/subjectA/2026-01-15/alf/probe00/xyz_picks.json \
     --trajectory 2243 -2000 -200 4000 15 180
 ```
 
 - `-o` is the collection to write. The first call creates it; later calls append independent recordings. A collection name such as `collection.h5` or `lab_batch_01.h5` need not describe one subject or date.
 - `--name` is the recording's identifier inside that collection. Use a stable, unique name such as `subjectA_2026-01-15_probe00`; include a session or run identifier when the same probe was recorded more than once that day. Without `--name`, the AP filename without `.ap.bin` / `.ap.cbin` is used. Those filenames often repeat across subjects and dates.
+- `--channel-locations` is optional. It is this recording's `channel_locations.json`
+  in the format described below. It supplies each channel's brain region and position.
+- `--xyz-picks` is optional. It is this recording's traced track in `xyz_picks.json`,
+  in the format described below.
 - `--histology-raw` is optional. List files or folders of this recording's histology, for
   example tracing CSVs or a `channel_locations.json`. They are copied as they are for later
   interpretation; this option does not populate a structured channel table. The total is
@@ -62,6 +67,56 @@ The file identifies LF as `recorded` (NP1/3A) or `derived` (NP2). Derived LF inc
 The converter's current filter is preserved for reproducibility. Its approximately 3 kHz versus intended 1 kHz cutoff needs separate investigation; this tool does not change it.
 
 Raw NP2 AP snippets remain available for alternative processing later. Processing that needs additional samples outside those snippets will still require the original recording. A multi-shank input remains one recording, with channel-to-shank assignments stored in its geometry.
+
+## Histology input format
+
+`--channel-locations` takes the `channel_locations.json` that the IBL alignment GUI writes. If
+you do not use that GUI, you can write the file yourself. It has one `channel_<i>` entry per
+channel and an `origin`:
+
+```json
+{
+  "channel_0": {
+    "x": -2243.1, "y": -2000.4, "z": -3250.7,
+    "axial": 0.0, "lateral": 43.0,
+    "brain_region_id": 997, "brain_region": "root",
+    "original_channel_idx": 0
+  },
+  "channel_1": { "...": "..." },
+  "origin": {"bregma": [5739, 5400, 332]}
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `x`, `y`, `z` | Position of the channel in um, relative to bregma: `x` mediolateral (right positive), `y` anterior-posterior (anterior positive), `z` dorsoventral (dorsal positive) |
+| `brain_region_id` | Allen CCF 2017 region id |
+| `brain_region` | Region acronym |
+| `axial`, `lateral` | Position on the probe in um |
+| `original_channel_idx` | Optional. The channel's index in the recorded file |
+| `origin.bregma` | Must be `[5739, 5400, 332]`, the IBL bregma position in Allen CCF um |
+
+- Channels are matched to the recording by `original_channel_idx` when it is present, and
+  otherwise by the number `i` in `channel_<i>`. This is the channel's index in the recorded
+  file, not its position in the json.
+- Every recorded channel must be present, once: the json needs exactly one entry per recorded
+  channel, and the command stops and lists channels that are missing or that the recording
+  doesn't have.
+- The `axial` and `lateral` values are checked against the recording's probe layout, up to an
+  offset or a mirror, so a json whose channels are in a different order is rejected.
+- The command compares `brain_region` with the acronym of `brain_region_id` and logs a warning
+  if they differ.
+- Probes with more than one shank in the file are not converted by the command; use
+  `--histology-raw` for them.
+
+The given `channel_locations.json` and `xyz_picks.json` files are also kept in the file as
+they are (under `histology/raw/`).
+
+`--xyz-picks` takes `xyz_picks.json`: `{"xyz_picks": [[x, y, z], ...]}`, the traced track in
+um, in the same coordinates as above, with at least two points.
+
+Histology in any other form (a brainreg CSV, a CCF table, a json in another layout) goes in
+with `--histology-raw`. Do not convert it; we do that.
 
 ## Recordings from multiple subjects and dates
 
@@ -119,6 +174,8 @@ In this case, preserve a copy before attempting recovery and verify the stored r
 - Raw AP samples and recorded NP1/3A LF or converter-derived NP2 LF, compressed without loss, with the gains to convert them to volts.
 - The probe geometry, each channel's shank, the original `.meta` text, and the start time of each snippet in your recording.
 - The original files of `--histology-raw` and the planned trajectory, when given.
+- The channel table (channel positions in metres, Allen region ids and acronyms) when
+  `--channel-locations` is supplied, and the traced track when `--xyz-picks` is supplied.
 
 The SpikeGLX sync channel is not included. A Neuropixels 1.0 probe adds about 0.23 GB to the file with the defaults (5 snippets of 5 s).
 
