@@ -13,13 +13,7 @@ from typing import Optional
 
 import numpy as np
 
-from .geometry import (
-    extend_trace_to_brain,
-    infer_metres,
-    order_top_to_bottom,
-    resample_curve,
-    valid_xyz_mask,
-)
+from .geometry import histology_track, infer_metres, valid_xyz_mask
 from .models import VINTAGE
 
 
@@ -195,16 +189,11 @@ class HistologyTraces:
         picks = picks[valid_xyz_mask(picks)]
         return picks if len(picks) >= 2 else None
 
-    def trace(
-        self, pid: str, brain_atlas, step_um: float = 10.0
-    ) -> Optional[np.ndarray]:
-        """The histology trace of an insertion: picks ordered dorsal to ventral, resampled every
-        ``step_um`` and extended to the brain boundary at both ends (None without picks)."""
+    def trace(self, pid: str, brain_atlas) -> Optional[np.ndarray]:
+        """The histology track of an insertion, top to bottom (None without picks); see
+        :func:`~ephysatlas.alignment.geometry.histology_track`."""
         picks = self.picks(pid)
-        if picks is None:
-            return None
-        trace = resample_curve(order_top_to_bottom(picks), step_um=step_um)
-        return extend_trace_to_brain(trace, brain_atlas)
+        return None if picks is None else histology_track(picks, brain_atlas)
 
 
 def split_pids(channel_model, split: str = "test") -> list[str]:
