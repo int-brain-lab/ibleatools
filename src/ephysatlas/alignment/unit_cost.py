@@ -70,6 +70,14 @@ def unit_cost_matrix(
         channel_model.context_raw(trace_xyz)
     )  # [T, S]
     component_lp = unit_model.bundle.mixture.subtype_log_prob(z)  # [n_units, S]
+    # log-likelihood of every unit at every trace sample, once (in chunks of units): [T, n_units]
+    unit_lp = np.concatenate(
+        [
+            logsumexp(log_w[:, None, :] + component_lp[None, i : i + 64], axis=2)
+            for i in range(0, len(z), 64)
+        ],
+        axis=1,
+    )
     latent_dim = max(int(z.shape[1]), 1)
     cost = np.full((len(channel_axial), len(trace_xyz)), np.nan)
     counts = []
@@ -77,8 +85,7 @@ def unit_cost_matrix(
         near = np.flatnonzero(np.abs(axial - centre) <= float(half_width_um))
         if len(near) == 0:
             continue
-        lp = logsumexp(log_w[:, None, :] + component_lp[near][None, :, :], axis=2)
-        row = -np.mean(lp, axis=1) / latent_dim
+        row = -np.mean(unit_lp[:, near], axis=1) / latent_dim
         cost[r] = row - np.nanmin(row)
         counts.append(len(near))
     rows = np.isfinite(cost).any(axis=1)

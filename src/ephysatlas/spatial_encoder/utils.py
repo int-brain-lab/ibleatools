@@ -1020,24 +1020,13 @@ class NeighborCollate:
         neigh_lists = self.nn.query_radius(p_q.numpy(), r_m=self.r_m, k_cap=8 * self.M)
 
         for b in range(B):
+            cand = np.asarray(neigh_lists[b], dtype=np.int64)
             # Exclude same-probe neighbors for recorded voxels
-            exclude_pids = set()
             if has_ephys[b] and not self.allow_same_probe:
-                exclude_pids = {pids[b].item()}
-
-            # build neighbor set
-            cand = [
-                ci
-                for ci in neigh_lists[b]
-                if int(self.bank_pid[ci]) not in exclude_pids
-            ]
-            L = len(cand)
-
-            if L > self.M:
+                cand = cand[np.asarray(self.bank_pid)[cand] != pids[b].item()]
+            if len(cand) > self.M:
                 # random subset, not just first-M
-                sel = np.random.choice(cand, size=self.M, replace=False)
-                cand = sel.tolist()
-
+                cand = np.random.choice(cand, size=self.M, replace=False)
             L = len(cand)
 
             if L > 0:
