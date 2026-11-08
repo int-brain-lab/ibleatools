@@ -160,9 +160,7 @@ import json
 import numpy as np
 from iblatlas.atlas import AllenAtlas
 from ephysatlas.alignment import ChannelModel, align_histology, plot_alignment_result
-from ephysatlas.alignment.geometry import (
-    extend_trace_to_brain, order_top_to_bottom, region_ids, resample_curve,
-)
+from ephysatlas.alignment.geometry import histology_track, region_ids
 
 ba = AllenAtlas(res_um=25)    # downloads the Allen volumes on first use
 model = ChannelModel()        # the spatial encoder, at the alignment's default vintage
@@ -173,10 +171,11 @@ d = df.loc[pid].sort_values("axial_um", ascending=False)
 recorded = d[model.features].to_numpy(np.float32)
 recorded[~np.isfinite(recorded)] = 0.0
 
-# The traced track: xyz_picks.json is in µm, relative to bregma; the alignment wants metres,
-# sampled every 10 µm from top to bottom and extended to the brain surface
+# The traced track: xyz_picks.json is in µm, relative to bregma; the alignment wants metres.
+# histology_track is the GUI's track: extended to the top of the atlas and below the brain,
+# sampled every 10 µm from top to bottom
 picks = np.array(json.load(open("/data/probe00/xyz_picks.json"))["xyz_picks"]) / 1e6
-trace = extend_trace_to_brain(order_top_to_bottom(resample_curve(picks, step_um=10)), ba)
+trace = histology_track(picks, ba)
 
 result = align_histology(model, recorded, trace, pid=pid)
 fig = plot_alignment_result(result, ba)

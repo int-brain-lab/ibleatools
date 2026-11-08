@@ -114,6 +114,7 @@ quartodoc:
         - load_pretrained
         - regionclassifier.RegionClassifier
         - models.encoder_inpainting.SpatialEncoder
+        - hemispheres.mirror_xyz_to_hemisphere
         - models.unit_encoder.UnitEncoder
         - models.probe_transformer.ProbeTransformerClassifier
         - model_registry.resolve_model
@@ -224,6 +225,7 @@ quartodoc:
         - alignment.localize_ephys_only
         - alignment.AlignmentResult
         - alignment.alignment_metrics
+        - alignment.geometry.histology_track
         - alignment.plot_alignment_result
         - alignment.ChannelModel
         - alignment.UnitModel

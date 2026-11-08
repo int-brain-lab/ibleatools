@@ -25,7 +25,6 @@ from ephysatlas.hemispheres import mirror_xyz_to_left
 from one.api import ONE
 
 from tqdm import tqdm
-import scipy.interpolate
 
 # Downloaded feature tables and derived context volumes default to a data directory outside any
 # source checkout (the unit-level model reads the same environment variable).
@@ -124,17 +123,10 @@ class ContextAtlasManager:
         regenerate_context: bool = False,
         output_dir: Path = DEFAULT_DATA_DIR / "context_volumes",
     ):
-        brain_atlas = AllenAtlas()
-        self.bc = brain_atlas.bc
+        # The 200 µm grid the AGEA and MERFISH volumes are defined on (iblatlas's AGEA atlas): voxels
+        # are found and interpolated in its own coordinates.
+        self.bc = agea.load_atlas().bc
         self.cfg = cfg
-
-        # Save scales
-        self.xscale = np.asarray(self.bc.xscale)
-        self.yscale = np.asarray(self.bc.yscale)
-        self.zscale = np.asarray(self.bc.zscale)
-
-        # -------- Load brain regions --------
-        Allen_regions = brain_atlas._get_mapping(mapping="Allen")[brain_atlas.label]
 
         if regenerate_context:
             # -------- AGEA → PCA --------
@@ -188,26 +180,22 @@ class ContextAtlasManager:
 
         self.cell_pca = cell_type_vol  # [P_cell, Xh, Zh, Yh]
         self.gene_pca = gene_exp_vol  # [P_gene, Xh, Zh, Yh]
-        self.allen_idx = Allen_regions  # [Yh, Xh, Zh]
         assert self.cell_pca.ndim == 4 and self.gene_pca.ndim == 4
-        assert self.allen_idx.ndim == 3
+
+    def voxel_indices(self, xyz_m: np.ndarray, mode="clip") -> tuple:
+        """``(xi, yi, zi)``: the voxel of the 200 µm grid nearest to each position mirrored onto
+        the left hemisphere."""
+        _, n_x, n_z, n_y = self.cell_pca.shape
+        i = self.bc.xyz2i(mirror_xyz_to_left(xyz_m), mode=mode)
+        return tuple(np.clip(i[:, a], 0, n - 1) for a, n in ((0, n_x), (1, n_y), (2, n_z)))
 
     def sample_context_numpy_m(self, xyz_m: np.ndarray, mode="raise"):
-        """The context of the nearest 200 µm voxel to each position mirrored onto the left
-        hemisphere, as the model was trained."""
-        indices = self.bc.xyz2i(mirror_xyz_to_left(xyz_m), mode=mode)  # fractional (x,y,z) high-res
-
-        Yh, Xh, Zh = self.allen_idx.shape  # note: allen_idx is [Y, X, Z]
-        xi = np.clip(np.round(indices[:, 0] / 8).astype(int), 0, Xh - 1)
-        yi = np.clip(np.round(indices[:, 1] / 8).astype(int), 0, Yh - 1)
-        zi = np.clip(np.round(indices[:, 2] / 8).astype(int), 0, Zh - 1)
-
-        cell_pc = self.cell_pca[:, xi, zi, yi].T.astype(np.float32)  # [N, P_cell]
-        gene_pc = self.gene_pca[:, xi, zi, yi].T.astype(np.float32)  # [N, P_gene]
+        """The context of the voxel nearest to each position mirrored onto the left hemisphere,
+        as the model was trained."""
+        xi, yi, zi = self.voxel_indices(xyz_m, mode=mode)
         return {
-            "cell_pc": cell_pc,
-            "gene_pc": gene_pc,
-            "allen_ix": self.allen_idx[yi, xi, zi].astype(np.int32),
+            "cell_pc": self.cell_pca[:, xi, zi, yi].T.astype(np.float32),  # [N, P_cell]
+            "gene_pc": self.gene_pca[:, xi, zi, yi].T.astype(np.float32),  # [N, P_gene]
         }
 
     def sample_context_trilinear_m(self, xyz_m: np.ndarray, mode="clip", mirror=True):
@@ -219,7 +207,7 @@ class ContextAtlasManager:
         hemisphere, as the model was trained.
         """
         xyz_m = mirror_xyz_to_left(xyz_m) if mirror else xyz_m
-        grid = self.bc.xyz2i(xyz_m.astype(np.float64), round=False, mode=mode) / 8.0
+        grid = self.bc.xyz2i(xyz_m.astype(np.float64), round=False, mode=mode)
         _, n_x, n_z, n_y = self.cell_pca.shape
         limits = np.array([n_x, n_y, n_z]) - 1
         low = np.clip(np.floor(grid).astype(int), 0, limits)
@@ -265,7 +253,7 @@ def LoadInsertionData(
     every insertion.
 
     Returns:
-      unique_pids, context [N,C,(cell_pc+gene_pc)], allen_ix [N,C],
+      unique_pids, context [N,C,(cell_pc+gene_pc)],
       ephys_concat [N,C,F+L], probe_positions [N,C,3], probe_planned_positions [N,C,3], filter_indices
     """
 
@@ -555,7 +543,7 @@ def build_channels_plus_emptyvoxels_with_neighbors(
     N = ijk.shape[0]
     # Every voxel of the grid at its position folded onto the left hemisphere, with the context
     # of that position, as for a recorded channel.
-    xyz_m = mirror_xyz_to_left(ctx_manager.bc.i2xyz(ijk * 8)).astype(np.float32)
+    xyz_m = mirror_xyz_to_left(ctx_manager.bc.i2xyz(ijk)).astype(np.float32)
 
     # Vectorized context sampling in manageable chunks.
     ctx_parts = []
@@ -929,23 +917,12 @@ class GridDS(Dataset):
         return (self.ctx[i], self.xyz[i], self._empty, self._empty_pid, self.has[i])
 
 
-def downsample_keys_from_xyz(ctx_manager, xyz_m, ds_rate=8):
-    """``(xi, zi, yi)``: the nearest voxel of the context grid to each position mirrored onto
-    the left hemisphere."""
-    Xh, Zh, Yh = ctx_manager.cell_pca.shape[1:]
-    ijk = ctx_manager.bc.xyz2i(mirror_xyz_to_left(xyz_m), mode="clip")
-    xi = np.clip(np.round(ijk[:, 0] / ds_rate).astype(int), 0, Xh - 1)
-    yi = np.clip(np.round(ijk[:, 1] / ds_rate).astype(int), 0, Yh - 1)
-    zi = np.clip(np.round(ijk[:, 2] / ds_rate).astype(int), 0, Zh - 1)
-    return xi, zi, yi
-
-
 def compute_voxel_with_ephys(ctx_manager, probe_positions, grid_xyz_m):
     """Whether each grid position falls, once mirrored, in the voxel of a recorded channel."""
     ch_xyz = np.asarray(probe_positions).reshape(-1, 3)
     ch_xyz = ch_xyz[np.isfinite(ch_xyz).all(axis=1) & ~np.all(ch_xyz == 0.0, axis=1)]
-    recorded = set(zip(*downsample_keys_from_xyz(ctx_manager, ch_xyz)))
-    grid_keys = zip(*downsample_keys_from_xyz(ctx_manager, grid_xyz_m))
+    recorded = set(zip(*ctx_manager.voxel_indices(ch_xyz)))
+    grid_keys = zip(*ctx_manager.voxel_indices(grid_xyz_m))
     return np.fromiter((key in recorded for key in grid_keys), dtype=bool)
 
 
@@ -1038,15 +1015,11 @@ class NeighborCollate:
         p_n = torch.zeros(B, self.M, 3, dtype=torch.float32)
         mask = torch.zeros(B, self.M, dtype=torch.bool)
 
-        # voxel keys for exclusion / target lookup
-        xi, zi, yi = downsample_keys_from_xyz(self.ctx_manager, p_q.numpy())
 
         # neighbor candidates from train bank
         neigh_lists = self.nn.query_radius(p_q.numpy(), r_m=self.r_m, k_cap=8 * self.M)
 
         for b in range(B):
-            _ = (xi[b], zi[b], yi[b])
-
             # Exclude same-probe neighbors for recorded voxels
             exclude_pids = set()
             if has_ephys[b] and not self.allow_same_probe:
@@ -1492,20 +1465,6 @@ def _choose_nonoverlapping_blocks_covering_total_len(
     return blocks
 
 
-def _infer_xyz_unit_and_convert_to_meters(xyz: np.ndarray) -> np.ndarray:
-    """
-    Best-effort helper:
-      - if coordinates look like micrometers, convert to meters
-      - if they already look like meters, keep as-is
-    """
-    xyz = np.asarray(xyz, dtype=np.float64)
-    max_abs = np.nanmax(np.abs(xyz))
-    # very rough heuristic
-    if max_abs > 10.0:
-        return xyz * 1e-6
-    return xyz
-
-
 def _predict_ctx_and_ephys_for_xyz(
     *,
     xyz_m: np.ndarray,  # [N,3]
@@ -1578,299 +1537,49 @@ def _predict_ctx_and_ephys_for_xyz(
     return ctx.astype(np.float32), pred.astype(np.float32)
 
 
-def _build_histology_trace_extended_and_aligned_window(
-    one,
-    pid_name,
-    true_xyz: np.ndarray,  # [C,3] meters, actual probe positions
-    channel_step_um: float,
-    extra_channels_each_side: int = 128,
-    ba=None,
+def _histology_trace_around_channels(
+    picks_m: np.ndarray,
+    true_xyz: np.ndarray,  # [C,3] m, channel positions, top first
+    brain_atlas,
+    step_um: float,
     max_extension_um: float = 7000.0,
 ):
-    """
-    Build a full trace whose core is EXACTLY the provided true_xyz, and whose before/after
-    extensions are guided by the histology picks.
+    """The channels' positions, extended at both ends along the insertion's histology track.
+
+    The extensions sample the IBL histology track (the alignment's trace,
+    :func:`ephysatlas.alignment.geometry.histology_track`) every ``step_um`` outwards from the
+    first and last channel with a position, up to ``max_extension_um`` or the track's end.
 
     Returns
     -------
-    full_xyz_ext : [L_full, 3] float32
-        Extended trace in channel coordinates.
+    full_xyz : [L, 3] float32
+        The extended trace.
     true_xyz : [C, 3] float32
-        The provided true xyz, copied into the center of the full trace.
+        ``full_xyz[true_start:true_start + C]``, the channel positions.
     true_start : int
-        Start index such that full_xyz_ext[true_start:true_start+C] == true_xyz
     """
-    if ba is None:
-        ba = AllenAtlas()
-
-    recs = one.alyx.rest("insertions", "list", id=str(pid_name))
-    if recs is None or len(recs) == 0:
-        raise ValueError(f"No insertion found in Alyx for pid={pid_name}")
-
-    js = recs[0].get("json", {})
-    xyz_picks = js.get("xyz_picks", None)
-    if xyz_picks is None:
-        raise ValueError(f"No xyz_picks found in Alyx for pid={pid_name}")
-
-    xyz_picks = np.asarray(xyz_picks, dtype=np.float64)
-    if xyz_picks.ndim != 2 or xyz_picks.shape[1] != 3:
-        raise ValueError(
-            f"xyz_picks has invalid shape for pid={pid_name}: {xyz_picks.shape}"
-        )
-
-    xyz_picks = _infer_xyz_unit_and_convert_to_meters(xyz_picks)
-    xyz_picks = xyz_picks[_valid_xyz_mask_np(xyz_picks)]
-    if xyz_picks.shape[0] < 2:
-        raise ValueError(f"Need at least 2 valid xyz_picks for pid={pid_name}")
+    from ephysatlas.alignment.geometry import histology_track
 
     true_xyz = np.asarray(true_xyz, dtype=np.float64)
-    if true_xyz.ndim != 2 or true_xyz.shape[1] != 3:
-        raise ValueError(f"true_xyz must have shape [C,3], got {true_xyz.shape}")
+    valid = np.flatnonzero(_valid_xyz_mask_np(true_xyz))
+    if valid.size < 2:
+        raise ValueError("need at least 2 channels with positions")
+    track = histology_track(picks_m, brain_atlas).astype(np.float64)
+    s = np.r_[0.0, np.cumsum(np.linalg.norm(np.diff(track, axis=0), axis=1))] * 1e6
 
-    true_valid = _valid_xyz_mask_np(true_xyz)
-    if true_valid.sum() < 2:
-        raise ValueError(f"Need at least 2 valid true_xyz rows for pid={pid_name}")
+    def arc_um(xyz):  # arc length (µm) of the track sample nearest to xyz
+        return s[np.argmin(np.linalg.norm(track - xyz, axis=1))]
 
-    C = true_xyz.shape[0]
-
-    base_channel_step_um = (
-        float(channel_step_um)
-        if np.isfinite(channel_step_um) and channel_step_um > 0
-        else 20.0
-    )
-    row_step_um = base_channel_step_um
-    row_step_m = row_step_um * 1e-6
-
-    # ---------------------------------------------------------
-    # helpers
-    # ---------------------------------------------------------
-    def _ensure_2d(xyz_m):
-        xyz_m = np.asarray(xyz_m, dtype=np.float64)
-        if xyz_m.ndim == 1:
-            xyz_m = xyz_m[None, :]
-        return xyz_m
-
-    if ba is not None:
-        xlo, xhi = np.min(ba.bc.xlim), np.max(ba.bc.xlim)
-        ylo, yhi = np.min(ba.bc.ylim), np.max(ba.bc.ylim)
-        zlo, zhi = np.min(ba.bc.zlim), np.max(ba.bc.zlim)
-    else:
-        xlo = ylo = zlo = -np.inf
-        xhi = yhi = zhi = np.inf
-
-    def _inside_bbox(xyz_m: np.ndarray) -> np.ndarray:
-        xyz_m = _ensure_2d(xyz_m)
-        return (
-            (xyz_m[:, 0] >= xlo)
-            & (xyz_m[:, 0] <= xhi)
-            & (xyz_m[:, 1] >= ylo)
-            & (xyz_m[:, 1] <= yhi)
-            & (xyz_m[:, 2] >= zlo)
-            & (xyz_m[:, 2] <= zhi)
-        )
-
-    def _inside_regions(xyz_m: np.ndarray) -> np.ndarray:
-        xyz_m = _ensure_2d(xyz_m)
-        if ba is None:
-            return np.ones((xyz_m.shape[0],), dtype=bool)
-        try:
-            region_ids = region_ids_from_xyz(ba, xyz_m)
-            region_ids = np.asarray(region_ids).reshape(-1)
-            return region_ids > 0
-        except Exception:
-            return np.ones((xyz_m.shape[0],), dtype=bool)
-
-    def _is_in_brain(xyz_m: np.ndarray) -> np.ndarray:
-        xyz_m = _ensure_2d(xyz_m)
-        return _inside_bbox(xyz_m) & _inside_regions(xyz_m)
-
-    def _cumlen_um(xyz: np.ndarray) -> np.ndarray:
-        xyz = np.asarray(xyz, dtype=np.float64)
-        if xyz.shape[0] < 2:
-            return np.array([0.0], dtype=np.float64)
-        seg = np.linalg.norm(np.diff(xyz, axis=0), axis=1) * 1e6
-        return np.cumsum(np.r_[0.0, seg])
-
-    def _resample_curve_equal_arclength(
-        xyz_pts: np.ndarray, step_um: float
-    ) -> np.ndarray:
-        xyz_pts = np.asarray(xyz_pts, dtype=np.float64)
-        if xyz_pts.shape[0] < 2:
-            return xyz_pts.copy()
-
-        s_pts = _cumlen_um(xyz_pts)
-        s_pts = s_pts + np.arange(len(s_pts)) * 1e-9
-
-        interp_kind = "cubic" if xyz_pts.shape[0] >= 4 else "linear"
-
-        dense_step_um = min(2.0, max(0.5, step_um / 10.0))
-        s_dense = np.arange(
-            0.0, s_pts[-1] + dense_step_um, dense_step_um, dtype=np.float64
-        )
-        if s_dense.size < 2:
-            s_dense = np.array([0.0, s_pts[-1]], dtype=np.float64)
-
-        dense_xyz = np.zeros((len(s_dense), 3), dtype=np.float64)
-        for d in range(3):
-            f = scipy.interpolate.interp1d(
-                s_pts,
-                xyz_pts[:, d],
-                kind=interp_kind,
-                fill_value="extrapolate",
-                assume_sorted=True,
-            )
-            dense_xyz[:, d] = f(s_dense)
-
-        s_dense_true = _cumlen_um(dense_xyz)
-        s_dense_true = s_dense_true + np.arange(len(s_dense_true)) * 1e-12
-
-        s_target = np.arange(0.0, s_dense_true[-1] + step_um, step_um, dtype=np.float64)
-        if s_target.size < 2:
-            s_target = np.array([0.0, s_dense_true[-1]], dtype=np.float64)
-
-        out = np.zeros((len(s_target), 3), dtype=np.float64)
-        for d in range(3):
-            out[:, d] = np.interp(s_target, s_dense_true, dense_xyz[:, d])
-
-        return out
-
-    def _fit_endpoint_direction(
-        xyz_rows: np.ndarray, side: str, k: int = 12
-    ) -> np.ndarray:
-        """
-        Stable endpoint tangent from multiple nearby points.
-        Returns outward direction from the chosen endpoint.
-        """
-        xyz_rows = np.asarray(xyz_rows, dtype=np.float64)
-        N = xyz_rows.shape[0]
-        if N < 2:
-            raise ValueError(f"Need at least 2 points, got {N}")
-
-        k = int(max(3, min(k, N)))
-
-        if side == "start":
-            pts = xyz_rows[:k].copy()
-            t = np.arange(k, dtype=np.float64)
-            inward_ref = pts[min(1, k - 1)] - pts[0]
-        elif side == "end":
-            pts = xyz_rows[-k:].copy()
-            t = np.arange(k, dtype=np.float64)
-            inward_ref = pts[max(0, k - 2)] - pts[-1]
-        else:
-            raise ValueError(f"side must be 'start' or 'end', got {side}")
-
-        dir_vec = np.zeros(3, dtype=np.float64)
-        t0 = t - t.mean()
-        denom = np.dot(t0, t0) + 1e-12
-        for d in range(3):
-            y0 = pts[:, d] - pts[:, d].mean()
-            dir_vec[d] = np.dot(t0, y0) / denom
-
-        if side == "start":
-            dir_vec = -dir_vec
-
-        if np.dot(dir_vec, inward_ref) > 0:
-            dir_vec = -dir_vec
-
-        dir_vec = dir_vec / (np.linalg.norm(dir_vec) + 1e-12)
-        return dir_vec
-
-    def _append_linear_steps_inside(
-        start_xyz: np.ndarray, direction: np.ndarray, n_steps_max: int
-    ):
-        rows = []
-        cur = np.asarray(start_xyz, dtype=np.float64).copy()
-        direction = np.asarray(direction, dtype=np.float64)
-        direction = direction / (np.linalg.norm(direction) + 1e-12)
-
-        for _ in range(n_steps_max):
-            cand = cur + direction * row_step_m
-            if not bool(_is_in_brain(cand)[0]):
-                break
-            rows.append(cand.copy())
-            cur = cand
-
-        if len(rows) == 0:
-            return np.zeros((0, 3), dtype=np.float64)
-        return np.stack(rows, axis=0)
-
-    # ---------------------------------------------------------
-    # core comes directly from TRUE xyz
-    # ---------------------------------------------------------
-    core_xyz_ext = true_xyz.astype(np.float64).copy()
-
-    # histology is used only to estimate extension directions
-    hist_xyz_rows = _resample_curve_equal_arclength(xyz_picks, row_step_um)
-    if hist_xyz_rows.shape[0] < 2:
-        raise ValueError(
-            f"Could not build histology resampled curve for pid={pid_name}"
-        )
-
-    fit_k_hist = min(40, max(4, hist_xyz_rows.shape[0] // 10))
-    hist_start_dir = _fit_endpoint_direction(hist_xyz_rows, side="start", k=fit_k_hist)
-    hist_end_dir = _fit_endpoint_direction(hist_xyz_rows, side="end", k=fit_k_hist)
-
-    # orient histology directions to agree with true core directions
-    core_valid_idx = np.where(true_valid)[0]
-    first_i = int(core_valid_idx[0])
-    last_i = int(core_valid_idx[-1])
-
-    if len(core_valid_idx) >= 2:
-        core_inward_start = (
-            core_xyz_ext[core_valid_idx[min(1, len(core_valid_idx) - 1)]]
-            - core_xyz_ext[first_i]
-        )
-        core_outward_start = -core_inward_start
-
-        core_inward_end = (
-            core_xyz_ext[last_i]
-            - core_xyz_ext[core_valid_idx[max(0, len(core_valid_idx) - 2)]]
-        )
-        core_outward_end = core_inward_end
-    else:
-        core_outward_start = hist_start_dir.copy()
-        core_outward_end = hist_end_dir.copy()
-
-    if np.dot(hist_start_dir, core_outward_start) < 0:
-        hist_start_dir = -hist_start_dir
-    if np.dot(hist_end_dir, core_outward_end) < 0:
-        hist_end_dir = -hist_end_dir
-
-    # optionally blend histology and true-core directions so joins are smoother
-    def _unit(v):
-        v = np.asarray(v, dtype=np.float64)
-        return v / (np.linalg.norm(v) + 1e-12)
-
-    start_dir = _unit(0.5 * _unit(hist_start_dir) + 0.5 * _unit(core_outward_start))
-    end_dir = _unit(0.5 * _unit(hist_end_dir) + 0.5 * _unit(core_outward_end))
-
-    fallback_extra_rows_each_side = int(np.ceil(extra_channels_each_side / 2.0))
-    max_steps = int(np.ceil(max_extension_um / row_step_um))
-    n_extend = max_steps if ba is not None else fallback_extra_rows_each_side
-
-    before_rows = _append_linear_steps_inside(
-        core_xyz_ext[first_i], start_dir, n_extend
-    )
-    after_rows = _append_linear_steps_inside(core_xyz_ext[last_i], end_dir, n_extend)
-
-    if before_rows.shape[0] > 0:
-        before_rows = before_rows[::-1].copy()
-
-    full_xyz_ext = np.concatenate(
-        [before_rows, core_xyz_ext, after_rows], axis=0
-    ).astype(np.float32)
-
-    true_start = int(before_rows.shape[0])
-    true_xyz_out = full_xyz_ext[true_start : true_start + C].copy()
-
-    # exact overwrite for absolute safety
-    full_xyz_ext[true_start : true_start + C] = true_xyz.astype(np.float32)
-
-    return (
-        full_xyz_ext.astype(np.float32),
-        true_xyz_out.astype(np.float32),
-        int(true_start),
-    )
+    s_top, s_bottom = arc_um(true_xyz[valid[0]]), arc_um(true_xyz[valid[-1]])
+    n_before = int(min(s_top, max_extension_um) // step_um)
+    n_after = int(min(s[-1] - s_bottom, max_extension_um) // step_um)
+    s_ext = np.r_[
+        s_top - step_um * np.arange(n_before, 0, -1),
+        s_bottom + step_um * np.arange(1, n_after + 1),
+    ]
+    ext = np.column_stack([np.interp(s_ext, s, track[:, d]) for d in range(3)])
+    full = np.concatenate([ext[:n_before], true_xyz, ext[n_before:]]).astype(np.float32)
+    return full, full[n_before : n_before + len(true_xyz)].copy(), n_before
 
 
 # ============================================================
@@ -1896,7 +1605,7 @@ def _make_histology_probe_bank(
         "rec_std": [C,F_e],
         "valid": [C],
         "true_xyz": [C,3],          # aligned histology window
-        "hist_xyz_full": [L,3],     # extended dense trace
+        "hist_xyz_full": [L,3],     # channels extended along the histology track
         "hist_ctx_full": [L,F_ctx],
         "hist_pred_full": [L,F_e],
         "hist_cosmos_full": [L],    # Cosmos region id per dense-trace point
@@ -1906,7 +1615,10 @@ def _make_histology_probe_bank(
     e_mean = base_model.e_mean.detach().cpu().numpy().astype(np.float32)
     e_std = base_model.e_std.detach().cpu().numpy().astype(np.float32)
 
+    from ephysatlas.alignment.data import HistologyTraces
+
     brain_atlas = _shared_allen_atlas()
+    traces = HistologyTraces(one=one)
     bank = []
 
     for p in tqdm(probe_ids):
@@ -1919,14 +1631,11 @@ def _make_histology_probe_bank(
 
         pid_name = pid_names[p]
 
-        hist_xyz_full, true_xyz, true_start = (
-            _build_histology_trace_extended_and_aligned_window(
-                one=one,
-                pid_name=pid_name,
-                true_xyz=xyz,  # use the actual probe positions as the core
-                channel_step_um=cfg.channel_step_um,
-                extra_channels_each_side=cfg.extra_trace_channels_each_side,
-            )
+        picks = traces.picks(pid_name)
+        if picks is None:
+            raise ValueError(f"No histology picks for pid={pid_name}")
+        hist_xyz_full, true_xyz, true_start = _histology_trace_around_channels(
+            picks, xyz, brain_atlas, step_um=cfg.channel_step_um
         )
 
         hist_ctx_full, hist_pred_full = _predict_ctx_and_ephys_for_xyz(

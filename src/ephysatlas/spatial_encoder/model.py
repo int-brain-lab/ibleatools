@@ -487,7 +487,6 @@ class ProbeConfidenceTrainConfig:
     # -------- shift-based synthetic generation --------
     # keep shift logic the same
     max_abs_shift_channels: int = 64
-    extra_trace_channels_each_side: int = 128
     channel_step_um: float = 20.0
 
     # lower perturbation probability than before
