@@ -21,7 +21,7 @@ their nominal anatomy.
 from ephysatlas import load_pretrained
 
 encoder = load_pretrained(
-    "int-brain-lab/ea-encoder-channel", revision="2026_W45"
+    "int-brain-lab/ea-encoder-channel", revision="0.0.1"
 )
 
 print(encoder.index["task"])            # spatial-encoding
@@ -169,7 +169,7 @@ encoder.preprocessing_stats()    # standardisation, and the per-feature clipping
 encoder.load_confidence_model()  # the probe-confidence model, in eval() mode
 ```
 
-For `2026_W45` the split is 663 / 97 / 196 insertions, plus 93 the QC marks bad.
+For `0.0.1` the split is 663 / 97 / 196 insertions, plus 93 the QC marks bad.
 The neighbour bank holds 254,592 training channels: positions mirrored to the left
 hemisphere, features clipped and standardised exactly as the model saw them.
 
@@ -182,7 +182,7 @@ more than `m_max` candidates fell inside the radius. Serving takes the nearest `
 averages such random subsets from a fixed seed (below), so predictions do not depend on the
 global NumPy seed. Two runs give identical numbers.
 
-From `2026_W45` the release says how it predicts, in `config.prediction` of its manifest: the
+From `2026_W45` on, the release says how it predicts, in `config.prediction` of its manifest: the
 context interpolated between the voxels of its 200 µm grid (`trilinear_context`), and the mean over
 four random neighbour sets, as in training, from a fixed seed (`neighbour_draws`). On its held-out
 insertions this raises R² in every tissue, the root regions included, and takes about twice as long.
@@ -193,7 +193,7 @@ predicts from the nearest voxel and the nearest neighbours, as it did when it wa
 
 ```python
 encoder = load_pretrained(
-    "int-brain-lab/ea-encoder-channel", revision="2026_W45", device="cuda"
+    "int-brain-lab/ea-encoder-channel", revision="0.0.1", device="cuda"
 )
 
 pred = encoder.predict(df_channels, batch_size=4096)
