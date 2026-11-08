@@ -5,7 +5,8 @@ histology track, from the top of the atlas to below the brain). A cost matrix co
 recorded channel with each trace sample (squared Euclidean distance of the standardised feature
 vectors), and dynamic time warping finds the cheapest monotonic channel -> trace correspondence,
 with open ends, free diagonal steps and penalised stretching/compression. If the warped path
-covers too little of the probe, the best rigid shift is used instead. This is the method of the paper's Figure 5 and of the alignment GUI.
+covers too little of the probe, the best rigid shift is used instead. This is the method of the
+paper's automated alignment and of the alignment GUI.
 """
 
 from __future__ import annotations

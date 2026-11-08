@@ -112,9 +112,10 @@ def load_pretrained(
     Args:
         model_id (str or Path): A Hugging Face repo id (``owner/name``), or a path to an
             already-downloaded model directory.
-        revision (str, optional): Hugging Face branch/tag to pin, e.g. ``"2026_W32"``. Omitted,
+        revision (str, optional): Hugging Face branch/tag to pin: a version such as ``"0.0.1"``
+            for the encoders, a vintage such as ``"2026_W42"`` for the region decoders. Omitted,
             it resolves to ``main``, which tracks the *currently recommended* model and moves
-            when a new vintage is published.
+            when a new model is published.
         cache_dir (Path, optional): Where downloads are placed.
         repo_id (str, optional): Hugging Face repository, when it cannot be read off
             ``model_id``.
@@ -136,8 +137,8 @@ def load_pretrained(
         if revision is None and "/" in str(model_id):
             logger.warning(
                 f"no revision pinned for {model_id}: using 'main', which tracks the currently "
-                f"recommended model and will change when a new vintage is published. Pass "
-                f"revision='<vintage>' for a reproducible result."
+                f"recommended model and will change when a new model is published. Pass "
+                f"revision='<tag>' for a reproducible result."
             )
         path_model = model_registry.resolve_model(
             str(model_id),
