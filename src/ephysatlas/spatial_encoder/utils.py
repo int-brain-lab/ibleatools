@@ -331,24 +331,9 @@ def LoadInsertionData(
 def region_ids_from_xyz(
     brain_atlas, xyz_m_np: np.ndarray, mapping: str = "Cosmos", mode: str = "raise"
 ) -> np.ndarray:
-    """
-    xyz_m_np: [C, 3] in meters
-    mapping: "Cosmos" or "Allen" (must be supported by :func:`xyz_to_region_ids`)
-    Returns: np.ndarray [C] of region IDs (int)
-    """
-    idx = brain_atlas.bc.xyz2i(xyz_m_np, mode=mode)  # meters → voxel indices
-    # Delegates to xyz_to_region_ids(idx, brain_atlas, mapping=...) below
-    return xyz_to_region_ids(idx, brain_atlas, mapping=mapping)
-
-
-def xyz_to_region_ids(xyz_i, brain_atlas, mapping="Cosmos"):
-    """
-    xyz_i: [C, 3]
-    """
-    inds = brain_atlas._lookup_inds(xyz_i)
-    regions = brain_atlas._get_mapping(mapping=mapping)[brain_atlas.label.flat[inds]]
-
-    return regions
+    """``[C]`` Allen id of the region of each position (m) in ``mapping`` (0, void, outside the
+    brain): ``BrainAtlas.get_labels``."""
+    return brain_atlas.get_labels(xyz_m_np, mapping=mapping, mode=mode)
 
 
 def concat_context(cell_pc: np.ndarray, gene_pc: np.ndarray) -> np.ndarray:
