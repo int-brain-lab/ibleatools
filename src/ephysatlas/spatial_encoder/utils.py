@@ -1315,27 +1315,16 @@ def _sample_ctx_for_probe_xyz_std(
     ctx_mean: torch.Tensor,  # [F_ctx]
     ctx_std: torch.Tensor,  # [F_ctx]
 ) -> np.ndarray:
+    """The standardised context at each position; zero where the position is missing or the
+    context empty (outside the volumes), as in training and :class:`SpatialEncoder`."""
     xyz_m = np.asarray(xyz_m, dtype=np.float32)
     valid = _valid_xyz_mask_np(xyz_m)
-
     ctx = np.zeros((xyz_m.shape[0], int(ctx_mean.numel())), dtype=np.float32)
     if valid.any():
-        xyz_use = xyz_m[valid].copy()
-        try:
-            xyz_use = mirror_xyz_to_left(xyz_use)
-        except Exception:
-            pass
-
-        pack = ctx_manager.sample_context_numpy_m(xyz_use, mode="clip")
-        ctx_valid = np.concatenate([pack["cell_pc"], pack["gene_pc"]], axis=1).astype(
-            np.float32
-        )
-
-        ctx_mean_np = ctx_mean.detach().cpu().numpy().astype(np.float32)
-        ctx_std_np = ctx_std.detach().cpu().numpy().astype(np.float32)
-        ctx_valid = (ctx_valid - ctx_mean_np) / (ctx_std_np + 1e-8)
-        ctx[valid] = ctx_valid
-
+        pack = ctx_manager.sample_context_numpy_m(xyz_m[valid], mode="clip")
+        ctx[valid] = np.concatenate([pack["cell_pc"], pack["gene_pc"]], axis=1)
+    filled = np.any(ctx != 0, axis=1)
+    ctx[filled] = (ctx[filled] - ctx_mean.cpu().numpy()) / ctx_std.cpu().numpy()
     return ctx
 
 
