@@ -120,10 +120,7 @@ def _regions(ax, xyz, brain_atlas, title, ylabel=False):
     regions = brain_atlas.regions
     cosmos = region_labels(xyz, brain_atlas, "Cosmos")
     beryl = region_labels(xyz, brain_atlas, "Beryl")
-    rows = np.zeros(len(cosmos), dtype=int)
-    for r in np.unique(cosmos):
-        rows[cosmos == r] = np.flatnonzero(regions.id == r)[0]
-    rgb = regions.rgb[rows][:, None, :] / 255.0
+    rgb = regions.get(cosmos).rgb[:, None, :] / 255.0
     rgb[cosmos == 0] = 1.0
     extent = [0, 1, len(cosmos) * BIN_MM, 0]
     ax.imshow(rgb, aspect="auto", interpolation="nearest", extent=extent)
@@ -131,7 +128,7 @@ def _regions(ax, xyz, brain_atlas, title, ylabel=False):
     for b in range(1, len(beryl) + 1):
         if b == len(beryl) or beryl[b] != beryl[start]:
             if beryl[start] != 0:
-                name = regions.acronym[np.flatnonzero(regions.id == beryl[start])[0]]
+                name = regions.id2acronym(beryl[start])[0]
                 ax.text(
                     0.5,
                     (start + b) / 2 * BIN_MM,

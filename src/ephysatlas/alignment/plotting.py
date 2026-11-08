@@ -76,9 +76,7 @@ STRIPE_BACKGROUND = "0.92"  # where a stripe has no value (outside the inferred 
 def region_rgb(brain_atlas, ids: np.ndarray) -> np.ndarray:
     """``[n, 3]`` Allen colour (0-1) of each region id; black outside the brain."""
     ids = np.asarray(ids).reshape(-1).astype(int)
-    rgb = np.asarray(brain_atlas._label2rgb(ids), dtype=float)[:, :3]
-    if rgb.size and np.nanmax(rgb) > 1.0:
-        rgb = rgb / 255.0
+    rgb = brain_atlas.regions.get(ids).rgb[:, :3] / 255.0
     rgb[ids == 0] = 0.0
     return rgb
 
@@ -191,18 +189,9 @@ def _slice_panel(
 ):
     """Traces over the atlas slice through ``centre_um`` (``view`` coronal or sagittal), in a
     square window of half-width ``half_um`` so both views have the same size."""
-    from iblatlas.plots import plot_points_on_slice
-
     axis = 1 if view == "coronal" else 0
-    plot_points_on_slice(
-        np.zeros((0, 3)),
-        coord=float(centre_um[axis]),
-        slice=view,
-        ax=ax,
-        brain_atlas=brain_atlas,
-        background="boundary",
-        show_cbar=False,
-    )
+    draw = brain_atlas.plot_cslice if view == "coronal" else brain_atlas.plot_sslice
+    draw(float(centre_um[axis]) * 1e-6, volume="boundary", mapping="Allen-lr", ax=ax)
     h = 0 if view == "coronal" else 1
     for name in TRACE_STYLES:
         xyz = traces.get(name)
@@ -325,7 +314,7 @@ def _trace_stripes(fig, spec, result, brain_atlas, features):
     for a, b in zip(starts, stops):
         if ids[a] != 0 and depth[b - 1] - depth[a] >= 0.25:
             ticks.append(0.5 * (depth[a] + depth[b - 1]))
-            labels.append(brain_atlas.regions.acronym[ids[a]])
+            labels.append(brain_atlas.regions.id2acronym(ids[a])[0])
     ax_right = ax_atlas.twinx()
     ax_right.set_ylim(ax_atlas.get_ylim())
     ax_right.set_yticks(ticks, labels, fontsize=5.5)
