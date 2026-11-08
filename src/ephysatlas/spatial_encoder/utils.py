@@ -182,17 +182,17 @@ class ContextAtlasManager:
         self.gene_pca = gene_exp_vol  # [P_gene, Xh, Zh, Yh]
         assert self.cell_pca.ndim == 4 and self.gene_pca.ndim == 4
 
-    def voxel_indices(self, xyz_m: np.ndarray, mode="clip") -> tuple:
-        """``(xi, yi, zi)``: the voxel of the 200 µm grid nearest to each position mirrored onto
-        the left hemisphere."""
+    def voxel_indices(self, xyz_m: np.ndarray, mode="clip", mirror=True) -> tuple:
+        """``(xi, yi, zi)``: the voxel of the 200 µm grid nearest to each position, mirrored onto
+        the left hemisphere unless ``mirror`` is False."""
         _, n_x, n_z, n_y = self.cell_pca.shape
-        i = self.bc.xyz2i(mirror_xyz_to_left(xyz_m), mode=mode)
+        i = self.bc.xyz2i(mirror_xyz_to_left(xyz_m) if mirror else xyz_m, mode=mode)
         return tuple(np.clip(i[:, a], 0, n - 1) for a, n in ((0, n_x), (1, n_y), (2, n_z)))
 
-    def sample_context_numpy_m(self, xyz_m: np.ndarray, mode="raise"):
-        """The context of the voxel nearest to each position mirrored onto the left hemisphere,
-        as the model was trained."""
-        xi, yi, zi = self.voxel_indices(xyz_m, mode=mode)
+    def sample_context_numpy_m(self, xyz_m: np.ndarray, mode="raise", mirror=True):
+        """The context of the voxel nearest to each position; ``mirror`` folds positions onto the
+        left hemisphere, as the model was trained."""
+        xi, yi, zi = self.voxel_indices(xyz_m, mode=mode, mirror=mirror)
         return {
             "cell_pc": self.cell_pca[:, xi, zi, yi].T.astype(np.float32),  # [N, P_cell]
             "gene_pc": self.gene_pca[:, xi, zi, yi].T.astype(np.float32),  # [N, P_gene]
