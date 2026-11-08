@@ -5,15 +5,16 @@ from types import SimpleNamespace
 
 import numpy as np
 
+from ephysatlas.hemispheres import MIDLINE_X
 from ephysatlas.models.encoder_inpainting import SpatialEncoder
 from ephysatlas.spatial_encoder.utils import ContextAtlasManager
 
 
 def _manager(values):
-    """A context manager on a ``[X, Z, Y]`` grid: 1 atlas index per mm, x read as its mirror."""
+    """A context manager on a ``[X, Z, Y]`` grid: 1 atlas index per mm of distance to the midline."""
     manager = object.__new__(ContextAtlasManager)
     manager.bc = SimpleNamespace(
-        xyz2i=lambda xyz, round=True, mode="raise": np.abs(xyz) * 1e3
+        xyz2i=lambda xyz, round=True, mode="raise": np.abs(xyz - [MIDLINE_X, 0, 0]) * 1e3
     )
     manager.cell_pca = values[None].astype(np.float32)
     manager.gene_pca = (2 * values[None]).astype(np.float32)
@@ -28,7 +29,7 @@ class TestTrilinearContext(unittest.TestCase):
         self.values[1] = 3.0
 
     def sample(self, x_voxels):
-        xyz = np.array([[x_voxels * 8e-3, 0.0, 0.0]])
+        xyz = np.array([[MIDLINE_X + x_voxels * 8e-3, 0.0, 0.0]])  # right of the midline: mirrored
         pack = _manager(self.values).sample_context_trilinear_m(xyz)
         return float(pack["cell_pc"][0, 0]), float(pack["gene_pc"][0, 0])
 

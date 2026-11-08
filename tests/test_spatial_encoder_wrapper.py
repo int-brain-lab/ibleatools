@@ -197,8 +197,9 @@ class _FakeContextManager:
 
 
 class TestSpatialEncoderPredictHemispheres(unittest.TestCase):
-    """The model lives in the left hemisphere (x -> -|x|): a right-hemisphere position must be
-    predicted exactly as its left mirror, for the context, the neighbours and the position input."""
+    """The model lives in the left hemisphere (folded about the atlas midline): a right-hemisphere
+    position must be predicted exactly as its left mirror, for the context, the neighbours and the
+    position input."""
 
     # Left-hemisphere channels around (-2, -2, -3) mm, as the published bank stores them.
     CENTRE = np.array([-2e-3, -2e-3, -3e-3])
@@ -233,8 +234,9 @@ class TestSpatialEncoderPredictHemispheres(unittest.TestCase):
         import pandas as pd
 
         rng = np.random.default_rng(2)
-        xyz = self.CENTRE + rng.uniform(-1e-4, 1e-4, size=(6, 3))
-        xyz[:, 0] = x_sign * np.abs(xyz[:, 0])
+        from ephysatlas.hemispheres import mirror_xyz_to_hemisphere
+
+        xyz = mirror_xyz_to_hemisphere(self.CENTRE + rng.uniform(-1e-4, 1e-4, size=(6, 3)), x_sign)
         index = pd.MultiIndex.from_tuples(
             [("query", c) for c in range(len(xyz))], names=["pid", "channel"]
         )
@@ -293,9 +295,13 @@ class TestSpatialEncoderPredictHemispheres(unittest.TestCase):
         out = self.tmp.joinpath("bank")
         out.mkdir()
         build_neighbor_bank(out, df, encoder.index, model=encoder.model)
+        from ephysatlas.hemispheres import mirror_xyz_to_left
+
         with np.load(out.joinpath(model_registry.ENCODER_BANK_FILE)) as bank:
             np.testing.assert_allclose(
-                bank["xyz"][:, 0], -np.abs(df["x"].to_numpy()), rtol=1e-6
+                bank["xyz"][:, 0],
+                mirror_xyz_to_left(df[["x", "y", "z"]].to_numpy())[:, 0],
+                rtol=1e-6,
             )
 
 

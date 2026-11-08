@@ -9,6 +9,9 @@ import numpy as np
 from iblatlas.regions import BrainRegions
 from sklearn.preprocessing import StandardScaler
 
+# One fold for every model: about the atlas midline (re-exported for unit_encoder).
+from ephysatlas.hemispheres import MIDLINE_X, mirror_xyz_to_hemisphere  # noqa: F401
+
 
 @dataclass
 class UnitData:
@@ -49,23 +52,15 @@ class ContextTransform:
 def infer_training_hemisphere_sign(
     xyz_m: np.ndarray, split: np.ndarray | None = None
 ) -> float:
-    """Infer the canonical ML sign from recorded units, robust to a few midline points."""
+    """The side of the atlas midline (+1 right, -1 left) where most training units are."""
     xyz = np.asarray(xyz_m, np.float64)
     if split is not None:
         xyz = xyz[np.asarray(split) == 0]
     x = xyz[:, 0]
-    x = x[np.isfinite(x) & (np.abs(x) > 1e-9)]
+    x = x[np.isfinite(x) & (np.abs(x - MIDLINE_X) > 1e-9)]
     if len(x) == 0:
         return 1.0
-    return 1.0 if float(np.median(x)) >= 0.0 else -1.0
-
-
-def mirror_xyz_to_hemisphere(xyz_m: np.ndarray, hemisphere_sign: float) -> np.ndarray:
-    """Fold ML coordinate x onto one hemisphere while preserving AP/DV."""
-    out = np.asarray(xyz_m, np.float32).copy()
-    sign = 1.0 if float(hemisphere_sign) >= 0 else -1.0
-    out[:, 0] = sign * np.abs(out[:, 0])
-    return out
+    return 1.0 if float(np.median(x)) >= MIDLINE_X else -1.0
 
 
 def set_seed(seed: int) -> None:

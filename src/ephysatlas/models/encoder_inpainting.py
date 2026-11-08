@@ -593,7 +593,8 @@ class SpatialEncoder:
     ) -> pd.DataFrame:
         """Predict electrophysiological features for each channel position.
 
-        The model was trained on positions mirrored to the left hemisphere (``x -> -|x|``): its
+        The model was trained on positions mirrored to the left hemisphere about the atlas midline
+        (``spatial_encoder.utils.mirror_xyz_to_left``, 44 µm left of bregma): its
         context lookup, neighbour bank and position input all live there. A right-hemisphere
         position is therefore predicted exactly as its left mirror.
 

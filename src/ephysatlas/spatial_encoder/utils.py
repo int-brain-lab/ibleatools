@@ -4,7 +4,7 @@ import os
 import numpy as np
 
 from pathlib import Path
-from typing import Tuple, Any
+from typing import Any
 from dataclasses import dataclass
 
 from sklearn.decomposition import PCA
@@ -18,6 +18,9 @@ from ephysatlas.data import download_tables, read_features_from_disk
 
 from iblatlas.genomics import agea, merfish
 from iblatlas.atlas import AllenAtlas
+
+# The models live in the left hemisphere, folded about the atlas midline.
+from ephysatlas.hemispheres import mirror_xyz_to_left
 
 from one.api import ONE
 
@@ -190,9 +193,9 @@ class ContextAtlasManager:
         assert self.allen_idx.ndim == 3
 
     def sample_context_numpy_m(self, xyz_m: np.ndarray, mode="raise"):
-        xyz_m = xyz_m.copy()
-        xyz_m[:, 0] = -np.abs(xyz_m[:, 0])  # mirror to left
-        indices = self.bc.xyz2i(xyz_m, mode=mode)  # fractional (x,y,z) high-res
+        """The context of the nearest 200 µm voxel to each position mirrored onto the left
+        hemisphere, as the model was trained."""
+        indices = self.bc.xyz2i(mirror_xyz_to_left(xyz_m), mode=mode)  # fractional (x,y,z) high-res
 
         Yh, Xh, Zh = self.allen_idx.shape  # note: allen_idx is [Y, X, Z]
         xi = np.clip(np.round(indices[:, 0] / 8).astype(int), 0, Xh - 1)
@@ -215,9 +218,7 @@ class ContextAtlasManager:
         zero; a position with 8 empty voxels stays zero. ``mirror`` folds positions onto the left
         hemisphere, as the model was trained.
         """
-        xyz_m = xyz_m.copy()
-        if mirror:
-            xyz_m[:, 0] = -np.abs(xyz_m[:, 0])
+        xyz_m = mirror_xyz_to_left(xyz_m) if mirror else xyz_m
         grid = self.bc.xyz2i(xyz_m.astype(np.float64), round=False, mode=mode) / 8.0
         _, n_x, n_z, n_y = self.cell_pca.shape
         limits = np.array([n_x, n_y, n_z]) - 1
@@ -245,30 +246,6 @@ class ContextAtlasManager:
         return {
             "cell_pc": total[:, :n_cell].astype(np.float32),
             "gene_pc": total[:, n_cell:].astype(np.float32),
-        }
-
-    def sample_context_numpy_i(
-        self, xyz_i: np.ndarray, s_xyz: np.ndarray = np.array([8, 8, 8])
-    ):
-        Xh, Zh, Yh = self.cell_pca.shape[1:]
-        xyz_i = xyz_i.copy()
-        # xyz_i columns: [xi, yi, zi] in downsampled grid
-        xyz_i[:, 0] = mirror_x_indices_to_left(xyz_i[:, 0], Xh)  # mirror x index
-
-        cell_pc = self.cell_pca[:, xyz_i[:, 0], xyz_i[:, 2], xyz_i[:, 1]].T.astype(
-            np.float32
-        )
-        gene_pc = self.gene_pca[:, xyz_i[:, 0], xyz_i[:, 2], xyz_i[:, 1]].T.astype(
-            np.float32
-        )
-
-        iy = np.clip(xyz_i[:, 1] * s_xyz[1], 0, len(self.yscale) - 1)
-        ix = np.clip(xyz_i[:, 0] * s_xyz[0], 0, len(self.xscale) - 1)
-        iz = np.clip(xyz_i[:, 2] * s_xyz[2], 0, len(self.zscale) - 1)
-        return {
-            "cell_pc": cell_pc,
-            "gene_pc": gene_pc,
-            "allen_ix": self.allen_idx[iy, ix, iz].astype(np.int32),
         }
 
 
@@ -382,50 +359,6 @@ def xyz_to_region_ids(xyz_i, brain_atlas, mapping="Cosmos"):
     regions = brain_atlas._get_mapping(mapping=mapping)[brain_atlas.label.flat[inds]]
 
     return regions
-
-
-def mirror_xyz_to_left(xyz_m: np.ndarray) -> np.ndarray:
-    """Return a copy where x is reflected to the left hemisphere (x<=0 in world coords)."""
-    out = xyz_m.copy()
-    mirror_ind = np.where(out[..., 0] > 0)[0]
-    out[..., 0][mirror_ind] = -np.abs(out[..., 0][mirror_ind])
-    return out
-
-
-def mirror_x_indices_to_left(xi: np.ndarray, Xh: int) -> np.ndarray:
-    """Mirror an atlas x-index array into the left half (index space)."""
-    xi = xi.copy()
-    right = xi >= (Xh // 2)
-    xi[right] = Xh - xi[right] - 1
-    return xi
-
-
-def _axis_step_in_indices(bc, axis: int) -> float:
-    """
-    Estimate physical spacing (meters) per +1 index step along a given axis in the high-res grid.
-    axis: 0->x, 1->y, 2->z
-    """
-    a0 = np.zeros((1, 3), dtype=np.int64)
-    a1 = a0.copy()
-    a1[0, axis] = 1
-    p0 = bc.i2xyz(a0)  # [1,3], meters
-    p1 = bc.i2xyz(a1)
-    return float(np.linalg.norm(p1 - p0))
-
-
-def compute_grid_strides_200um(bc) -> Tuple[int, int, int]:
-    """
-    Convert 200 µm into strides in index units along x,y,z, rounding to at least 1.
-    """
-    target_m = 200e-6
-    dx = _axis_step_in_indices(bc, 0)
-    dy = _axis_step_in_indices(bc, 1)
-    dz = _axis_step_in_indices(bc, 2)
-
-    sx = max(1, int(round(target_m / max(dx, 1e-12))))
-    sy = max(1, int(round(target_m / max(dy, 1e-12))))
-    sz = max(1, int(round(target_m / max(dz, 1e-12))))
-    return sx, sy, sz
 
 
 def concat_context(cell_pc: np.ndarray, gene_pc: np.ndarray) -> np.ndarray:
@@ -617,37 +550,24 @@ def build_channels_plus_emptyvoxels_with_neighbors(
     # 200 µm context grid used for empty-voxel contrastive samples.
     # ------------------------------------------------------------------
     _, Xh, Zh, Yh = ctx_manager.cell_pca.shape
-    sx, sy, sz = compute_grid_strides_200um(ctx_manager.bc)
-
-    xs = np.arange(0, Xh, dtype=int)
-    ys = np.arange(0, Yh, dtype=int)
-    zs = np.arange(0, Zh, dtype=int)
-    XX, ZZ, YY = np.meshgrid(xs, zs, ys, indexing="ij")
-    xi = XX.reshape(-1)
-    zi = ZZ.reshape(-1)
-    yi = YY.reshape(-1)
-    N = xi.size
-
-    ijk = np.stack([xi, yi, zi], axis=1)
-    xyz_m = ctx_manager.bc.i2xyz(ijk * 8).astype(np.float32)
-    xyz_m = mirror_xyz_to_left(xyz_m)
+    XX, ZZ, YY = np.meshgrid(np.arange(Xh), np.arange(Zh), np.arange(Yh), indexing="ij")
+    ijk = np.stack([XX.reshape(-1), YY.reshape(-1), ZZ.reshape(-1)], axis=1)
+    N = ijk.shape[0]
+    # Every voxel of the grid at its position folded onto the left hemisphere, with the context
+    # of that position, as for a recorded channel.
+    xyz_m = mirror_xyz_to_left(ctx_manager.bc.i2xyz(ijk * 8)).astype(np.float32)
 
     # Vectorized context sampling in manageable chunks.
     ctx_parts = []
     chunk = 100_000
-    grid_i = np.stack([xi, yi, zi], axis=1)
     for start_i in range(0, N, chunk):
-        stop_i = min(N, start_i + chunk)
-        pack = ctx_manager.sample_context_numpy_i(
-            grid_i[start_i:stop_i],
-            np.array((sx, sy, sz)),
-        )
+        pack = ctx_manager.sample_context_numpy_m(xyz_m[start_i:start_i + chunk], mode="clip")
         ctx_parts.append(concat_context(pack["cell_pc"], pack["gene_pc"]))
     ctx_all = np.concatenate(ctx_parts, axis=0).astype(np.float32)
 
     F_e = int(ephys.shape[-1])
 
-    has_eph = compute_voxel_with_ephys(ctx_manager, probe_positions, xi, yi, zi)
+    has_eph = compute_voxel_with_ephys(ctx_manager, probe_positions, xyz_m)
     has_ctx = np.any(ctx_all != 0.0, axis=1)
     grid_mask = ~has_eph & has_ctx
 
@@ -1010,37 +930,23 @@ class GridDS(Dataset):
 
 
 def downsample_keys_from_xyz(ctx_manager, xyz_m, ds_rate=8):
+    """``(xi, zi, yi)``: the nearest voxel of the context grid to each position mirrored onto
+    the left hemisphere."""
     Xh, Zh, Yh = ctx_manager.cell_pca.shape[1:]
-    xyz_m = mirror_xyz_to_left(xyz_m)  # <<< add
-    ijk = ctx_manager.bc.xyz2i(xyz_m, mode="clip")
+    ijk = ctx_manager.bc.xyz2i(mirror_xyz_to_left(xyz_m), mode="clip")
     xi = np.clip(np.round(ijk[:, 0] / ds_rate).astype(int), 0, Xh - 1)
     yi = np.clip(np.round(ijk[:, 1] / ds_rate).astype(int), 0, Yh - 1)
     zi = np.clip(np.round(ijk[:, 2] / ds_rate).astype(int), 0, Zh - 1)
-    # ensure xi is mirrored in index space too (defensive, though mirror_xyz already did it)
-    xi = mirror_x_indices_to_left(xi, Xh)
     return xi, zi, yi
 
 
-def compute_voxel_with_ephys(ctx_manager, probe_positions, xi, yi, zi):
-    N = xi.size
-
-    ch_xyz = (
-        probe_positions
-        if len(probe_positions.shape) == 2
-        else probe_positions.reshape(-1, 3)
-    )
-    ch_xyz = mirror_xyz_to_left(ch_xyz)  # <<< add
-    xic, zic, yic = downsample_keys_from_xyz(ctx_manager, ch_xyz)
-
-    has = np.zeros(N, dtype=bool)
-
-    # Map grid tuple -> flat index
-    key2flat = {(int(xi[i]), int(zi[i]), int(yi[i])): i for i in range(N)}
-
-    for x, z, y in zip(xic, zic, yic):
-        if (x, z, y) in key2flat:
-            has[key2flat[(x, z, y)]] = True
-    return has
+def compute_voxel_with_ephys(ctx_manager, probe_positions, grid_xyz_m):
+    """Whether each grid position falls, once mirrored, in the voxel of a recorded channel."""
+    ch_xyz = np.asarray(probe_positions).reshape(-1, 3)
+    ch_xyz = ch_xyz[np.isfinite(ch_xyz).all(axis=1) & ~np.all(ch_xyz == 0.0, axis=1)]
+    recorded = set(zip(*downsample_keys_from_xyz(ctx_manager, ch_xyz)))
+    grid_keys = zip(*downsample_keys_from_xyz(ctx_manager, grid_xyz_m))
+    return np.fromiter((key in recorded for key in grid_keys), dtype=bool)
 
 
 try:
