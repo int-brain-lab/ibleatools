@@ -61,7 +61,8 @@ print(pred.columns[:4])    # ['pred_rms_lf', 'pred_psd_delta', 'pred_psd_theta',
 ```
 
 Positions in either hemisphere work. The model was trained on positions mirrored to the
-left hemisphere, so each query is mirrored the same way (`x → -|x|`) before the neighbour
+left hemisphere about the atlas midline (44 µm left of bregma, `BrainAtlas.midline_x` of
+iblatlas), so each query is mirrored the same way before the neighbour
 search and the position input: a right-hemisphere channel is predicted exactly as its
 mirror.
 

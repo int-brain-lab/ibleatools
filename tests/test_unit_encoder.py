@@ -122,12 +122,16 @@ class TestUnitEncoderWrapper(unittest.TestCase):
         self.assertGreater(np.ptp(first, axis=0).max(), 0)
 
     def test_predict_is_symmetric_across_hemispheres(self):
+        from ephysatlas.hemispheres import MIDLINE_X
+
         mirrored = self.positions.copy()
-        mirrored["x"] = -mirrored["x"]
+        # each position reflected about the midline
+        mirrored["x"] = 2 * MIDLINE_X - mirrored["x"]
         encoder = self._encoder()
         np.testing.assert_allclose(
             encoder.predict(self.positions).to_numpy(),
             encoder.predict(mirrored).to_numpy(),
+            atol=1e-6,  # float32 positions: the reflection is exact to a rounding
         )
 
     def test_predict_names_missing_coordinates(self):
