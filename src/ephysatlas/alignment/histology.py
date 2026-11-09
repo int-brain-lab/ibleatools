@@ -1,11 +1,11 @@
 """Histology-based alignment: place a probe's channels along its reconstructed histology trace.
 
-The channel-level model predicts the features expected at every sample of the trace (extended to
-the brain boundary). A cost matrix compares each recorded channel with each trace sample (squared
-Euclidean distance of the standardised feature vectors), and dynamic time warping finds the
-cheapest monotonic channel -> trace correspondence, with open ends, free diagonal steps and
-penalised stretching/compression. If the warped path covers too little of the probe, the best
-rigid shift is used instead. This is the method of the paper's Figure 5 and of the alignment GUI.
+The channel-level model predicts the features expected at every sample of the trace (the IBL
+histology track, from the top of the atlas to below the brain). A cost matrix compares each
+recorded channel with each trace sample (squared Euclidean distance of the standardised feature
+vectors), and dynamic time warping finds the cheapest monotonic channel -> trace correspondence,
+with open ends, free diagonal steps and penalised stretching/compression. If the warped path
+covers too little of the probe, the best rigid shift is used instead. This is the method of the paper's Figure 5 and of the alignment GUI.
 """
 
 from __future__ import annotations
@@ -154,8 +154,8 @@ def align_histology(
     Args:
         channel_model: :class:`~ephysatlas.alignment.models.ChannelModel`.
         recorded: ``[C, F]`` recorded channel features in feature units, row order (top first).
-        trace_xyz: ``[L, 3]`` trace samples (m), top to bottom, usually already extended to the
-            brain boundary with :func:`~ephysatlas.alignment.geometry.extend_trace_to_brain`.
+        trace_xyz: ``[L, 3]`` trace samples (m), top to bottom, usually the histology track of
+            :func:`~ephysatlas.alignment.geometry.histology_track`.
         pid: Insertion id; its own channels are excluded from the model's neighbours.
         feature_indices: Features the cost uses (all by default).
         cost: A precomputed ``[C_valid, L]`` cost to warp instead of the feature cost (the

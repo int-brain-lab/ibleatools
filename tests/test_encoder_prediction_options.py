@@ -11,11 +11,11 @@ from ephysatlas.spatial_encoder.utils import ContextAtlasManager
 
 
 def _manager(values):
-    """A context manager on a ``[X, Z, Y]`` grid: 1 atlas index per mm of distance to the midline."""
+    """A context manager on a ``[X, Z, Y]`` grid: 1 voxel per 8 mm of distance to the midline."""
     manager = object.__new__(ContextAtlasManager)
     manager.bc = SimpleNamespace(
         xyz2i=lambda xyz, round=True, mode="raise": (
-            np.abs(xyz - [MIDLINE_X, 0, 0]) * 1e3
+            np.abs(xyz - [MIDLINE_X, 0, 0]) / 8e-3
         )
     )
     manager.cell_pca = values[None].astype(np.float32)
@@ -24,7 +24,7 @@ def _manager(values):
 
 
 class TestTrilinearContext(unittest.TestCase):
-    """Voxels sit every 8 atlas indices, here 8 mm: two along x, of value 1 and 3."""
+    """Voxels sit every 8 mm: two along x, of value 1 and 3."""
 
     def setUp(self):
         self.values = np.ones((2, 2, 2))

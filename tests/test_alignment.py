@@ -105,5 +105,25 @@ class TestTraceStripes(unittest.TestCase):
         np.testing.assert_allclose(trace_depth_mm(trace), np.arange(11) * 0.01)
 
 
+class TestHistologyTrack(unittest.TestCase):
+    def test_track_does_not_depend_on_the_order_of_the_picks(self):
+        """The GUI fits the top line to the first picks: bottom-first picks are reversed."""
+        from iblatlas.atlas import AllenAtlas
+
+        from ephysatlas.alignment.geometry import histology_track
+
+        ba = AllenAtlas(res_um=50)
+        # a bent track, top first: straight down, then angled towards lateral
+        depth = np.linspace(0, 4e-3, 40)
+        picks = np.c_[
+            -2e-3 - np.maximum(depth - 2e-3, 0) * 0.5,
+            np.full_like(depth, -2e-3),
+            -0.5e-3 - depth,
+        ]
+        top_first = histology_track(picks, ba)
+        np.testing.assert_allclose(histology_track(picks[::-1], ba), top_first)
+        self.assertGreater(top_first[0, 2], top_first[-1, 2])
+
+
 if __name__ == "__main__":
     unittest.main()
