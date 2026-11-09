@@ -45,6 +45,38 @@ class TestHemispheres(unittest.TestCase):
         flat = mirror_xyz_to_left(xyz_um.reshape(-1, 3), midline_x=MIDLINE_X * 1e6)
         np.testing.assert_allclose(left.reshape(-1, 3), flat)
 
+    def test_trajectory_centre_folded_about_the_midline(self):
+        """A trajectory centre between the midline and bregma is on the right: it is folded about
+        the midline like the trace points, so the parameters describe the trace."""
+        from ephysatlas.alignment.ephys_only import (
+            AnnealConfig,
+            TraceParams,
+            left_x_um,
+            trace_points,
+        )
+
+        midline_um = MIDLINE_X * 1e6
+        self.assertAlmostEqual(left_x_um(midline_um + 20.0), midline_um - 20.0)
+        self.assertAlmostEqual(left_x_um(midline_um - 20.0), midline_um - 20.0)
+        cfg = AnnealConfig()
+        depths = np.arange(0.0, 3000.0, 100.0)
+
+        def trace(x_um):
+            params = TraceParams(
+                x=x_um,
+                y=-2000.0,
+                z=-3000.0,
+                theta=15.0,
+                phi=30.0,
+                length=3000.0,
+                bends=np.zeros((cfg.n_sections - 1, 2), dtype=np.float32),
+            )
+            return trace_points(params, depths, "negative", cfg)[0]
+
+        np.testing.assert_allclose(
+            trace(midline_um + 20.0), trace(midline_um - 20.0), atol=1e-3
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
