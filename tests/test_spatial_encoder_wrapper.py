@@ -236,7 +236,9 @@ class TestSpatialEncoderPredictHemispheres(unittest.TestCase):
         rng = np.random.default_rng(2)
         from ephysatlas.hemispheres import mirror_xyz_to_hemisphere
 
-        xyz = mirror_xyz_to_hemisphere(self.CENTRE + rng.uniform(-1e-4, 1e-4, size=(6, 3)), x_sign)
+        xyz = mirror_xyz_to_hemisphere(
+            self.CENTRE + rng.uniform(-1e-4, 1e-4, size=(6, 3)), x_sign
+        )
         index = pd.MultiIndex.from_tuples(
             [("query", c) for c in range(len(xyz))], names=["pid", "channel"]
         )

@@ -1400,7 +1400,9 @@ class EphysOnlyLocalizer:
         bin_of_channel = np.full(len(recorded), -1, dtype=np.int32)
         for b, rows in enumerate(bins.channel_idx):
             bin_of_channel[rows] = b
-        right = bool(np.median(planned_xyz[valid_positions(planned_xyz), 0]) > MIDLINE_X)
+        right = bool(
+            np.median(planned_xyz[valid_positions(planned_xyz), 0]) > MIDLINE_X
+        )
         diagnostics = dict(
             candidate_score=cand_score[keep],
             candidate_distance_um=dist[keep],

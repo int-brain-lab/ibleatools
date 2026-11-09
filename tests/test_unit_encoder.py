@@ -125,7 +125,8 @@ class TestUnitEncoderWrapper(unittest.TestCase):
         from ephysatlas.hemispheres import MIDLINE_X
 
         mirrored = self.positions.copy()
-        mirrored["x"] = 2 * MIDLINE_X - mirrored["x"]  # each position reflected about the midline
+        # each position reflected about the midline
+        mirrored["x"] = 2 * MIDLINE_X - mirrored["x"]
         encoder = self._encoder()
         np.testing.assert_allclose(
             encoder.predict(self.positions).to_numpy(),

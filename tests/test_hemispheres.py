@@ -2,7 +2,11 @@ import unittest
 
 import numpy as np
 
-from ephysatlas.hemispheres import MIDLINE_X, mirror_xyz_to_hemisphere, mirror_xyz_to_left
+from ephysatlas.hemispheres import (
+    MIDLINE_X,
+    mirror_xyz_to_hemisphere,
+    mirror_xyz_to_left,
+)
 
 
 class TestHemispheres(unittest.TestCase):
@@ -13,14 +17,25 @@ class TestHemispheres(unittest.TestCase):
         self.assertAlmostEqual(MIDLINE_X, -44e-6, places=9)
 
     def test_fold_about_the_midline(self):
-        xyz = np.array([[MIDLINE_X + 1e-3, 1e-3, -2e-3], [MIDLINE_X - 1e-3, 0, 0], [MIDLINE_X, 0, 0]])
+        xyz = np.array(
+            [
+                [MIDLINE_X + 1e-3, 1e-3, -2e-3],
+                [MIDLINE_X - 1e-3, 0, 0],
+                [MIDLINE_X, 0, 0],
+            ]
+        )
         left = mirror_xyz_to_left(xyz)
-        np.testing.assert_allclose(left[:, 0], [MIDLINE_X - 1e-3, MIDLINE_X - 1e-3, MIDLINE_X])
+        np.testing.assert_allclose(
+            left[:, 0], [MIDLINE_X - 1e-3, MIDLINE_X - 1e-3, MIDLINE_X]
+        )
         np.testing.assert_array_equal(left[:, 1:], xyz[:, 1:])
         np.testing.assert_allclose(mirror_xyz_to_left(left), left)  # idempotent
         right = mirror_xyz_to_hemisphere(xyz, 1.0)
-        np.testing.assert_allclose(right[:, 0], [MIDLINE_X + 1e-3, MIDLINE_X + 1e-3, MIDLINE_X])
-        np.testing.assert_array_equal(xyz[0], [MIDLINE_X + 1e-3, 1e-3, -2e-3])  # input untouched
+        np.testing.assert_allclose(
+            right[:, 0], [MIDLINE_X + 1e-3, MIDLINE_X + 1e-3, MIDLINE_X]
+        )
+        # input untouched
+        np.testing.assert_array_equal(xyz[0], [MIDLINE_X + 1e-3, 1e-3, -2e-3])
 
     def test_any_shape_and_units(self):
         rng = np.random.default_rng(0)

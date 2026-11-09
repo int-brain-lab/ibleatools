@@ -10,7 +10,9 @@ import numpy as np
 from iblatlas.atlas import ALLEN_CCF_LANDMARKS_MLAPDV_UM, ALLEN_CCF_MIDLINE_ML_UM
 
 # The atlas midline in IBL coordinates (metres, relative to bregma).
-MIDLINE_X = (ALLEN_CCF_MIDLINE_ML_UM - ALLEN_CCF_LANDMARKS_MLAPDV_UM["bregma"][0]) * 1e-6
+MIDLINE_X = (
+    ALLEN_CCF_MIDLINE_ML_UM - ALLEN_CCF_LANDMARKS_MLAPDV_UM["bregma"][0]
+) * 1e-6
 
 
 def mirror_xyz_to_hemisphere(

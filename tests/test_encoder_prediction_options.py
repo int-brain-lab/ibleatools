@@ -14,7 +14,9 @@ def _manager(values):
     """A context manager on a ``[X, Z, Y]`` grid: 1 voxel per 8 mm of distance to the midline."""
     manager = object.__new__(ContextAtlasManager)
     manager.bc = SimpleNamespace(
-        xyz2i=lambda xyz, round=True, mode="raise": np.abs(xyz - [MIDLINE_X, 0, 0]) / 8e-3
+        xyz2i=lambda xyz, round=True, mode="raise": (
+            np.abs(xyz - [MIDLINE_X, 0, 0]) / 8e-3
+        )
     )
     manager.cell_pca = values[None].astype(np.float32)
     manager.gene_pca = (2 * values[None]).astype(np.float32)
@@ -29,7 +31,8 @@ class TestTrilinearContext(unittest.TestCase):
         self.values[1] = 3.0
 
     def sample(self, x_voxels):
-        xyz = np.array([[MIDLINE_X + x_voxels * 8e-3, 0.0, 0.0]])  # right of the midline: mirrored
+        # right of the midline: mirrored
+        xyz = np.array([[MIDLINE_X + x_voxels * 8e-3, 0.0, 0.0]])
         pack = _manager(self.values).sample_context_trilinear_m(xyz)
         return float(pack["cell_pc"][0, 0]), float(pack["gene_pc"][0, 0])
 

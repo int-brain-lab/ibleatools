@@ -181,7 +181,9 @@ def run_alignments(
                         from .geometry import histology_track, valid_xyz_mask
 
                         human = probe["human_xyz"]
-                        trace = histology_track(human[valid_xyz_mask(human)], brain_atlas)
+                        trace = histology_track(
+                            human[valid_xyz_mask(human)], brain_atlas
+                        )
                     if channel_result is None:
                         channel_result = align_histology(
                             channel_model, probe["features"], trace, pid=pid

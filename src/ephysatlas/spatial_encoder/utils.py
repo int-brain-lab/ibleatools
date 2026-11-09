@@ -187,7 +187,9 @@ class ContextAtlasManager:
         the left hemisphere unless ``mirror`` is False."""
         _, n_x, n_z, n_y = self.cell_pca.shape
         i = self.bc.xyz2i(mirror_xyz_to_left(xyz_m) if mirror else xyz_m, mode=mode)
-        return tuple(np.clip(i[:, a], 0, n - 1) for a, n in ((0, n_x), (1, n_y), (2, n_z)))
+        return tuple(
+            np.clip(i[:, a], 0, n - 1) for a, n in ((0, n_x), (1, n_y), (2, n_z))
+        )
 
     def sample_context_numpy_m(self, xyz_m: np.ndarray, mode="raise", mirror=True):
         """The context of the voxel nearest to each position; ``mirror`` folds positions onto the
@@ -534,7 +536,9 @@ def build_channels_plus_emptyvoxels_with_neighbors(
     ctx_parts = []
     chunk = 100_000
     for start_i in range(0, N, chunk):
-        pack = ctx_manager.sample_context_numpy_m(xyz_m[start_i:start_i + chunk], mode="clip")
+        pack = ctx_manager.sample_context_numpy_m(
+            xyz_m[start_i : start_i + chunk], mode="clip"
+        )
         ctx_parts.append(concat_context(pack["cell_pc"], pack["gene_pc"]))
     ctx_all = np.concatenate(ctx_parts, axis=0).astype(np.float32)
 
@@ -999,7 +1003,6 @@ class NeighborCollate:
         e_n = torch.zeros(B, self.M, self.F_e, dtype=torch.float32)
         p_n = torch.zeros(B, self.M, 3, dtype=torch.float32)
         mask = torch.zeros(B, self.M, dtype=torch.bool)
-
 
         # neighbor candidates from train bank
         neigh_lists = self.nn.query_radius(p_q.numpy(), r_m=self.r_m, k_cap=8 * self.M)
