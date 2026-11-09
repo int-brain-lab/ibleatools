@@ -56,9 +56,14 @@ def histology_track(xyz_m: np.ndarray, brain_atlas) -> np.ndarray:
     This is the track of the alignment GUI (:class:`ibllib.pipes.ephys_alignment.EphysAlignment`):
     lines fitted to the first and last quarter of the points (at least 4) extend it up to the top
     of the atlas and down to 200 µm below the brain, sampled every 10 µm. ``xyz_m`` (histology
-    picks, or channel positions) is ordered top first, as Alyx stores the picks.
+    picks, or channel positions) may be in either order: the GUI fits the top line to the first
+    points, so points given bottom first are reversed.
     """
     from ibllib.pipes.ephys_alignment import EphysAlignment
 
-    track = EphysAlignment(np.asarray(xyz_m, dtype=float), brain_atlas=brain_atlas)
+    xyz = np.asarray(xyz_m, dtype=float)
+    # bottom first: the top line must be fitted to the top points
+    if xyz[0, 2] < xyz[-1, 2]:
+        xyz = xyz[::-1]
+    track = EphysAlignment(xyz, brain_atlas=brain_atlas)
     return track.xyz_samples[::-1].astype(np.float32)

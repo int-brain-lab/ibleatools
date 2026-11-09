@@ -189,6 +189,13 @@ def mirror_left(xyz: np.ndarray, unit: float = 1.0) -> np.ndarray:
     return mirror_xyz_to_hemisphere(xyz, -1.0, MIDLINE_X * unit)
 
 
+def left_x_um(x_um: float) -> float:
+    """An ML coordinate (µm) folded onto the model's left hemisphere about the atlas midline,
+    as :func:`mirror_left` does for positions: for the trajectory centre."""
+    midline_um = MIDLINE_X * 1e6
+    return midline_um - abs(float(x_um) - midline_um)
+
+
 def valid_positions(xyz: np.ndarray) -> np.ndarray:
     """Positions that are finite and not the all-zero placeholder."""
     xyz = np.asarray(xyz)
@@ -477,7 +484,7 @@ def trace_points(
     length = max(float(params.length), 1e-6)
     seg = length / float(n)
     vertices = np.empty((n + 1, 3), dtype=np.float32)
-    vertices[0] = np.array([-abs(params.x), params.y, params.z], dtype=np.float32)
+    vertices[0] = np.array([left_x_um(params.x), params.y, params.z], dtype=np.float32)
     remaining, section = 0.5 * length, 0
     while (
         remaining > 1e-6 and section < n
@@ -524,7 +531,7 @@ def planned_seed(
         np.clip(cfg.probe_length_um, cfg.min_probe_length_um, cfg.max_probe_length_um)
     )
     params = TraceParams(
-        x=-abs(float(center[0])),
+        x=left_x_um(center[0]),
         y=float(center[1]),
         z=float(center[2]),
         theta=theta,
@@ -905,7 +912,7 @@ def anneal(
             else p.bends
         )
         p = TraceParams(
-            x=-abs(p.x),
+            x=left_x_um(p.x),
             y=p.y,
             z=p.z,
             theta=float(np.clip(p.theta, lo, hi)),
@@ -982,7 +989,7 @@ def anneal(
         if move == 0:  # translation, isotropic with RMS sig_xyz
             step = rng.normal(0.0, sig_xyz / np.sqrt(3.0), size=3)
             prop.x, prop.y, prop.z = (
-                -abs(prop.x + float(step[0])),
+                left_x_um(prop.x + float(step[0])),
                 prop.y + float(step[1]),
                 prop.z + float(step[2]),
             )
