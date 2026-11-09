@@ -12,7 +12,7 @@ from iblatlas.regions import BrainRegions
 from tqdm.auto import tqdm
 
 from .config import CHANNEL_MODEL_REPO_ID, DEFAULT_DATA_DIR
-from .data import resolve_channel_release_file
+from .data import mirror_xyz_to_hemisphere, resolve_channel_release_file
 from .waveform_features import (
     FEATURE_NAMES,
     extract_generated_waveform_features,
@@ -1114,11 +1114,10 @@ def prepare_latest_cells_encoder_data(
     xyz = df_good[[x_col, y_col, z_col]].to_numpy(dtype=np.float32)
     xyz_m = xyz if xyz_in_meters else xyz / 1e6
     if mirror_x_to_single_hemisphere:
-        xyz_m = np.asarray(xyz_m, np.float32).copy()
-        sign = 1.0 if float(mirror_x_sign) >= 0 else -1.0
-        xyz_m[:, 0] = sign * np.abs(xyz_m[:, 0])
+        xyz_m = mirror_xyz_to_hemisphere(np.asarray(xyz_m, np.float32), mirror_x_sign)
         print(
-            f"[mirror-x] prepared xyz folded to canonical hemisphere sign={sign:+.0f}"
+            f"[mirror-x] prepared xyz folded onto the hemisphere of sign {mirror_x_sign:+.0f} "
+            f"about the atlas midline"
         )
     pids = df_good[pid_col].astype(str).to_numpy()
 

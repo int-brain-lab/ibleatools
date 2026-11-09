@@ -43,6 +43,7 @@ from typing import Optional
 
 import numpy as np
 
+from ..hemispheres import MIDLINE_X, mirror_xyz_to_hemisphere
 from .progress import ProgressCallback, report, sub_progress
 from .result import AlignmentResult
 
@@ -182,11 +183,17 @@ def mad(values: np.ndarray) -> float:
     )
 
 
-def mirror_left(xyz: np.ndarray) -> np.ndarray:
-    """A copy with x -> -|x| (the model's left hemisphere)."""
-    out = np.array(xyz, copy=True)
-    out[..., 0] = -np.abs(out[..., 0])
-    return out
+def mirror_left(xyz: np.ndarray, unit: float = 1.0) -> np.ndarray:
+    """A copy folded onto the model's left hemisphere about the atlas midline. ``unit``: one metre
+    in the units of ``xyz`` (1 for metres, 1e6 for µm)."""
+    return mirror_xyz_to_hemisphere(xyz, -1.0, MIDLINE_X * unit)
+
+
+def left_x_um(x_um: float) -> float:
+    """An ML coordinate (µm) folded onto the model's left hemisphere about the atlas midline,
+    as :func:`mirror_left` does for positions: for the trajectory centre."""
+    midline_um = MIDLINE_X * 1e6
+    return midline_um - abs(float(x_um) - midline_um)
 
 
 def valid_positions(xyz: np.ndarray) -> np.ndarray:
@@ -477,7 +484,7 @@ def trace_points(
     length = max(float(params.length), 1e-6)
     seg = length / float(n)
     vertices = np.empty((n + 1, 3), dtype=np.float32)
-    vertices[0] = np.array([-abs(params.x), params.y, params.z], dtype=np.float32)
+    vertices[0] = np.array([left_x_um(params.x), params.y, params.z], dtype=np.float32)
     remaining, section = 0.5 * length, 0
     while (
         remaining > 1e-6 and section < n
@@ -494,7 +501,7 @@ def trace_points(
     sid = np.minimum((arc / seg).astype(np.int64), n - 1)
     local = arc - sid.astype(np.float32) * seg
     points = vertices[sid] + local[:, None] * directions[sid]
-    points[:, 0] = -np.abs(points[:, 0])
+    points = mirror_left(points, unit=1e6)
     return points.astype(np.float32), bends
 
 
@@ -524,7 +531,7 @@ def planned_seed(
         np.clip(cfg.probe_length_um, cfg.min_probe_length_um, cfg.max_probe_length_um)
     )
     params = TraceParams(
-        x=-abs(float(center[0])),
+        x=left_x_um(center[0]),
         y=float(center[1]),
         z=float(center[2]),
         theta=theta,
@@ -643,7 +650,7 @@ def plan_axis_um(planned_xyz_m: np.ndarray) -> tuple[np.ndarray, float]:
     ok = valid_positions(xyz)
     if ok.sum() < 2:
         return np.array([0.0, 0.0, -1.0]), 0.0
-    pts = mirror_left(xyz[ok] * 1e6)
+    pts = mirror_left(xyz[ok] * 1e6, unit=1e6)
     a = np.linalg.svd(pts - pts.mean(axis=0), full_matrices=False)[2][0]
     if np.dot(a, pts[-1] - pts[0]) < 0:
         a = -a
@@ -840,7 +847,7 @@ def plan_neighbourhood_traces(
         * stretch[:, None, None]
         + (c + shift)[:, None, :]
     )
-    return mirror_left(tr)
+    return mirror_left(tr, unit=1e6)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -905,7 +912,7 @@ def anneal(
             else p.bends
         )
         p = TraceParams(
-            x=-abs(p.x),
+            x=left_x_um(p.x),
             y=p.y,
             z=p.z,
             theta=float(np.clip(p.theta, lo, hi)),
@@ -982,7 +989,7 @@ def anneal(
         if move == 0:  # translation, isotropic with RMS sig_xyz
             step = rng.normal(0.0, sig_xyz / np.sqrt(3.0), size=3)
             prop.x, prop.y, prop.z = (
-                -abs(prop.x + float(step[0])),
+                left_x_um(prop.x + float(step[0])),
                 prop.y + float(step[1]),
                 prop.z + float(step[2]),
             )
@@ -1400,7 +1407,9 @@ class EphysOnlyLocalizer:
         bin_of_channel = np.full(len(recorded), -1, dtype=np.int32)
         for b, rows in enumerate(bins.channel_idx):
             bin_of_channel[rows] = b
-        right = bool(np.median(planned_xyz[valid_positions(planned_xyz), 0]) > 0)
+        right = bool(
+            np.median(planned_xyz[valid_positions(planned_xyz), 0]) > MIDLINE_X
+        )
         diagnostics = dict(
             candidate_score=cand_score[keep],
             candidate_distance_um=dist[keep],
@@ -1554,9 +1563,7 @@ class EphysOnlyLocalizer:
 def _to_metres(xyz_um: np.ndarray, right_hemisphere: bool) -> np.ndarray:
     """µm (left) -> m, mirrored to the right hemisphere when the plan is there."""
     out = np.asarray(xyz_um, dtype=np.float64) * 1e-6
-    if right_hemisphere:
-        out[..., 0] = np.abs(out[..., 0])
-    return out
+    return mirror_xyz_to_hemisphere(out, 1.0) if right_hemisphere else out
 
 
 def _subsample(scores: np.ndarray, n_max: int) -> np.ndarray:
