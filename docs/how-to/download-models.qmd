@@ -8,12 +8,12 @@ on it.
 
 ## The available models
 
-| Hugging Face repo | Family | Direction | Vintage |
+| Hugging Face repo | Family | Direction | Tag |
 |---|---|---|---|
 | [`int-brain-lab/ea-decoder-channel-xgboost`](https://huggingface.co/int-brain-lab/ea-decoder-channel-xgboost) | Region decoder | features → brain region, per channel | `2026_W42` |
 | [`int-brain-lab/ea-decoder-channel-transformer`](https://huggingface.co/int-brain-lab/ea-decoder-channel-transformer) | Whole-probe region decoder | a probe's features → brain region per channel | `2026_W42` |
-| [`int-brain-lab/ea-encoder-channel`](https://huggingface.co/int-brain-lab/ea-encoder-channel) | Spatial encoder | position → channel features | `2026_W45` |
-| [`int-brain-lab/ea-encoder-unit`](https://huggingface.co/int-brain-lab/ea-encoder-unit) | Unit encoder | position → unit phenotype; units → putative cell types | `2026_W45` |
+| [`int-brain-lab/ea-encoder-channel`](https://huggingface.co/int-brain-lab/ea-encoder-channel) | Spatial encoder | position → channel features | `0.0.1` |
+| [`int-brain-lab/ea-encoder-unit`](https://huggingface.co/int-brain-lab/ea-encoder-unit) | Unit encoder | position → unit phenotype; units → putative cell types | `0.0.1` |
 
 All four load through the same call. See [model families](../explanation/model-families.qmd)
 for how they differ conceptually.
@@ -45,24 +45,26 @@ model = load_pretrained(
     "int-brain-lab/ea-decoder-channel-xgboost", revision="2026_W42"
 )
 
-# Not pinned: loads 'main', which changes when a new vintage is published
+# Not pinned: loads 'main', which changes when a new model is published
 model = load_pretrained("int-brain-lab/ea-decoder-channel-xgboost")
 ```
 
 Without `revision=`, `load_pretrained` loads the `main` branch, which points to the
-currently recommended model. When a new vintage is published, `main` moves to it, and the
+currently recommended model. When a new model is published, `main` moves to it, and the
 same code then loads a different model and can return different predictions. Pin the
 revision in any analysis you want to reproduce. `load_pretrained` logs a warning when no
 revision is given:
 
 ```text
 WARNING  no revision pinned for int-brain-lab/ea-decoder-channel-xgboost: using 'main',
-         which tracks the currently recommended model and will change when a new vintage
-         is published. Pass revision='<vintage>' for a reproducible result.
+         which tracks the currently recommended model and will change when a new model
+         is published. Pass revision='<tag>' for a reproducible result.
 ```
 
-Revision tags are **vintages** — `YYYY_Www` week labels matching the release the model
-belongs to. A decoder and its features must come from the same vintage; see
+The tags of the encoders are **versions** (`0.0.1`, `0.1.0`, ...); their manifests record the
+feature release (vintage) they were trained on. The tags of the region decoders are
+**vintages** — `YYYY_Www` week labels matching the feature release the model belongs to, so a
+decoder and its features must come from the same vintage; see
 [core concepts](../explanation/concepts.qmd). An encoder's `predict` takes only
 positions, so it has no feature vintage to match.
 

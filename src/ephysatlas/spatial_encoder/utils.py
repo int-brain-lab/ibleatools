@@ -182,19 +182,19 @@ class ContextAtlasManager:
         self.gene_pca = gene_exp_vol  # [P_gene, Xh, Zh, Yh]
         assert self.cell_pca.ndim == 4 and self.gene_pca.ndim == 4
 
-    def voxel_indices(self, xyz_m: np.ndarray, mode="clip") -> tuple:
-        """``(xi, yi, zi)``: the voxel of the 200 µm grid nearest to each position mirrored onto
-        the left hemisphere."""
+    def voxel_indices(self, xyz_m: np.ndarray, mode="clip", mirror=True) -> tuple:
+        """``(xi, yi, zi)``: the voxel of the 200 µm grid nearest to each position, mirrored onto
+        the left hemisphere unless ``mirror`` is False."""
         _, n_x, n_z, n_y = self.cell_pca.shape
-        i = self.bc.xyz2i(mirror_xyz_to_left(xyz_m), mode=mode)
+        i = self.bc.xyz2i(mirror_xyz_to_left(xyz_m) if mirror else xyz_m, mode=mode)
         return tuple(
             np.clip(i[:, a], 0, n - 1) for a, n in ((0, n_x), (1, n_y), (2, n_z))
         )
 
-    def sample_context_numpy_m(self, xyz_m: np.ndarray, mode="raise"):
-        """The context of the voxel nearest to each position mirrored onto the left hemisphere,
-        as the model was trained."""
-        xi, yi, zi = self.voxel_indices(xyz_m, mode=mode)
+    def sample_context_numpy_m(self, xyz_m: np.ndarray, mode="raise", mirror=True):
+        """The context of the voxel nearest to each position; ``mirror`` folds positions onto the
+        left hemisphere, as the model was trained."""
+        xi, yi, zi = self.voxel_indices(xyz_m, mode=mode, mirror=mirror)
         return {
             "cell_pc": self.cell_pca[:, xi, zi, yi].T.astype(np.float32),  # [N, P_cell]
             "gene_pc": self.gene_pca[:, xi, zi, yi].T.astype(np.float32),  # [N, P_gene]
@@ -331,24 +331,9 @@ def LoadInsertionData(
 def region_ids_from_xyz(
     brain_atlas, xyz_m_np: np.ndarray, mapping: str = "Cosmos", mode: str = "raise"
 ) -> np.ndarray:
-    """
-    xyz_m_np: [C, 3] in meters
-    mapping: "Cosmos" or "Allen" (must be supported by :func:`xyz_to_region_ids`)
-    Returns: np.ndarray [C] of region IDs (int)
-    """
-    idx = brain_atlas.bc.xyz2i(xyz_m_np, mode=mode)  # meters → voxel indices
-    # Delegates to xyz_to_region_ids(idx, brain_atlas, mapping=...) below
-    return xyz_to_region_ids(idx, brain_atlas, mapping=mapping)
-
-
-def xyz_to_region_ids(xyz_i, brain_atlas, mapping="Cosmos"):
-    """
-    xyz_i: [C, 3]
-    """
-    inds = brain_atlas._lookup_inds(xyz_i)
-    regions = brain_atlas._get_mapping(mapping=mapping)[brain_atlas.label.flat[inds]]
-
-    return regions
+    """``[C]`` Allen id of the region of each position (m) in ``mapping`` (0, void, outside the
+    brain): ``BrainAtlas.get_labels``."""
+    return brain_atlas.get_labels(xyz_m_np, mapping=mapping, mode=mode)
 
 
 def concat_context(cell_pc: np.ndarray, gene_pc: np.ndarray) -> np.ndarray:
@@ -1023,24 +1008,13 @@ class NeighborCollate:
         neigh_lists = self.nn.query_radius(p_q.numpy(), r_m=self.r_m, k_cap=8 * self.M)
 
         for b in range(B):
+            cand = np.asarray(neigh_lists[b], dtype=np.int64)
             # Exclude same-probe neighbors for recorded voxels
-            exclude_pids = set()
             if has_ephys[b] and not self.allow_same_probe:
-                exclude_pids = {pids[b].item()}
-
-            # build neighbor set
-            cand = [
-                ci
-                for ci in neigh_lists[b]
-                if int(self.bank_pid[ci]) not in exclude_pids
-            ]
-            L = len(cand)
-
-            if L > self.M:
+                cand = cand[np.asarray(self.bank_pid)[cand] != pids[b].item()]
+            if len(cand) > self.M:
                 # random subset, not just first-M
-                sel = np.random.choice(cand, size=self.M, replace=False)
-                cand = sel.tolist()
-
+                cand = np.random.choice(cand, size=self.M, replace=False)
             L = len(cand)
 
             if L > 0:
@@ -1315,27 +1289,16 @@ def _sample_ctx_for_probe_xyz_std(
     ctx_mean: torch.Tensor,  # [F_ctx]
     ctx_std: torch.Tensor,  # [F_ctx]
 ) -> np.ndarray:
+    """The standardised context at each position; zero where the position is missing or the
+    context empty (outside the volumes), as in training and :class:`SpatialEncoder`."""
     xyz_m = np.asarray(xyz_m, dtype=np.float32)
     valid = _valid_xyz_mask_np(xyz_m)
-
     ctx = np.zeros((xyz_m.shape[0], int(ctx_mean.numel())), dtype=np.float32)
     if valid.any():
-        xyz_use = xyz_m[valid].copy()
-        try:
-            xyz_use = mirror_xyz_to_left(xyz_use)
-        except Exception:
-            pass
-
-        pack = ctx_manager.sample_context_numpy_m(xyz_use, mode="clip")
-        ctx_valid = np.concatenate([pack["cell_pc"], pack["gene_pc"]], axis=1).astype(
-            np.float32
-        )
-
-        ctx_mean_np = ctx_mean.detach().cpu().numpy().astype(np.float32)
-        ctx_std_np = ctx_std.detach().cpu().numpy().astype(np.float32)
-        ctx_valid = (ctx_valid - ctx_mean_np) / (ctx_std_np + 1e-8)
-        ctx[valid] = ctx_valid
-
+        pack = ctx_manager.sample_context_numpy_m(xyz_m[valid], mode="clip")
+        ctx[valid] = np.concatenate([pack["cell_pc"], pack["gene_pc"]], axis=1)
+    filled = np.any(ctx != 0, axis=1)
+    ctx[filled] = (ctx[filled] - ctx_mean.cpu().numpy()) / ctx_std.cpu().numpy()
     return ctx
 
 

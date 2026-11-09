@@ -1104,12 +1104,6 @@ def prepare_latest_cells_encoder_data(
         target_map="Cosmos",
     ).astype(np.int64)
 
-    known_region_ids = set(map(int, br.id))
-    is_known_cosmos_id = np.asarray(
-        [int(region_id) in known_region_ids for region_id in cosmos_ids],
-        dtype=bool,
-    )
-
     x_col, y_col, z_col, xyz_in_meters = _find_xyz_columns(df_good)
     xyz = df_good[[x_col, y_col, z_col]].to_numpy(dtype=np.float32)
     xyz_m = xyz if xyz_in_meters else xyz / 1e6
@@ -1127,9 +1121,8 @@ def prepare_latest_cells_encoder_data(
         valid &= np.isfinite(stpc).all(axis=1)
     valid &= np.isfinite(xyz_m).all(axis=1)
 
-    # Keep only valid, known Cosmos anatomical IDs.
+    # Keep only units in a Cosmos region (BrainRegions.remap returns known ids only).
     valid &= cosmos_ids != 0
-    valid &= is_known_cosmos_id
 
     df_good = df_good.iloc[np.flatnonzero(valid)].copy()
     waveforms = waveforms[valid]
@@ -1159,15 +1152,7 @@ def prepare_latest_cells_encoder_data(
         return_counts=True,
     )
 
-    id_to_index = {int(region_id): index for index, region_id in enumerate(br.id)}
-
-    region_acronyms = np.asarray(
-        [
-            str(br.acronym[id_to_index[int(region_id)]])
-            for region_id in unique_cosmos_ids
-        ],
-        dtype=object,
-    )
+    region_acronyms = br.id2acronym(unique_cosmos_ids).astype(object)
 
     order = np.argsort(unit_counts)[::-1]
 

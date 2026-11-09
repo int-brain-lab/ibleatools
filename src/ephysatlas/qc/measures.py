@@ -84,10 +84,11 @@ def gain(here: tuple, there: tuple) -> float:
 
 
 def probe_axis(xyz: np.ndarray) -> np.ndarray:
-    """Unit vector along the probe (first principal axis of the positions), top to tip."""
-    ok = np.isfinite(xyz).all(axis=1)
-    p = xyz[ok]
-    axis = np.linalg.svd(p - p.mean(axis=0), full_matrices=False)[2][0]
+    """Unit vector along the probe (the line fitted to the positions), top to tip."""
+    from iblatlas.atlas import Trajectory
+
+    p = xyz[np.isfinite(xyz).all(axis=1)]
+    axis = Trajectory.fit(p).vector
     if np.dot(axis, p[-1] - p[0]) < 0:
         axis = -axis
     return axis / np.linalg.norm(axis)

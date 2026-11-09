@@ -40,7 +40,7 @@ from ephysatlas.unit_level_encoder.config import DEFAULT_RESULTS_DIR
 # %% User settings (each can also be given on the command line; see --help) ----------------------
 METHODS_TO_RUN = ("histology", "histology_unit", "ephys_only")
 # Histology trace: "picks" (the reconstructed track, as an experimenter has it) or "human" (the
-# human alignment's channel positions, extended; the setting of the paper's Figure 5).
+# human alignment's channel positions, extended; optimistic).
 TRACE = "picks"
 SPLIT = "test"  # "test" (held out), or "validation"
 OUT_DIR = DEFAULT_RESULTS_DIR / "alignment" / f"heldout_{CHANNEL_MODEL_REVISION}"

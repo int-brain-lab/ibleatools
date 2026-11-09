@@ -19,9 +19,9 @@ DEFAULT_RESULTS_DIR = _default_dir("EPHYS_ATLAS_RESULTS_DIR", "results")
 # Where the published models live on the Hugging Face Hub. The unit model reuses the channel
 # model's frozen context volumes and probe split for the same vintage.
 UNIT_MODEL_REPO_ID = "int-brain-lab/ea-encoder-unit"
-# Hub tag of the released unit-level model. It is trained on the units, probe split and context
+# Hub tag (version) of the released unit-level model. It is trained on the units, probe split and context
 # volumes of ``Config.vintage``.
-UNIT_MODEL_REVISION = "2026_W45"
+UNIT_MODEL_REVISION = "0.0.1"
 CHANNEL_MODEL_REPO_ID = "int-brain-lab/ea-encoder-channel"
 
 # Paths are runtime settings, not part of the scientific configuration saved with a release.

@@ -31,8 +31,8 @@ from .progress import print_progress
 
 METHODS = ("histology", "histology_unit", "ephys_only")
 # Histology traces: the reconstructed track (Alyx picks; what an experimenter has) or the human
-# alignment's channel positions (the setting of the paper's Figure 5, optimistic: the trace is
-# built from the reference it is scored against).
+# alignment's channel positions (optimistic: the trace is built from the reference it is scored
+# against).
 TRACES = ("picks", "human")
 
 

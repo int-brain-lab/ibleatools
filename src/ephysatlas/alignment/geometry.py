@@ -40,13 +40,8 @@ def infer_metres(xyz: np.ndarray) -> np.ndarray:
 
 
 def region_ids(brain_atlas, xyz_m: np.ndarray, mapping: str = "Cosmos") -> np.ndarray:
-    """Region of each position in ``mapping``, as an index into ``brain_atlas.regions`` (0, void,
-    outside the brain).
-
-    These are the indices ``brain_atlas._label2rgb`` colours; comparing them compares regions. For
-    Allen region ids (e.g. for ``regions.get``) use ``brain_atlas.regions.id[...]`` of the result,
-    or ``brain_atlas.get_labels``.
-    """
+    """Allen id of the region of each position in ``mapping`` (0, void, outside the brain), for
+    ``brain_atlas.regions.get`` or ``id2acronym``."""
     from ephysatlas.spatial_encoder.utils import region_ids_from_xyz
 
     xyz_m = np.atleast_2d(np.asarray(xyz_m, dtype=np.float32))

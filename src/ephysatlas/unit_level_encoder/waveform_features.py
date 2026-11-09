@@ -67,9 +67,14 @@ def _frame_to_features(df: pd.DataFrame, fs: float) -> np.ndarray:
     def col(name):
         return pd.to_numeric(df[name], errors="coerce").to_numpy(np.float64)
 
-    peak_val, trough_val = col("peak_val"), col("trough_val")
     with np.errstate(divide="ignore", invalid="ignore"):
-        ratio_log = np.log(np.abs(peak_val / trough_val))
+        shape = ibldsp.waveforms.waveform_shape_features(
+            col("peak_time_idx") / fs,
+            col("trough_time_idx") / fs,
+            col("tip_time_idx") / fs,
+            col("peak_val"),
+            col("trough_val"),
+        )
     return np.column_stack(
         [
             col("depolarisation_slope"),
@@ -77,10 +82,10 @@ def _frame_to_features(df: pd.DataFrame, fs: float) -> np.ndarray:
             col("repolarisation_slope"),
             col("spatial_spread"),
             col("tip_val"),
-            (col("trough_time_idx") - col("peak_time_idx")) / fs,
-            (col("peak_time_idx") - col("tip_time_idx")) / fs,
-            trough_val - peak_val,
-            ratio_log,
+            shape["spike_width"],
+            shape["predepolarisation_width"],
+            shape["spike_amplitude"],
+            shape["peak_to_trough_ratio_log"],
             -col("invert_sign_peak"),
         ]
     ).astype(np.float32)
