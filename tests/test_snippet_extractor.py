@@ -586,110 +586,61 @@ class TestHistologyAndTrajectory(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.tmp)
         self.ap = write_spikeglx_recording(self.tmp, "np1", 1.0)
-        self.a, self.b = self.tmp / "a", self.tmp / "b"
-        for folder, content in (
-            (self.a, b'{"channel_0": {"x": 1}}'),
-            (self.b, b'{"channel_0": {"x": 2}}'),
-        ):
-            folder.mkdir()
-            (folder / "channel_locations.json").write_bytes(content)
+        self.loc = self.tmp / "channel_locations.json"
+        self.loc.write_bytes(b'{"channel_0": {"x": 1}}')
 
-    def test_files_and_folders_stored_byte_identical(self):
-        loc = self.tmp / "channel_locations.json"
-        loc.write_bytes(b'{"channel_0": {"x": 1}}')
-        (self.tmp / "tracks/sub").mkdir(parents=True)
-        (self.tmp / "tracks/sub/b.csv").write_bytes(b"Index,Region acronym\n0,CA1\n")
+    def test_files_stored_byte_identical(self):
+        """Keep each file's bytes and resolved source path under its file name."""
+        tracks = self.tmp / "tracks.csv"
+        tracks.write_bytes(b"Index,Region acronym\n0,CA1\n")
         out = extract_snippets(
             self.ap,
             self.tmp / "h.h5",
-            histology_raw=[loc, self.tmp / "tracks"],
+            histology_raw=[self.loc, tracks],
             t_starts=[0.1],
             duration=0.1,
         )
         with h5py.File(out) as f:
             self.assertEqual(set(f[REC]["histology"]), {"raw"})
             self.assertEqual(
-                set(f[REC]["histology/raw"]), {"channel_locations.json", "tracks"}
+                set(f[REC]["histology/raw"]), {"channel_locations.json", "tracks.csv"}
             )
-            self.assertEqual(
-                f[REC]["histology/raw/channel_locations.json"].dtype, np.uint8
-            )
-            self.assertEqual(
-                f[REC]["histology/raw/channel_locations.json"][()].tobytes(),
-                loc.read_bytes(),
-            )
-            self.assertEqual(
-                f[REC]["histology/raw/tracks/sub/b.csv"][()].tobytes(),
-                (self.tmp / "tracks/sub/b.csv").read_bytes(),
-            )
-            self.assertEqual(
-                f[REC]["histology/raw/channel_locations.json"].attrs["source_path"],
-                str(loc.resolve()),
-            )
-            self.assertEqual(
-                f[REC]["histology/raw/tracks/sub/b.csv"].attrs["source_path"],
-                str((self.tmp / "tracks/sub/b.csv").resolve()),
-            )
+            for path in (self.loc, tracks):
+                stored = f[REC][f"histology/raw/{path.name}"]
+                self.assertEqual(stored.dtype, np.uint8)
+                self.assertEqual(stored[()].tobytes(), path.read_bytes())
+                self.assertEqual(stored.attrs["source_path"], str(path.resolve()))
 
-    def test_name_collision_raises(self):
-        # two different files that would both be stored as
-        # histology/raw/channel_locations.json
-        out = self.tmp / "new" / "c.h5"
-        with self.assertRaisesRegex(ValueError, "histology/raw/channel_locations.json"):
-            extract_snippets(
-                self.ap,
-                out,
-                histology_raw=[
-                    self.a / "channel_locations.json",
-                    self.b / "channel_locations.json",
-                ],
-                t_starts=[0.1],
-                duration=0.1,
-            )
-        self.assertFalse(out.parent.exists())
-
-    def test_over_limit_raises_naming_the_largest_files(self):
-        folder = self.tmp / "brainreg"
+    def test_histology_folder_is_not_accepted(self):
+        """Let reading a folder fail and remove the temporary output."""
+        # only files are stored; a folder stops when its bytes are read
+        folder = self.tmp / "tracks"
         folder.mkdir()
-        # sparse files: no real disk use
-        sizes = {
-            self.tmp / "registered_atlas.tiff": 101 * 1024**2,
-            folder / "a.tiff": 3 * 1024**2,
-            folder / "b.tiff": 2 * 1024**2,
-            folder / "c.tiff": 1024**2,
-            folder / "tracks.csv": 10,
-        }
-        for path, size in sizes.items():
-            with open(path, "wb") as fid:
-                fid.truncate(size)
+        with self.assertRaises(IsADirectoryError):
+            extract_snippets(
+                self.ap,
+                self.tmp / "d.h5",
+                histology_raw=[folder],
+                t_starts=[0.1],
+                duration=0.1,
+            )
+        self.assertEqual(list(self.tmp.glob("d.h5*")), [])
+
+    def test_over_limit_raises(self):
+        """Reject oversized raw histology before creating the output folder."""
+        volume = self.tmp / "registered_atlas.tiff"
+        with open(volume, "wb") as fid:
+            fid.truncate(101 * 1024**2)  # a sparse file: no real disk use
         out = self.tmp / "new" / "big.h5"
-        with self.assertRaises(ValueError) as ctx:
+        with self.assertRaisesRegex(ValueError, "100 MB"):
             extract_snippets(
                 self.ap,
                 out,
-                histology_raw=[self.tmp / "registered_atlas.tiff", folder],
+                histology_raw=[volume],
                 t_starts=[0.1],
                 duration=0.1,
             )
-        message = str(ctx.exception)
-        for named in ("registered_atlas.tiff", "brainreg/a.tiff", "brainreg/b.tiff"):
-            self.assertIn(named, message)
-        for not_named in ("c.tiff", "tracks.csv"):
-            self.assertNotIn(not_named, message)
         self.assertFalse(out.parent.exists())
-
-    def test_empty_histology_folder_warns(self):
-        empty = self.tmp / "empty"
-        empty.mkdir()
-        with self.assertLogs("ephysatlas.snippet_extractor", level="WARNING") as logs:
-            extract_snippets(
-                self.ap,
-                self.tmp / "e.h5",
-                histology_raw=[empty],
-                t_starts=[0.1],
-                duration=0.1,
-            )
-        self.assertIn("no files", logs.output[0])
 
     def test_missing_histology_path_raises(self):
         out = self.tmp / "new" / "m.h5"
@@ -697,10 +648,7 @@ class TestHistologyAndTrajectory(unittest.TestCase):
             extract_snippets(
                 self.ap,
                 out,
-                histology_raw=[
-                    self.a / "channel_locations.json",
-                    self.tmp / "nope.json",
-                ],
+                histology_raw=[self.loc, self.tmp / "nope.json"],
                 t_starts=[0.1],
                 duration=0.1,
             )
@@ -732,15 +680,14 @@ class TestHistologyAndTrajectory(unittest.TestCase):
             )
 
     def test_bad_trajectory_raises(self):
+        """Expose the missing-key and float-conversion errors before writing."""
         good = dict(x=0, y=0, z=0, depth=1, theta=0, phi=0)
         out = self.tmp / "new" / "bt.h5"
-        for traj in (
-            {k: v for k, v in good.items() if k != "phi"},  # phi missing
-            {**good, "x": "a"},  # not numeric
-            {**good, "x": "1.5"},  # float() would accept this
-            {**good, "x": True},
-        ):  # bool is not a number here
-            with self.assertRaises(ValueError):
+        for traj, error in (
+            ({k: v for k, v in good.items() if k != "phi"}, KeyError),  # phi missing
+            ({**good, "x": "a"}, ValueError),  # not a number
+        ):
+            with self.assertRaises(error):
                 extract_snippets(
                     self.ap, out, trajectory=traj, t_starts=[0.1], duration=0.1
                 )

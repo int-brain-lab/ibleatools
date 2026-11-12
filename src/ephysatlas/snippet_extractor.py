@@ -34,7 +34,6 @@ import argparse
 import datetime
 import importlib.metadata
 import logging
-import numbers
 import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -47,7 +46,6 @@ from neuropixel import NP2Converter
 
 from ephysatlas import __version__ as ibleatools_version
 from ephysatlas._snippet_bands import _write_band, _write_np2_lf
-from ephysatlas._snippet_histology import _collect_histology_files
 from ephysatlas.feature_calculators import (
     SnippetWindow,
     check_snippet_overlap,
@@ -58,6 +56,8 @@ from ephysatlas.feature_calculators.spikeglx_like import LF_LATENCY_SAMPLES
 LOGGER = logging.getLogger(__name__)
 
 TRAJECTORY_KEYS = ("x", "y", "z", "depth", "theta", "phi")
+# Limit on the total size of the raw histology files of one recording.
+MAX_HISTOLOGY_BYTES = 100 * 1024**2
 # Seed of the stratified draw in get_snippet_start_times (its default).
 SNIPPET_SEED = 0
 
@@ -113,9 +113,9 @@ def extract_snippets(
             snippet file, and the recording is added to it.
         name: Name of the recording inside the file, stored under ``recordings/<name>``. If
             None, the AP file name without ``.ap.bin`` / ``.ap.cbin``.
-        histology_raw: Other histology files or folders to copy into the output as raw bytes,
-            e.g. track CSVs of this probe. A folder is copied with everything under it.
-            The total is limited to 100 MB, which keeps image volumes out.
+        histology_raw: Other histology files to copy into the output as raw bytes, e.g.
+            track CSVs of this probe. Each is stored under its file name. The total is
+            limited to 100 MB, which keeps image volumes out.
         t_starts: Snippet start times in seconds. If None, ``n_snippets`` start times are
             chosen by ``get_snippet_start_times`` over the length of the data in the files.
         n_snippets: Number of snippets when ``t_starts`` is None.
@@ -132,11 +132,12 @@ def extract_snippets(
         ValueError: ``ap_file`` is not a SpikeGLX AP data file, ``output_file`` already
             holds a recording called ``name``, the probe type is not supported, the
             ``.meta`` file has no channel map, the recording is too short for automatic
-            times, explicit snippets overlap or reach outside the data, two histology
-            files get the same name, the histology is over 100 MB, or trajectory keys or
-            values are invalid.
+            times, explicit snippets overlap or reach outside the data, the histology
+            files are over 100 MB, or a trajectory value is not a number.
         FileNotFoundError: The ``.meta`` file of ``ap_file``, a required NP1/3A LF file
-            (both raised by ``spikeglx``), or a histology path does not exist.
+            (both raised by ``spikeglx``), or a histology file does not exist.
+        IsADirectoryError: A ``histology_raw`` path is a folder instead of a file.
+        KeyError: ``trajectory`` lacks one of ``TRAJECTORY_KEYS``.
     """
     ap_file, output_file = Path(ap_file), Path(output_file)
     if ".ap." not in ap_file.name or ap_file.suffix not in (".bin", ".cbin"):
@@ -157,26 +158,17 @@ def extract_snippets(
                     "Python)."
                 )
 
-    # Validate small optional inputs before opening the recording or creating output.
-    histology_files = _collect_histology_files(histology_raw or ())
+    # Check the total size and convert the trajectory before opening the recording.
+    # The size limit keeps image volumes out of the file.
+    histology_raw = [Path(path) for path in histology_raw or ()]
+    histology_bytes = sum(path.stat().st_size for path in histology_raw)
+    if histology_bytes > MAX_HISTOLOGY_BYTES:
+        raise ValueError(
+            f"The histology files total {histology_bytes / 1024**2:.0f} MB, over the "
+            f"{MAX_HISTOLOGY_BYTES // 1024**2} MB limit. Leave out image volumes and pass "
+            "only the small channel location, pick and track files."
+        )
     if trajectory is not None:
-        missing = [key for key in TRAJECTORY_KEYS if key not in trajectory]
-        if missing:
-            raise ValueError(
-                f"trajectory is missing {missing}, it needs all of {list(TRAJECTORY_KEYS)}"
-            )
-        # bool is an int subclass, so True would pass as a number.
-        not_numbers = [
-            key
-            for key in TRAJECTORY_KEYS
-            if isinstance(trajectory[key], bool)
-            or not isinstance(trajectory[key], numbers.Real)
-        ]
-        if not_numbers:
-            raise ValueError(
-                "trajectory values must be numbers, got "
-                + ", ".join(f"{key}={trajectory[key]!r}" for key in not_numbers)
-            )
         trajectory = {key: float(trajectory[key]) for key in TRAJECTORY_KEYS}
 
     # Probe facts come from the meta: spikeglx.Reader fails with unclear errors on
@@ -293,14 +285,14 @@ def extract_snippets(
             if converter is not None:
                 raw_bytes += _write_np2_lf(rec, converter, order, *reads["lf"])
 
-            if histology_files:
+            if histology_raw:
                 group = rec.create_group("histology")
-                for hist_name, path in histology_files.items():
+                for path in histology_raw:
                     dataset = group.create_dataset(
-                        f"raw/{hist_name}",
+                        f"raw/{path.name}",
                         data=np.frombuffer(path.read_bytes(), dtype=np.uint8),
                     )
-                    dataset.attrs["source_path"] = str(path)
+                    dataset.attrs["source_path"] = str(path.resolve())
             if trajectory is not None:
                 rec.create_group("trajectory").attrs.update(trajectory)
         size = partial.stat().st_size
@@ -370,7 +362,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         type=Path,
         nargs="+",
         metavar="PATH",
-        help="other histology files or folders of this probe, copied as they are",
+        help="other histology files of this probe, copied as they are",
     )
     parser.add_argument(
         "--t-starts",

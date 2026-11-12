@@ -30,7 +30,7 @@ ibleatools-snippets /data/subjectA/2026-01-15/probe00/run_g0_t0.imec0.ap.cbin \
 
 - `-o` is the collection to write. The first call creates it; later calls append independent recordings. A collection name such as `collection.h5` or `lab_batch_01.h5` need not describe one subject or date.
 - `--name` is the recording's identifier inside that collection. Use a stable, unique name such as `subjectA_2026-01-15_probe00`; include a session or run identifier when the same probe was recorded more than once that day. Without `--name`, the AP filename without `.ap.bin` / `.ap.cbin` is used. Those filenames often repeat across subjects and dates.
-- `--histology-raw` is optional. List files or folders of this recording's histology, for
+- `--histology-raw` is optional. List files of this recording's histology, for
   example tracing CSVs or a `channel_locations.json`. They are copied as they are for later
   interpretation; this option does not populate a structured channel table. The total is
   limited to 100 MB per recording, so whole-brain image volumes are rejected.
