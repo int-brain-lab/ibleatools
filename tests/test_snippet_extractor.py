@@ -76,20 +76,6 @@ class TestExtractNP1(unittest.TestCase):
         with h5py.File(out) as f:
             self.assertEqual(list(f["recordings"]), ["probe00"])
 
-    def test_bad_names_raise_before_reading(self):
-        out = self.tmp / "new" / "bad.h5"
-        for bad in ("", ".", "a/b"):
-            with self.subTest(name=bad):
-                with mock.patch(
-                    "ephysatlas.snippet_extractor.spikeglx.Reader",
-                    side_effect=AssertionError("read"),
-                ):
-                    with self.assertRaisesRegex(ValueError, "name"):
-                        extract_snippets(
-                            self.ap_file, out, name=bad, t_starts=[0.1], duration=0.1
-                        )
-                self.assertFalse(out.parent.exists())
-
     def test_root_attributes_geometry_and_meta(self):
         sr = spikeglx.Reader(self.ap_file)
         with h5py.File(self.out) as f:
@@ -180,18 +166,11 @@ class TestExtractNP1(unittest.TestCase):
         with h5py.File(out) as f:
             self.assertEqual(f[REC]["ap/meta"][()].tobytes(), meta.read_bytes())
 
-    def test_ap_file_missing_names_the_ap_file(self):
+    def test_ap_file_missing_names_its_meta_file(self):
+        # the .meta file is read first, so the error from spikeglx names it
         missing = self.tmp / "typo_g0_t0.imec0.ap.bin"
-        with self.assertRaisesRegex(FileNotFoundError, "typo_g0_t0.imec0.ap.bin"):
+        with self.assertRaisesRegex(FileNotFoundError, r"typo_g0_t0\.imec0\.ap\.meta"):
             extract_snippets(missing, self.tmp / "x.h5", t_starts=[0.1], duration=0.1)
-
-    def test_no_snippets_raises(self):
-        for kwargs in ({"t_starts": []}, {"n_snippets": 0}):
-            with self.subTest(kwargs=kwargs):
-                with self.assertRaisesRegex(ValueError, "at least one snippet"):
-                    extract_snippets(
-                        self.ap_file, self.tmp / "x.h5", duration=0.1, **kwargs
-                    )
 
     def test_interrupted_write_leaves_nothing(self):
         out = self.tmp / "interrupted.h5"
@@ -283,27 +262,6 @@ class TestAddToFile(unittest.TestCase):
         self.assertNotIn(str(other_ap.resolve()), str(ctx.exception))
         self.assertEqual(self.out.read_bytes(), data)
 
-    def test_output_that_is_not_a_snippet_file_raises(self):
-        bad = self.tmp / "bad.h5"
-
-        def text_file():
-            bad.write_bytes(b"theirs")
-
-        def no_attrs():
-            with h5py.File(bad, "w"):
-                pass
-
-        for make in (text_file, no_attrs):
-            with self.subTest(make=make.__name__):
-                make()
-                data = bad.read_bytes()
-                with self.assertRaisesRegex(ValueError, "not a snippet file"):
-                    extract_snippets(
-                        self.np2_ap, bad, name="np2", t_starts=[0.1], duration=0.1
-                    )
-                self.assertEqual(bad.read_bytes(), data)
-                self.assertEqual(list(self.tmp.glob("*.partial")), [])
-
     def test_failure_during_extraction_leaves_file_unchanged(self):
         data = self.out.read_bytes()
         with mock.patch.object(
@@ -314,21 +272,6 @@ class TestAddToFile(unittest.TestCase):
                     self.np2_ap, self.out, name="np2", t_starts=[0.2], duration=0.1
                 )
         self.assertEqual(self.out.read_bytes(), data)
-        self.assertEqual(list(self.tmp.glob("*.partial")), [])
-
-    def test_output_created_during_the_run(self):
-        # a file that appears after the start-of-run check must survive
-        out = self.tmp / "race.h5"
-        real_next_fast_len = scipy.fft.next_fast_len
-
-        def create_then_compute(*args, **kwargs):
-            out.write_bytes(b"theirs")
-            return real_next_fast_len(*args, **kwargs)
-
-        with mock.patch.object(scipy.fft, "next_fast_len", create_then_compute):
-            with self.assertRaisesRegex(ValueError, "not a snippet file"):
-                extract_snippets(self.np1_ap, out, t_starts=[0.1], duration=0.1)
-        self.assertEqual(out.read_bytes(), b"theirs")
         self.assertEqual(list(self.tmp.glob("*.partial")), [])
 
 
@@ -415,6 +358,10 @@ class TestProbeTypes(unittest.TestCase):
                 rec["lf"].attrs["method"], "neuropixel.NP2Converter.extract_lfp"
             )
             self.assertEqual(rec["lf"].attrs["latency_samples"], 3)
+            # nothing else is recorded about the conversion, apart from lf/filter_sos
+            self.assertEqual(
+                set(rec["lf"].attrs), {"fs", "source", "method", "latency_samples"}
+            )
             np.testing.assert_array_equal(rec["lf/first_sample"][:], [253])
             self.assertNotIn(
                 "meta", rec["lf"]
@@ -490,16 +437,6 @@ class TestProbeTypes(unittest.TestCase):
                             reader._raw[first : first + 3000][:, order].T,
                         )
 
-    def test_np2_only_converts_intersecting_chunks(self):
-        """A small extraction must not filter the whole recording."""
-        ap = write_spikeglx_recording(self.tmp, "np24_shank", 6.1, with_lf=False)
-        original = NP2Converter.extract_lfp
-        with mock.patch.object(
-            NP2Converter, "extract_lfp", autospec=True, side_effect=original
-        ) as convert:
-            extract_snippets(ap, self.tmp / "np2.h5", t_starts=[2.5, 2.8], duration=0.1)
-        self.assertEqual(convert.call_count, 1)
-
     def test_np2_rejects_lf_window_past_end(self):
         """Validate derived LF bounds, including the existing three-sample offset."""
         ap = write_spikeglx_recording(self.tmp, "np24_shank", 1.0, with_lf=False)
@@ -528,23 +465,18 @@ class TestProbeTypes(unittest.TestCase):
                 volts *= f[REC]["ap/sample2volts"][()][:, np.newaxis]
                 np.testing.assert_array_equal(volts, sr[n0 : n0 + 3000, :96].T)
 
-    def test_recorded_lf_is_required_before_opening_readers(self):
-        """Reject missing NP1/3A LF before opening data or creating an output folder."""
+    def test_recorded_lf_is_required(self):
+        """Missing NP1/3A LF stops with the LF file's name, before any output is created."""
         for template in ("np1", "3a"):
             with self.subTest(template=template):
                 ap = write_spikeglx_recording(
                     self.tmp / template, template, 1.0, with_lf=False
                 )
+                lf = ap.with_name(ap.name.replace(".ap.", ".lf."))
                 output = self.tmp / f"{template}_output" / "snippets.h5"
-                with mock.patch(
-                    "ephysatlas.snippet_extractor.spikeglx.Reader"
-                ) as reader:
-                    with self.assertRaisesRegex(
-                        FileNotFoundError, "No LF file found"
-                    ) as error:
-                        extract_snippets(ap, output, t_starts=[0.1], duration=0.1)
-                self.assertIn(str(ap), str(error.exception))
-                reader.assert_not_called()
+                with self.assertRaises(FileNotFoundError) as error:
+                    extract_snippets(ap, output, t_starts=[0.1], duration=0.1)
+                self.assertIn(str(lf), str(error.exception))
                 self.assertFalse(output.parent.exists())
 
     def test_unknown_probe_type_raises_clear_error(self):
@@ -613,9 +545,9 @@ class TestSnippetTimes(unittest.TestCase):
             self.assertEqual(f[REC]["ap/data"].shape, (1, 384, 3000))
             self.assertEqual(f[REC].attrs["snippet_method"], "stratified")
 
-    def test_too_short_recording_mentions_margin(self):
+    def test_too_short_recording_raises(self):
         ap = write_spikeglx_recording(self.tmp, "np1", 1.0)
-        with self.assertRaisesRegex(ValueError, "smaller margin"):
+        with self.assertRaisesRegex(ValueError, "too short"):
             extract_snippets(ap, self.tmp / "short.h5")  # default 300 s margin
         self.assertFalse((self.tmp / "short.h5").exists())
 

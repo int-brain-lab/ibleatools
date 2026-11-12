@@ -7,7 +7,7 @@ This guide is for labs that share Neuropixels recordings with the IBL. Large raw
 ## Prerequisites
 
 - Python 3.12 or newer
-- A SpikeGLX recording of the probe: the `.ap.bin` or `.ap.cbin` file with its `.meta` file next to it. NP1.0 and 3A also require the matching `.lf.bin` / `.lf.cbin` file and its `.meta` file next to the AP file; extraction stops if LF is missing.
+- A SpikeGLX recording of the probe: the `.ap.bin` or `.ap.cbin` file with its `.meta` file next to it. NP1.0 and 3A also require the LF file and its `.meta` file next to the AP file, with the same name and extension: `.lf.bin` next to `.ap.bin`, or `.lf.cbin` next to `.ap.cbin`. Extraction stops if LF is missing.
 - Supported probes: Neuropixels 1.0, 3A and 2.x (including four-shank 2.4). Neuropixels 2 records no separate LF band; extraction stores both its unchanged wideband data and converter-derived LF. An adjacent NP2 `.lf` file is left untouched and is not used, since its processing history may differ. If your probe type is not supported, the command stops and says so; please tell us the probe type.
 
 ## Install
@@ -39,17 +39,15 @@ By default the command takes 5 snippets of 5 s, spread over the recording and le
 
 `ibleatools-snippets --help` lists everything.
 
-## NP2 LF conversion and reproducibility
+## LF for Neuropixels 2
 
-Every recording contains AP and LF snippets. For NP2, extraction calls `NP2Converter.extract_lfp` on the original converter chunks that overlap the requested LF windows. It preserves the converter's chunk positions, overlapping reads, tapering, discarded edges and conversion to `int16`. It reads surrounding AP samples from the original recording rather than filtering only the cropped snippets. Only the required chunks are converted, and no derived files are written beside the source recording.
+Every recording in the file has AP and LF snippets. Neuropixels 2 records no LF band, so the command makes it from the AP data with `NP2Converter.extract_lfp` of `ibl-neuropixel`. It reads the AP samples of each snippet with a short margin on both sides, so the filter does not start at the snippet's edge. The AP snippets are stored unchanged, and no file is written next to your recording.
 
-The saved NP2 LF samples match selecting the same sample indices from a full conversion with the same `ibl-neuropixel`, SciPy and NumPy versions. LF windows include the existing three-sample offset used by the direct SpikeGLX feature calculator; `lf/first_sample` records their exact positions in that LF stream. A reader should use these saved samples directly without applying another offset.
+The file marks LF as `recorded` (NP1.0, 3A) or `derived` (NP2). Derived LF comes with the filter coefficients and has no LF `.meta` file; the AP `.meta` is stored under `ap/meta`. LF snippets start three samples later than the AP snippets, as in the SpikeGLX feature calculator, and `lf/first_sample` gives their position in the LF data.
 
-The file identifies LF as `recorded` (NP1/3A) or `derived` (NP2). Derived LF includes the converter method, library versions, filter coefficients, chunk sizes, taper size and downsampling ratio. It has no original LF `.meta` file; the original AP metadata remains stored under `ap/meta`.
+The converter's low-pass filter is used as it is. Its cutoff is about 3 kHz where 1 kHz was intended; this is to be looked at separately. The AP snippets allow LF to be made again with another filter.
 
-The converter's current filter is preserved for reproducibility. Its approximately 3 kHz versus intended 1 kHz cutoff needs separate investigation; this tool does not change it.
-
-Raw NP2 AP snippets remain available for alternative processing later. Processing that needs additional samples outside those snippets will still require the original recording. A multi-shank input remains one recording, with channel-to-shank assignments stored in its geometry.
+A multi-shank recording stays one recording. The shank of each channel is in its geometry.
 
 ## Recordings from multiple subjects and dates
 

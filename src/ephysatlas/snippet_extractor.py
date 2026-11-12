@@ -22,8 +22,8 @@ File layout (``n`` snippets, ``c`` channels, sync channel removed)::
           meta                  uint8 (n_bytes,)   the original .ap.meta file, exact bytes
         lf/                     always present; as ap/, plus attrs source and latency_samples
                                 source="recorded" for NP1/3A, "derived" for NP2
-                                derived LF has no original .meta; filter_sos and conversion
-                                attributes record the NP2Converter processing instead
+                                derived LF has no original .meta; the method attribute
+                                and filter_sos record the NP2Converter filter instead
 
 Channel rows follow the order of ``spikeglx.Reader`` (``sr[...]`` and ``sr.geometry``).
 """
@@ -55,31 +55,6 @@ LOGGER = logging.getLogger(__name__)
 
 # Seed of the stratified draw in get_snippet_start_times (its default).
 SNIPPET_SEED = 0
-
-
-def _check_output_accepts(output_file: Path, name: str) -> None:
-    """Raise ValueError if an existing ``output_file`` can't take the recording ``name``.
-
-    Does nothing if ``output_file`` doesn't exist. Used before reading the recording and
-    again before it is added, because the file can change in between.
-    """
-    if not output_file.exists():
-        return
-    not_snippet_file = ValueError(
-        f"{output_file} is not a snippet file; choose another -o"
-    )
-    if not h5py.is_hdf5(output_file):
-        raise not_snippet_file
-    with h5py.File(output_file) as f:
-        if not isinstance(f.get("recordings"), h5py.Group):
-            raise not_snippet_file
-        if name in f.get("recordings", {}):
-            stored = f[f"recordings/{name}"].attrs
-            raise ValueError(
-                f"{output_file} already holds recording {name!r}, extracted from "
-                f"{stored['source_ap_file']} on {stored['created']}. If this is a different "
-                "recording, give it another name with --name (name=... in Python)."
-            )
 
 
 def _plan_reads(
@@ -117,20 +92,20 @@ def extract_snippets(
 ) -> Path:
     """Write raw AP and recorded or derived LF snippets of one SpikeGLX probe recording.
 
-    AP and NP1/3A LF samples are copied unchanged. NP2 LF matches the int16 output of
-    ``neuropixel.NP2Converter`` on the original recording, including chunk boundaries,
-    tapering and quantization; only the chunks needed for these snippets are processed.
+    AP and NP1/3A LF samples are copied unchanged. NP2 LF is made from the AP samples
+    around each snippet with ``neuropixel.NP2Converter.extract_lfp``, and converted to
+    int16 as the converter does.
     All LF windows start ``LF_LATENCY_SAMPLES`` late, matching the direct SpikeGLX feature
     calculator. ``first_sample`` records the exact source-band sample indices.
 
     Args:
         ap_file: The SpikeGLX ``.ap.bin`` or ``.ap.cbin`` file. Its ``.meta`` file must be next
-            to it. NP1/3A also require matching LF data and metadata next to it.
+            to it. NP1/3A also require the LF file of the same name and extension
+            (``.lf.bin`` or ``.lf.cbin``) with its ``.meta`` file next to it.
         output_file: ``.h5`` file to write; its folder is created. If it exists, it must be a
             snippet file, and the recording is added to it.
         name: Name of the recording inside the file, stored under ``recordings/<name>``. If
-            None, the AP file name without ``.ap.bin`` / ``.ap.cbin``. It may not be empty
-            or ``.``, and may not contain ``/``.
+            None, the AP file name without ``.ap.bin`` / ``.ap.cbin``.
         t_starts: Snippet start times in seconds. If None, ``n_snippets`` start times are
             chosen by ``get_snippet_start_times`` over the length of the data in the files.
         n_snippets: Number of snippets when ``t_starts`` is None.
@@ -141,13 +116,12 @@ def extract_snippets(
         Path of the written file.
 
     Raises:
-        ValueError: There are no snippets to extract, ``ap_file`` is not a SpikeGLX AP data
-            file, ``name`` is not a valid recording name, ``output_file`` exists but is not a
-            snippet file or already holds a recording called ``name``,
-            the probe type is not supported, the ``.meta`` file has no channel map, the
-            recording is too short for automatic times, explicit snippets overlap or reach
-            outside the data.
-        FileNotFoundError: The AP file or a required NP1/3A LF file does not exist.
+        ValueError: ``ap_file`` is not a SpikeGLX AP data file, ``output_file`` already
+            holds a recording called ``name``, the probe type is not supported, the
+            ``.meta`` file has no channel map, the recording is too short for automatic
+            times, explicit snippets overlap or reach outside the data.
+        FileNotFoundError: The ``.meta`` file of ``ap_file`` or a required NP1/3A LF file
+            does not exist (raised by ``spikeglx``).
     """
     ap_file, output_file = Path(ap_file), Path(output_file)
     if ".ap." not in ap_file.name or ap_file.suffix not in (".bin", ".cbin"):
@@ -155,20 +129,18 @@ def extract_snippets(
     if name is None:
         # Everything before the last ".ap.": rec_g0_t0.imec0.ap.cbin -> rec_g0_t0.imec0
         name = ap_file.name.rsplit(".ap.", 1)[0]
-    if name in ("", ".") or "/" in name:
-        raise ValueError(
-            f"Recording name {name!r} is not valid: it may not be empty or '.', "
-            "and may not contain '/'"
-        )
-    if not ap_file.exists():
-        raise FileNotFoundError(f"AP file not found: {ap_file}")
     automatic_times = t_starts is None
-    if (len(t_starts) if t_starts is not None else n_snippets) < 1:
-        raise ValueError(
-            "Extract at least one snippet: give t_starts or n_snippets >= 1"
-        )
-    # An existing output is checked before anything is read, and again before it is changed.
-    _check_output_accepts(output_file, name)
+    # A stored recording is never replaced, so a name can be used once per output file.
+    if output_file.exists():
+        with h5py.File(output_file) as f:
+            if name in f["recordings"]:
+                stored = f[f"recordings/{name}"].attrs
+                raise ValueError(
+                    f"{output_file} already holds recording {name!r}, extracted from "
+                    f"{stored['source_ap_file']} on {stored['created']}. If this is a "
+                    "different recording, give it another name with --name (name=... in "
+                    "Python)."
+                )
 
     # Probe facts come from the meta: spikeglx.Reader fails with unclear errors on
     # probe types it doesn't know.
@@ -191,17 +163,11 @@ def extract_snippets(
     neuropixel_version = int(version)
     probe_has_lf_band = version == 1
 
+    # NP1/3A record LF in a file of its own, next to the AP file. spikeglx.Reader raises
+    # FileNotFoundError below if it is missing.
     lf_file = None
     if probe_has_lf_band:
-        lf_base = ap_file.with_name(ap_file.name.replace(".ap.", ".lf."))
-        other_suffix = {".bin": ".cbin", ".cbin": ".bin"}[ap_file.suffix]
-        lf_candidates = (lf_base, lf_base.with_suffix(other_suffix))
-        lf_file = next((p for p in lf_candidates if p.exists()), None)
-        if lf_file is None:
-            raise FileNotFoundError(
-                f"No LF file found next to {ap_file}; NP1/3A extraction requires a matching "
-                ".lf.bin or .lf.cbin file with its .meta file."
-            )
+        lf_file = ap_file.with_name(ap_file.name.replace(".ap.", ".lf."))
 
     # The recording is always written to its own temporary file first, then renamed or
     # copied into the output, so a failure never leaves a half-written output.
@@ -229,15 +195,9 @@ def extract_snippets(
         # holds, and spikeglx.Reader corrects ns for that.
         length = min(ns / fs for fs, ns in bands.values())
         if automatic_times:
-            try:
-                t_starts = get_snippet_start_times(
-                    length, n_snippets, duration, margin=margin
-                )
-            except ValueError as error:
-                raise ValueError(
-                    f"{error}. Pass a smaller margin "
-                    "(margin=... in Python, --margin on the command line)."
-                ) from error
+            t_starts = get_snippet_start_times(
+                length, n_snippets, duration, margin=margin
+            )
         else:
             t_starts = np.asarray(t_starts, dtype=np.float64)
             check_snippet_overlap(
@@ -303,11 +263,10 @@ def extract_snippets(
             size / 1e6,
             raw_bytes / size,
         )
-        # Checked again because the output can change while the snippets are being written.
         if not output_file.exists():
             partial.rename(output_file)
         else:
-            _check_output_accepts(output_file, name)
+            # h5py refuses to copy onto a name that already exists.
             with h5py.File(partial) as src, h5py.File(output_file, "a") as dst:
                 src.copy(src[f"recordings/{name}"], dst["recordings"], name)
     finally:

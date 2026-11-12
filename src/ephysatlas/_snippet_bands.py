@@ -1,11 +1,8 @@
 """Write recorded bands and converter-derived NP2 LF into snippet recording groups."""
 
-import importlib.metadata
-
 import h5py
 import numpy as np
 import spikeglx
-from ibldsp.utils import WindowGenerator
 from neuropixel import NP2Converter
 
 from ephysatlas.feature_calculators.spikeglx_like import LF_LATENCY_SAMPLES
@@ -66,60 +63,34 @@ def _write_np2_lf(
     first_sample: np.ndarray,
     ns: int,
 ) -> int:
-    """Store exact windows of the full NP2Converter LF output without converting the file.
+    """Make the LF of each snippet with ``NP2Converter.extract_lfp`` and store it.
 
-    Only intersecting converter chunks are read. Original chunk boundaries, tapering,
-    edge trimming and int16 quantization are retained, including at the recording ends.
-    The caller owns the converter's reader and closes it after writing.
+    The AP samples of a snippet are read with a margin on each side and filtered in one
+    call. The margin is as long as the edge the converter discards from each of its
+    chunks, and is dropped after filtering. The caller owns the converter's reader and
+    closes it after writing.
     """
     gains = converter.sr.channel_conversion_sample2v["lf"][order]
     group, data = _create_band(rec, "lf", converter.fs_lf, gains, first_sample, ns)
     group.attrs.update(
         source="derived",
         method="neuropixel.NP2Converter.extract_lfp",
-        ibl_neuropixel_version=importlib.metadata.version("ibl-neuropixel"),
-        scipy_version=importlib.metadata.version("scipy"),
-        numpy_version=importlib.metadata.version("numpy"),
-        fs_ap=converter.fs_ap,
-        ratio=converter.ratio,
-        samples_window=converter.samples_window,
-        samples_overlap=converter.samples_overlap,
-        samples_taper=converter.samples_taper,
         latency_samples=LF_LATENCY_SAMPLES,
     )
     # TODO: investigate NP2Converter's ~3 kHz versus intended 1 kHz cutoff separately.
     # Preserve the upstream coefficients for reproducibility rather than changing them here.
     group.create_dataset("filter_sos", data=converter.sos_lp)
-    windows = WindowGenerator(
-        converter.nsamples, converter.samples_window, converter.samples_overlap
-    )
-    trim = 2 * converter.samples_taper
-    for first, last in windows.firstlast:
-        # Locate each retained chunk in the full, concatenated LF output.
-        start = (first + (trim if windows.iw else 0)) // converter.ratio
-        stop = (
-            (last + converter.ratio - 1) // converter.ratio
-            if windows.iw == windows.nwin - 1
-            else (last - trim) // converter.ratio
-        )
-        intersecting = np.flatnonzero(
-            (first_sample < stop) & (first_sample + ns > start)
-        )
-        if not intersecting.size:
-            continue
-        # Use disk channel order, as the converter does; restore AP geometry order below.
-        raw = converter.sr[first:last, :].T
-        lf = converter.extract_lfp(raw[: converter.napch])
-        sync = converter.extract_lfp_sync(raw[converter.idxsyncch])
-        # Reuse upstream trimming and integer conversion, including its rounding behavior.
-        saved = converter._ind2save(
-            lf, sync, windows, ratio=converter.ratio, etype="lf"
-        )
-        saved = saved[:, order].T
-        for i in intersecting:
-            left = max(int(first_sample[i]), start)
-            right = min(int(first_sample[i]) + ns, stop)
-            data[i, :, left - first_sample[i] : right - first_sample[i]] = saved[
-                :, left - start : right - start
-            ]
+    margin = 2 * converter.samples_taper // converter.ratio  # in LF samples
+    for i, n0 in enumerate(first_sample.tolist()):
+        # LF sample k is AP sample k * ratio, so the read starts on that grid. A read
+        # past the end of the recording stops at its last sample.
+        start = max(n0 - margin, 0)
+        stop = n0 + ns + margin
+        # The converter's reader gives volts in disk channel order.
+        ap = converter.sr[
+            start * converter.ratio : stop * converter.ratio, : converter.napch
+        ].T
+        lf = converter.extract_lfp(ap)[order, n0 - start : n0 - start + ns]
+        # To integers as the converter does: divide by the gain and truncate.
+        data[i] = (lf / gains[:, np.newaxis]).astype(np.int16)
     return data.size * data.dtype.itemsize
