@@ -1,5 +1,6 @@
 """Tests for SnippetFileFeatureCalculator, which reads files written by extract_snippets."""
 
+import json
 import shutil
 import tempfile
 import unittest
@@ -20,7 +21,7 @@ from ephysatlas.feature_calculators.types import (
     SnippetWindow,
 )
 from ephysatlas.snippet_extractor import extract_snippets
-from tests._snippet_fixtures import write_spikeglx_recording
+from tests._snippet_fixtures import channel_locations_dict, write_spikeglx_recording
 
 REC = "recordings/rec_g0_t0.imec0"
 
@@ -42,6 +43,17 @@ class TestSnippetFileFeatureCalculator(unittest.TestCase):
             cls.np2_ap, cls.tmp / "np2.h5", t_starts=[0.1, 0.5], duration=0.1
         )
 
+        cls.np1_hist_json = cls.tmp / "channel_locations.json"
+        cls.np1_hist_json.write_text(
+            json.dumps(channel_locations_dict(cls.np1_ap.with_suffix(".meta")))
+        )
+        cls.np1_hist_h5 = extract_snippets(
+            cls.np1_ap,
+            cls.tmp / "np1_hist.h5",
+            t_starts=[0.1],
+            duration=0.1,
+            channel_locations=cls.np1_hist_json,
+        )
         cls.np1_3snip_h5 = extract_snippets(
             cls.np1_ap, cls.tmp / "np1_3snip.h5", t_starts=[0.1, 0.4, 0.7], duration=0.1
         )
@@ -68,12 +80,20 @@ class TestSnippetFileFeatureCalculator(unittest.TestCase):
             self.assertEqual((ours.fs_ap, ours.fs_lf), (theirs.fs_ap, theirs.fs_lf))
 
     def test_np1_features_match_spikeglx_calculator(self):
-        """Packing a generated recording preserves its computed LF, CSD and AP features."""
+        """Packing preserves LF/CSD/AP features and attaches each channel's histology."""
         # One second supports the LF spectral analysis while keeping this test small.
         ap_file = write_spikeglx_recording(self.tmp / "np1_features", "np1", 1.2)
         lf_file = ap_file.with_name(ap_file.name.replace(".ap.", ".lf."))
+        histology = self.tmp / "np1_features_channel_locations.json"
+        histology.write_text(
+            json.dumps(channel_locations_dict(ap_file.with_suffix(".meta")))
+        )
         packed = extract_snippets(
-            ap_file, self.tmp / "np1_features.h5", t_starts=[0.1], duration=1.0
+            ap_file,
+            self.tmp / "np1_features.h5",
+            channel_locations=histology,
+            t_starts=[0.1],
+            duration=1.0,
         )
         options = FeatureComputationOptions(
             features_to_compute=["lf", "csd", "ap"],
@@ -91,6 +111,17 @@ class TestSnippetFileFeatureCalculator(unittest.TestCase):
         self.assertEqual(len(theirs_df), 384)
         pd.testing.assert_frame_equal(
             ours_df[theirs_df.columns], theirs_df, check_dtype=False
+        )
+        # Check the actual feature merge, including coordinate units and region labels.
+        expected = (
+            calc.load_channel_metadata()[
+                ["channel", "x", "y", "z", "atlas_id", "acronym"]
+            ]
+            .sort_values("channel")
+            .reset_index(drop=True)
+        )
+        pd.testing.assert_frame_equal(
+            ours_df[expected.columns], expected, check_dtype=False
         )
 
     def test_windows_name_and_version(self):
@@ -152,6 +183,22 @@ class TestSnippetFileFeatureCalculator(unittest.TestCase):
             ).load_channel_metadata(),
             given,
         )
+
+    def test_channel_metadata_with_histology(self):
+        channels = SnippetFileFeatureCalculator(
+            self.np1_hist_h5
+        ).load_channel_metadata()
+        self.assertEqual(
+            list(channels.columns),
+            ["channel", "rawInd", "axial_um", "lateral_um", "shank"]
+            + ["x", "y", "z", "atlas_id", "acronym"],
+        )
+        raw_ind = channels["rawInd"].to_numpy()
+        np.testing.assert_array_equal(channels["x"], (1000 + raw_ind) / 1e6)
+        self.assertEqual(
+            list(channels["acronym"]), [("STR", "CP", "void")[i % 3] for i in raw_ind]
+        )
+        self.assertIsInstance(channels["acronym"].iloc[0], str)
 
     def test_shank_selection(self):
         multi = self.tmp / "multi.h5"

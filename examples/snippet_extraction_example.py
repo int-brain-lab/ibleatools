@@ -35,6 +35,15 @@ recordings = [
         Path("/data/subjectB/2026-02-20/probe00/run_g0_t0.imec0.ap.cbin"),
     ),
 ]
+# Optional inputs belong to individual recordings. Omit an entry when unavailable.
+histology = {
+    "subjectA_2026-01-15_probe00": {
+        "channel_locations": Path(
+            "/data/subjectA/2026-01-15/alf/probe00/channel_locations.json"
+        ),
+        "xyz_picks": Path("/data/subjectA/2026-01-15/alf/probe00/xyz_picks.json"),
+    },
+}
 # Keep the same output path, names and window settings when resuming a batch.
 output_file = Path("snippet_exports/collection.h5")
 t_starts = [600.0, 1200.0]
@@ -55,13 +64,14 @@ for recording_name, ap_file in recordings:
                     )
                 logger.info("Skipping stored recording %s", recording_name)
                 continue
-    # Optional histology_raw=[...] and trajectory={...} must belong to this recording.
+    # Add histology_raw=[...] or trajectory={...} for this recording when needed.
     extract_snippets(
         ap_file,
         output_file,
         name=recording_name,
         t_starts=t_starts,
         duration=duration,
+        **histology.get(recording_name, {}),
     )
 
 # %% Inspect the collection, including recordings from earlier runs
@@ -75,3 +85,10 @@ options = FeatureComputationOptions(features_to_compute=["lf", "csd", "ap"])
 df = calc.compute_denoised_features(options=options)
 logger.info("features table: %d rows x %d columns", *df.shape)
 logger.info("index: %s", df.index.names)
+
+# %% Attach the histology stored in the file
+# Run this cell when the selected recording has a channel table.
+# The channel table is matched to the features on the index level "channel"
+channels = calc.load_channel_metadata()[["channel", "x", "y", "z", "acronym"]]
+df = df.join(channels.set_index("channel"), on="channel")
+logger.info("channels per region:\n%s", df["acronym"].value_counts().to_string())

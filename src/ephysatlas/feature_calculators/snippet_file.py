@@ -27,6 +27,7 @@ import numpy as np
 import pandas as pd
 import scipy.stats
 
+from ephysatlas._snippet_histology import ChannelLocations
 from ephysatlas.feature_computation import add_target_coordinates
 
 from .aggregate import compute_aggregated_features
@@ -128,6 +129,13 @@ class SnippetFileFeatureCalculator(BaseFeatureCalculator):
                 }
                 for band in ("ap", "lf")
             }
+            self._histology = None  # the stored ChannelLocations, column by column
+            if "channels" in f.get("histology", {}):
+                table = f["histology/channels"]
+                self._histology = {
+                    key: table[key].asstr()[:] if key == "acronym" else table[key][:]
+                    for key in ChannelLocations.model_fields
+                }
             self.trajectory = (
                 {key: float(value) for key, value in f["trajectory"].attrs.items()}
                 if "trajectory" in f
@@ -222,8 +230,9 @@ class SnippetFileFeatureCalculator(BaseFeatureCalculator):
             pd.DataFrame: The ``channel_metadata`` given at init if any. Otherwise columns
             ``channel``, ``rawInd`` (the channel's index in the original file),
             ``axial_um``, ``lateral_um`` and ``shank``, as in
-            ``SpikeGLXFileFeatureCalculator.load_channel_metadata``.
-            Only the selected shank's rows are returned.
+            ``SpikeGLXFileFeatureCalculator.load_channel_metadata``, plus ``x``, ``y``,
+            ``z`` (metres), ``atlas_id`` and ``acronym`` when the recording has a channel
+            table. Only the selected shank's rows are returned.
         """
         if self._channel_metadata is not None:
             return self._channel_metadata
@@ -237,6 +246,11 @@ class SnippetFileFeatureCalculator(BaseFeatureCalculator):
                 "shank": np.asarray(geometry["shank"], dtype=float),
             }
         )
+        if self._histology is not None:
+            # The table has one row per data row, so the shank's rows are taken the same way.
+            channels = channels.assign(
+                **{key: values[self._rows] for key, values in self._histology.items()}
+            )
         return channels
 
     def available_duration(self) -> tuple[float, float]:

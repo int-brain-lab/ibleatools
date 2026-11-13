@@ -1,8 +1,10 @@
 """Tests for ``ephysatlas.snippet_extractor``, on tiny synthetic SpikeGLX recordings."""
 
 import contextlib
+import copy
 import importlib.metadata
 import io
+import json
 import logging
 import re
 import shutil
@@ -18,9 +20,10 @@ import scipy.fft
 import spikeglx
 from neuropixel import NP2Converter
 
-from ephysatlas.snippet_extractor import extract_snippets, main
+from ephysatlas.snippet_extractor import ChannelLocations, extract_snippets, main
 from tests._snippet_fixtures import (
     FIXTURES,
+    channel_locations_dict,
     write_spikeglx_recording,
 )
 
@@ -694,6 +697,181 @@ class TestHistologyAndTrajectory(unittest.TestCase):
             self.assertFalse(out.parent.exists())
 
 
+class TestChannelLocations(unittest.TestCase):
+    """channel_locations.json and xyz_picks.json are stored as the Histology contract."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp)
+        self.ap = write_spikeglx_recording(self.tmp, "np1", 1.0)
+        self.cl = channel_locations_dict(self.ap.with_suffix(".meta"))
+        self.out = self.tmp / "new" / "cl.h5"  # parent folder doesn't exist yet
+
+    def _write(self, d):
+        path = self.tmp / "cl.json"
+        path.write_text(json.dumps(d))
+        return path
+
+    def extract(self, ap=None, **kw):
+        return extract_snippets(
+            ap or self.ap, self.out, t_starts=[0.1], duration=0.1, **kw
+        )
+
+    def test_channel_table_matched_by_channel_index(self):
+        # Permuted snsShankMap entries: the geometry's rows (sorted by position) no
+        # longer follow the channel order in the file, so geometry/ind is not 0, 1, 2, ...
+        shank_map = spikeglx.read_meta_data(FIXTURES / "np1.ap.meta")["snsShankMap"]
+        sites = re.findall(r"\(\d+:\d+:\d+:\d+\)", shank_map)
+        permutation = np.random.default_rng(1).permutation(len(sites))
+        edits = {
+            "snsShankMap": shank_map[: shank_map.index(sites[0])]
+            + "".join(sites[i] for i in permutation)
+        }
+        ap = write_spikeglx_recording(self.tmp / "perm", "np1", 1.0, edits=edits)
+        # Entries re-keyed channel_0..383 in reversed channel order: only
+        # original_channel_idx says which channel each entry belongs to.
+        cl = channel_locations_dict(ap.with_suffix(".meta"))
+        entries = [cl[f"channel_{ind}"] for ind in range(384)][::-1]
+        # Probe positions in probeinterface's layout, as some sorters write them: mirrored
+        # and 20 um lower than the ibl-neuropixel geometry.
+        for entry in entries:
+            entry["lateral"], entry["axial"] = (
+                59 - entry["lateral"],
+                entry["axial"] - 20,
+            )
+        rekeyed = {f"channel_{k}": entry for k, entry in enumerate(entries)}
+        rekeyed["origin"] = cl["origin"]
+        out = self.extract(ap, channel_locations=self._write(rekeyed))
+
+        with h5py.File(out) as f:
+            g, ind = f[REC]["histology/channels"], f[REC]["geometry/ind"][()]
+            self.assertFalse(np.array_equal(ind, np.arange(384)))
+            # channel_locations_dict derives each value from the channel's index in the file
+            np.testing.assert_array_equal(g["x"][()], (1000.0 + ind) / 1e6)
+            np.testing.assert_array_equal(g["y"][()], (-2000.0 + ind) / 1e6)
+            np.testing.assert_array_equal(g["z"][()], (-3000.0 - ind) / 1e6)
+            np.testing.assert_array_equal(
+                g["atlas_id"][()], np.array([477, 672, 0])[ind % 3]
+            )
+            self.assertEqual(
+                list(g["acronym"].asstr()[()]),
+                [("STR", "CP", "void")[i % 3] for i in ind],
+            )
+            # Every dataset carries its description, and unit if any, from the contract.
+            for key, field in ChannelLocations.model_fields.items():
+                self.assertEqual(g[key].attrs["description"], field.description)
+            self.assertEqual(g["x"].attrs["unit"], "m")
+            self.assertNotIn("unit", g["atlas_id"].attrs)
+            self.assertEqual(
+                f[REC].attrs["iblatlas_version"], importlib.metadata.version("iblatlas")
+            )
+            self.assertEqual(
+                f[REC]["histology/raw/cl.json"][()].tobytes(),
+                (self.tmp / "cl.json").read_bytes(),
+            )
+            self.assertNotIn("xyz_picks", f[REC]["histology"])
+
+    def test_rejected_jsons_create_nothing(self):
+        def drop_channel(d):
+            del d["channel_191"]
+
+        def duplicate_index(d):
+            d["channel_5"]["original_channel_idx"] = 4
+
+        def other_bregma(d):
+            d["origin"]["bregma"] = [5700, 5400, 332]
+
+        def nan_coordinate(d):
+            d["channel_3"]["x"] = float("nan")
+
+        def unknown_region(d):
+            d["channel_7"]["brain_region_id"] = 123456789
+
+        def swapped_positions(d):
+            # As if the entries of channels 0 and 2 belonged to each other's channel
+            for key in ("lateral", "axial"):
+                d["channel_0"][key], d["channel_2"][key] = (
+                    d["channel_2"][key],
+                    d["channel_0"][key],
+                )
+
+        # iblatlas BrainRegions.get raises IndexError for an id it doesn't know.
+        cases = [
+            (drop_channel, ValueError, "one entry per channel"),
+            (duplicate_index, ValueError, "one entry per channel"),
+            (other_bregma, ValueError, "bregma"),
+            (nan_coordinate, ValueError, "finite"),
+            (unknown_region, IndexError, ""),
+            (swapped_positions, ValueError, "positions"),
+        ]
+        for change, error, message in cases:
+            with self.subTest(change.__name__):
+                d = copy.deepcopy(self.cl)
+                change(d)
+                with self.assertRaisesRegex(error, message):
+                    self.extract(channel_locations=self._write(d))
+                self.assertFalse(self.out.parent.exists())
+
+    def test_multi_shank_positions_fit_per_shank(self):
+        # An unsplit four-shank NP2.4: ibl-neuropixel's x is within each shank, while the
+        # sorter's lateral here includes a 250 um offset per shank.
+        edits = {
+            "NP2.4_shank": None,
+            "nSavedChans": "385",
+            "snsApLfSy": "384,0,1",
+            "snsSaveChanSubset": "0:384",
+        }
+        ap = write_spikeglx_recording(
+            self.tmp / "np24", "np24_shank", 1.0, edits=edits, with_lf=False
+        )
+        geometry = spikeglx.geometry_from_meta(
+            spikeglx.read_meta_data(ap.with_suffix(".meta"))
+        )
+        cl = channel_locations_dict(ap.with_suffix(".meta"))
+        for ind, shank in zip(geometry["ind"], geometry["shank"]):
+            cl[f"channel_{ind}"]["lateral"] += 250 * float(shank)
+
+        # Two channels on different shanks paired with each other's entry: rejected
+        first_on = {s: geometry["ind"][geometry["shank"] == s][0] for s in (0, 1)}
+        swapped = copy.deepcopy(cl)
+        a, b = swapped[f"channel_{first_on[0]}"], swapped[f"channel_{first_on[1]}"]
+        for key in ("lateral", "axial"):
+            a[key], b[key] = b[key], a[key]
+        with self.assertRaisesRegex(ValueError, "positions"):
+            self.extract(ap, channel_locations=self._write(swapped))
+        self.assertFalse(self.out.parent.exists())
+
+        out = self.extract(ap, channel_locations=self._write(cl))
+        with h5py.File(out) as f:
+            ind = f[REC]["geometry/ind"][()]
+            self.assertEqual(len(np.unique(f[REC]["geometry/shank"][()])), 4)
+            # channel_locations_dict sets x = 1000 + the channel's index in the file (um)
+            np.testing.assert_array_equal(
+                f[REC]["histology/channels/x"][()], (1000.0 + ind) / 1e6
+            )
+
+    def test_xyz_picks_stored_in_metres(self):
+        picks = self.tmp / "picks.json"
+        picks.write_text(json.dumps({"xyz_picks": [[1000, 2000, -3000]]}))
+        with self.assertRaisesRegex(ValueError, "at least 2"):
+            self.extract(xyz_picks=picks)
+        self.assertFalse(self.out.parent.exists())
+
+        points = [[1000, 2000, -3000], [1100, 2100, -3500]]
+        picks.write_text(json.dumps({"xyz_picks": points}))
+        out = self.extract(xyz_picks=picks)
+        with h5py.File(out) as f:
+            histology = f[REC]["histology"]
+            np.testing.assert_array_equal(
+                histology["xyz_picks"][()], np.array(points) / 1e6
+            )
+            self.assertEqual(histology["xyz_picks"].attrs["unit"], "m")
+            self.assertEqual(
+                histology["raw/picks.json"][()].tobytes(), picks.read_bytes()
+            )
+            self.assertNotIn("channels", histology)
+
+
 class TestCli(unittest.TestCase):
     def setUp(self):
         # main() configures the "ephysatlas" logger; undo it so other tests stay quiet
@@ -714,6 +892,10 @@ class TestCli(unittest.TestCase):
                     "out.h5",
                     "--name",
                     "probe00",
+                    "--channel-locations",
+                    "cl.json",
+                    "--xyz-picks",
+                    "picks.json",
                     "--histology-raw",
                     "a.json",
                     "b.csv",
@@ -740,6 +922,8 @@ class TestCli(unittest.TestCase):
             Path("rec.imec0.ap.bin"),
             Path("out.h5"),
             name="probe00",
+            channel_locations=Path("cl.json"),
+            xyz_picks=Path("picks.json"),
             histology_raw=[Path("a.json"), Path("b.csv")],
             t_starts=[1.0, 2.5],
             n_snippets=3,
