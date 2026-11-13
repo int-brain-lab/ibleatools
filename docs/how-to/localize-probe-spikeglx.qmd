@@ -1,0 +1,164 @@
+---
+title: "How to localize a probe while SpikeGLX records"
+---
+
+This guide runs the ephys-only localizer during a SpikeGLX acquisition of a Neuropixels probe
+(1.0; 2.0, single- or four-shank, see [Other probes](#other-probes)). Every 10 s it takes the
+5 s of AP and LF data just acquired, computes the channel
+features, and re-estimates where each channel is, starting from the planned trajectory (a plan
+file, or a Pinpoint export) or, without one, searching the whole brain. A window shows the
+estimate and the plan on atlas slices, with the region of every channel.
+
+::: {.callout-warning}
+Experimental (branch `realtime-localization-w45`). It has been validated by replaying IBL
+recordings, not yet during a live experiment: run it alongside your usual workflow rather than
+to guide an insertion.
+:::
+
+## Prerequisites
+
+- Windows, with SpikeGLX acquiring a Neuropixels probe: a 1.0 with its LF band (what the
+  localizer was fitted on), or a 2.0 (experimental, see [Other probes](#other-probes)). It also
+  works on a recording that SpikeGLX plays back as a simulated probe.
+- Python 3.12 or later, and about 4 GB of free RAM per feature worker: the viewer starts as many
+  workers as the free RAM allows (3 keep up with a snippet every 10 s).
+- Internet on the first run: the channel model (Hugging Face Hub) and the Allen atlas download
+  automatically.
+
+## Install
+
+1. ibleatools on the real-time branch (the [lite install](../explanation/install-variants.qmd)
+   is enough):
+
+    ```bash
+    git clone https://github.com/int-brain-lab/ibleatools
+    cd ibleatools
+    git checkout realtime-localization-w45
+    python -m venv .venv
+    .venv\Scripts\activate
+    pip install -e .
+    ```
+
+2. The fitted localizer (3 MB):
+   download `ephys-only-fit-2026_W45_lf_ap_no_detection.zip` from the
+   [`localizer-2026_W45` release](https://github.com/alonsaguy/probe-viewer/releases/tag/localizer-2026_W45)
+   and unzip it into `%USERPROFILE%\ephys-atlas\results\alignment\`, which gives
+
+    ```
+    %USERPROFILE%\ephys-atlas\results\alignment\ephys_only_fit\32b2d91a88c38cc89299e24c0bac0ed000a49c1d_lf_ap_no_detection\
+        fit.npz  fit_summary.json  grid.npz  temperature_tuning.csv
+    ```
+
+   (to keep results elsewhere, set `EPHYS_ATLAS_RESULTS_DIR` to the folder that holds
+   `alignment\`). Without these files the localizer fits itself on first use, which needs the
+   IBL feature release and IBL database credentials.
+
+3. The SpikeGLX SDK: download the [SpikeGLX-CPP-SDK](https://github.com/billkarsh/SpikeGLX-CPP-SDK)
+   (Code / Download ZIP) and unzip it into `%USERPROFILE%\SpikeGLX\`, which gives
+   `%USERPROFILE%\SpikeGLX\SpikeGLX-CPP-SDK-main\`. Copy `Windows\API\SglxApi.dll` into
+   `Windows\Python\sglx_pkg\`. (Elsewhere: set `SGLX_SDK_DIR` to its `Windows\Python` folder.)
+
+4. In SpikeGLX: **Options / Command Server Settings**, enable the command server (port 4142).
+
+## The plan
+
+The localizer is most accurate starting from the planned trajectory (see
+[What to expect](#what-to-expect)). It reads it from one of:
+
+- a **Pinpoint export**: the experiment JSON that [Pinpoint](https://pinpoint.allenneuraldynamics.org)
+  v5 saves, planned in its `allen_mouse` or `qiu2018_mouse` atlas. Pass the file with `--plan`
+  and, when it holds several probes, the probe with `--plan-probe "Probe A"`. Plans in the
+  `qiu2018_mouse` (MRI) atlas are mapped to the Allen CCF with the scaling of iblatlas'
+  `MRITorontoAtlas` (an affine approximation);
+- a **plan file** made from the insertion's entry point and angles, in the IBL convention (the
+  one of the Alyx trajectories):
+
+    ```python
+    from ephysatlas.realtime.plan import plan_from_trajectory, save_plan
+
+    plan = plan_from_trajectory(x=-1200, y=-2000, z=0, depth=4000, theta=15, phi=180)
+    save_plan(plan, r"C:\data\plan.json")
+    ```
+
+    `x`, `y`, `z`: entry point in µm from bregma (ML, AP, DV); `depth`: insertion depth along
+    the probe in µm; `theta`: angle from vertical in degrees; `phi`: azimuth in degrees. The
+    numbers above are an example. For an IBL insertion (with IBL database credentials),
+    `plan_from_alyx(pid)` reads the planned trajectory from Alyx.
+
+Without a plan, every update searches the whole brain instead: it scores ~230,000 straight
+trajectories (400 µm apart, 10-30° from vertical, every 30° of azimuth), takes the five best
+that are at least 1 mm apart on average, refines each one and keeps the best.
+
+## Run
+
+Start a SpikeGLX run, then, in the ibleatools folder with the environment activated, one of:
+
+```bash
+python scripts\realtime_viewer.py --sglx --plan C:\data\experiment-001.json --plan-probe "Probe A"
+python scripts\realtime_viewer.py --sglx --plan C:\data\plan.json
+python scripts\realtime_viewer.py --sglx
+```
+
+(the last one without a plan: whole-brain search).
+
+- `--probe N`: the imec probe index in SpikeGLX (default 0), one probe per viewer; for several
+  probes, run one viewer per probe, each with its `--probe` and its `--plan-probe`.
+- `--shank N`: on a four-shank probe, the shank to localize (default: the one recording the
+  most channels); run one viewer per shank to localize several.
+- `--sglx ADDRESS`: SpikeGLX on another computer, or a command server bound to a network address
+  (the address the Command Server Settings dialog shows). Running the localizer on a second
+  computer keeps its CPU load off the acquisition machine.
+- `--workers N`, `--cadence S`: feature workers, seconds between snippets (default 10).
+
+Close the window to stop; the run is saved in
+`%USERPROFILE%\ephys-atlas\results\realtime\viewer_runs\`.
+
+To try it without a probe, let SpikeGLX play one of your Neuropixels 1.0 recordings as a
+simulated probe, start the run and use the same command.
+
+## What to expect {#what-to-expect}
+
+- A snippet's features take about 25 s per worker; with enough workers the estimate updates
+  every 10 s, about 30 s behind the acquisition. With fewer, snippets are skipped so that the
+  estimate always uses recent data. Localizing takes about 1 s from a plan and about 9 s without
+  one; without a plan, the console lists each update's five candidates (score, position,
+  regions) and the window's status line the one kept.
+- The estimate after one snippet is about as good as after five minutes.
+- On 196 held-out IBL insertions (medians): 536 µm from the histology-based alignment, against
+  754 µm for the plan; Cosmos region accuracy 0.74 (plan 0.57), Beryl 0.35 (plan 0.21).
+- Without a plan, on 20 of these insertions (medians): 658 µm from the histology, against 485 µm
+  for the search from the plan and 907 µm for the plan itself. It is closer to the histology than
+  the plan for 11 of the 20 but more than 1.5 mm off for 4, and the hemisphere cannot be told
+  (the estimate is shown in the left one): use a plan when there is one.
+- Plans off by up to ~0.25 mm or 10° cost nothing; a plan 1 mm or more off is only partly
+  corrected. The model assumes the probe is 10-30° from vertical, tip down, as in the IBL
+  insertions it was fitted on.
+- The Open Ephys version of the same localizer (a Probe Viewer plugin,
+  [`alonsaguy/probe-viewer`](https://github.com/alonsaguy/probe-viewer), branch
+  `realtime-localization`) runs in C++ with the same whole-brain search and Pinpoint reader
+  (Neuropixels 1.0 only).
+
+## Other probes {#other-probes}
+
+The localizer was fitted on Neuropixels 1.0 recordings (bank 0: 384 channels over 3.84 mm,
+with an LF band). Other probes run, one shank at a time, but **how accurate it is on them has
+not been measured**: treat the estimate as a rough indication.
+
+- **Neuropixels 2.0** (single-shank NP2000/NP2003, four-shank NP2010/NP2013/NP2014, quad base
+  NP2020): these record one wideband signal, so the LF band is derived from it (low-passed at
+  1 kHz and decimated to 2.5 kHz, as IBL does for its 2.0 recordings).
+- **One shank at a time**: on a four-shank probe the viewer localizes one shank (`--shank`,
+  default the one recording the most channels) from that shank's channels only. The window
+  says which shank and how many channels.
+- **Any channel map**: the shank's channels are resampled by depth onto rows 10 µm apart over
+  the span they record, so other banks and IMRO tables work. The probe length the localizer
+  expects is scaled to that span. A shank recording less than ~1 mm (e.g. 96 channels per
+  shank across four shanks) gives a short trajectory that is harder to place; a few hundred
+  µm is the minimum.
+- **Plans**: a plan file made with `plan_from_trajectory` or from Alyx is read as the line of
+  the localized shank. A Pinpoint plan of a 2.0 uses that probe's own contacts, but its line
+  runs through the shank Pinpoint positions (shank 0 unless set otherwise). For another shank
+  the 250 µm per shank lateral offset is not applied; the viewer prints a warning when this
+  happens.
+- The saved run (`updates.npz`) also holds `recorded_channel_xyz`, the estimated position of
+  each recorded channel of the shank, with `recorded_channels`, their SpikeGLX channel indices.

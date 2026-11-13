@@ -12,6 +12,10 @@ and redraws at every update:
   through the plan (a toggle above the views), with the earlier estimates fading;
 - **Convergence** -- distance of the estimate from the plan (and from the reference, if given)
   and the update latency, against acquisition time.
+
+Without a plan (whole-brain search) there is no plan to draw or compare with: the slices are cut
+through the estimate, the convergence panel shows how far each estimate moved from the previous
+one, and every update prints the search's candidates (score, position, regions) on the console.
 """
 
 from __future__ import annotations
@@ -41,20 +45,23 @@ class LocalizationViewer:
         make_pipeline: ``make_pipeline(on_update) -> OnlinePipeline``.
         localizer: The pipeline's :class:`~ephysatlas.alignment.EphysOnlyLocalizer` (feature
             names and release statistics for the feature panel).
-        planned_xyz: ``[C, 3]`` planned channel positions (m, row order).
+        planned_xyz: ``[C, 3]`` planned channel positions (m, row order), or None (whole-brain
+            search).
         brain_atlas: ``iblatlas.atlas.AllenAtlas``.
         reference_xyz: Optional ``[C, 3]`` reference (histology) alignment, drawn for comparison.
         title: Window title.
+        n_channels: Channels of the probe (only needed without a plan).
     """
 
     def __init__(
         self,
         make_pipeline: Callable,
         localizer,
-        planned_xyz: np.ndarray,
+        planned_xyz: Optional[np.ndarray],
         brain_atlas,
         reference_xyz: Optional[np.ndarray] = None,
         title: str = "Ephys-only localization",
+        n_channels: int = 384,
     ):
         import pyqtgraph as pg
         from pyqtgraph.Qt import QtCore, QtWidgets
@@ -67,11 +74,16 @@ class LocalizationViewer:
         self.make_pipeline = make_pipeline
         self.localizer = localizer
         self.ba = brain_atlas
-        self.planned = np.asarray(planned_xyz, dtype=float)
+        self.planned = (
+            None if planned_xyz is None else np.asarray(planned_xyz, dtype=float)
+        )
+        self.n_channels = len(self.planned) if self.planned is not None else int(n_channels)
         self.reference = (
             None if reference_xyz is None else np.asarray(reference_xyz, dtype=float)
         )
-        self.history = []  # (acquired_s, latency_s, distance to plan, distance to reference)
+        # (acquired_s, latency_s, distance to the plan -- or to the previous estimate without
+        # one --, distance to the reference)
+        self.history = []
 
         class _Bridge(QtCore.QObject):
             update = QtCore.pyqtSignal(object)
@@ -97,7 +109,9 @@ class LocalizationViewer:
         bar.addWidget(self.status, stretch=1)
         bar.addWidget(QtWidgets.QLabel("Slices through:"))
         self.slice_choice = QtWidgets.QComboBox()
-        self.slice_choice.addItems(["current estimate", "plan"])
+        self.slice_choice.addItems(
+            ["current estimate", "plan"] if self.planned is not None else ["current estimate"]
+        )
         self.slice_choice.currentIndexChanged.connect(lambda _: self._draw_slices())
         bar.addWidget(self.slice_choice)
         bar.addWidget(QtWidgets.QLabel("  Slice regions:"))
@@ -109,7 +123,7 @@ class LocalizationViewer:
         glw = pg.GraphicsLayoutWidget()
         layout.addWidget(glw)
         self.win.setCentralWidget(central)
-        n_c = len(self.planned)
+        n_c = self.n_channels
 
         # Features along the probe: depth on y (top of the probe at the top).
         self.p_feat = glw.addPlot(
@@ -150,8 +164,10 @@ class LocalizationViewer:
         self.p_reg.invertY(True)
         self.p_reg.setYLink(self.p_feat)
         self.p_reg.hideAxis("left")
-        labels = ["plan", "estimate"] + (
-            ["reference"] if self.reference is not None else []
+        labels = (
+            (["plan"] if self.planned is not None else [])
+            + ["estimate"]
+            + (["reference"] if self.reference is not None else [])
         )
         self.p_reg.getAxis("bottom").setTicks(
             [[(k + 0.5, s) for k, s in enumerate(labels)]]
@@ -185,11 +201,12 @@ class LocalizationViewer:
             img = pg.ImageItem()
             img.setOpacity(0.6)
             plot.addItem(img)
-            plot.plot(
-                self.planned[:, dim] * 1e3,
-                self.planned[:, 2] * 1e3,
-                pen=pg.mkPen("k", width=2, style=self.QtCore.Qt.DashLine),
-            )
+            if self.planned is not None:
+                plot.plot(
+                    self.planned[:, dim] * 1e3,
+                    self.planned[:, 2] * 1e3,
+                    pen=pg.mkPen("k", width=2, style=self.QtCore.Qt.DashLine),
+                )
             if self.reference is not None:
                 plot.plot(
                     self.reference[:, dim] * 1e3,
@@ -197,9 +214,12 @@ class LocalizationViewer:
                     pen=pg.mkPen((0, 140, 0), width=2),
                 )
             current = plot.plot([], [], pen=pg.mkPen((220, 30, 30), width=3))
-            c = np.nanmean(self.planned[:, [dim, 2]], axis=0) * 1e3
-            plot.setXRange(c[0] - 3, c[0] + 3)
-            plot.setYRange(c[1] - 3, c[1] + 3)
+            # Centred on the plan; without one on the reference, or on the first estimate.
+            around = self.planned if self.planned is not None else self.reference
+            if around is not None:
+                c = np.nanmean(around[:, [dim, 2]], axis=0) * 1e3
+                plot.setXRange(c[0] - 3, c[0] + 3)
+                plot.setYRange(c[1] - 3, c[1] + 3)
             self.views[name] = dict(
                 plot=plot, img=img, axis=axis, dim=dim, current=current, old=[]
             )
@@ -217,7 +237,9 @@ class LocalizationViewer:
             pen=pg.mkPen((220, 30, 30), width=2),
             symbol="o",
             symbolSize=5,
-            name="estimate vs plan",
+            name="estimate vs plan"
+            if self.planned is not None
+            else "estimate vs the previous one",
         )
         self.c_ref = None
         if self.reference is not None:
@@ -229,18 +251,20 @@ class LocalizationViewer:
                 symbolSize=5,
                 name="estimate vs reference",
             )
-            plan_err = (
-                np.nanmean(np.linalg.norm(self.planned - self.reference, axis=1)) * 1e6
-            )
-            self.p_conv.addItem(
-                pg.InfiniteLine(
-                    plan_err,
-                    angle=0,
-                    pen=pg.mkPen((0, 140, 0), style=self.QtCore.Qt.DotLine),
-                    label="plan vs reference",
-                    labelOpts=dict(position=0.9, color=(0, 140, 0)),
+            if self.planned is not None:
+                plan_err = (
+                    np.nanmean(np.linalg.norm(self.planned - self.reference, axis=1))
+                    * 1e6
                 )
-            )
+                self.p_conv.addItem(
+                    pg.InfiniteLine(
+                        plan_err,
+                        angle=0,
+                        pen=pg.mkPen((0, 140, 0), style=self.QtCore.Qt.DotLine),
+                        label="plan vs reference",
+                        labelOpts=dict(position=0.9, color=(0, 140, 0)),
+                    )
+                )
         glw.ci.layout.setColumnStretchFactor(2, 2)
         glw.ci.layout.setColumnStretchFactor(3, 2)
         self._draw_regions(None)
@@ -249,10 +273,14 @@ class LocalizationViewer:
 
     def _draw_slices(self) -> None:
         """Atlas slices through the current estimate (once there is one) or the plan."""
-        through_estimate = (
-            self.slice_choice.currentIndex() == 0 and self._estimate is not None
+        through_estimate = self._estimate is not None and (
+            self.slice_choice.currentIndex() == 0 or self.planned is None
         )
         xyz = self._estimate if through_estimate else self.planned
+        if xyz is None:  # no plan, no estimate yet
+            for name, v in self.views.items():
+                v["plot"].setTitle(f"Tilted {name} slice (waiting for the first estimate)")
+            return
         xyz = xyz[np.isfinite(xyz).all(axis=1)]
         mapping = self.mapping_choice.currentText()
         for name, v in self.views.items():
@@ -275,11 +303,9 @@ class LocalizationViewer:
             )
 
     def _draw_regions(self, estimate_xyz) -> None:
-        cols = [
-            self.planned,
-            estimate_xyz
-            if estimate_xyz is not None
-            else np.full_like(self.planned, np.nan),
+        n_c = self.n_channels
+        cols = ([self.planned] if self.planned is not None else []) + [
+            estimate_xyz if estimate_xyz is not None else np.full((n_c, 3), np.nan)
         ]
         if self.reference is not None:
             cols.append(self.reference)
@@ -289,8 +315,8 @@ class LocalizationViewer:
                 rgb, acr = _region_rgb(self.ba, xyz)
             else:
                 rgb, acr = (
-                    np.full((len(self.planned), 3), 230, np.uint8),
-                    np.array([""] * len(self.planned)),
+                    np.full((n_c, 3), 230, np.uint8),
+                    np.array([""] * n_c),
                 )
             strips.append(rgb)
             acronyms.append(acr)
@@ -325,7 +351,12 @@ class LocalizationViewer:
         self.img_feat.setRect(0, 0, z.shape[1], z.shape[0])
         est = np.asarray(u.result.channel_xyz, dtype=float)
         self._draw_regions(est)
+        first_without_plan = self._estimate is None and self.planned is None
         for v in self.views.values():
+            if first_without_plan and self.reference is None:
+                c = np.nanmean(est[:, [v["dim"], 2]], axis=0) * 1e3
+                v["plot"].setXRange(c[0] - 3, c[0] + 3)
+                v["plot"].setYRange(c[1] - 3, c[1] + 3)
             for i, item in enumerate(v["old"]):
                 item.setOpacity(max(0.05, 0.5 * 0.7 ** (len(v["old"]) - i)))
             v["old"].append(
@@ -336,10 +367,17 @@ class LocalizationViewer:
                 )
             )
             v["current"].setData(est[:, v["dim"]] * 1e3, est[:, 2] * 1e3)
+        previous = self._estimate
         self._estimate = est
-        if self.slice_choice.currentIndex() == 0:
+        if self.slice_choice.currentIndex() == 0 or self.planned is None:
             self._draw_slices()
-        d_plan = float(np.nanmean(np.linalg.norm(est - self.planned, axis=1)) * 1e6)
+        # Distance to the plan, or without one to the previous estimate (NaN at the first).
+        versus = self.planned if self.planned is not None else previous
+        d_plan = (
+            float(np.nanmean(np.linalg.norm(est - versus, axis=1)) * 1e6)
+            if versus is not None
+            else np.nan
+        )
         d_ref = (
             float(np.nanmean(np.linalg.norm(est - self.reference, axis=1)) * 1e6)
             if self.reference is not None
@@ -347,7 +385,8 @@ class LocalizationViewer:
         )
         self.history.append((u.acquired_s, u.latency_s, d_plan, d_ref))
         h = np.array(self.history)
-        self.c_plan.setData(h[:, 0], h[:, 2])
+        ok = np.isfinite(h[:, 2])
+        self.c_plan.setData(h[ok, 0], h[ok, 2])
         if self.c_ref is not None:
             self.c_ref.setData(h[:, 0], h[:, 3])
         ref = (
@@ -355,11 +394,44 @@ class LocalizationViewer:
             if self.reference is not None
             else ""
         )
+        if self.planned is not None:
+            versus_text = f"estimate {d_plan:.0f} µm from the plan"
+        else:
+            dg = u.result.diagnostics
+            versus_text = (
+                f"no plan: {dg['n_scanned']:,} trajectories scanned, best of "
+                f"{len(dg['seed_score'])} candidates #{dg['selected_seed'] + 1} "
+                f"(score {dg['score']:.3f})"
+                + (f", moved {d_plan:.0f} µm" if np.isfinite(d_plan) else "")
+            )
+            self._print_candidates(u)
         self.status.setText(
             f"Update {u.index + 1}: {u.n_snippets} snippets, data up to {u.acquired_s:.0f} s | "
             f"latency {u.latency_s:.1f} s (localization {u.localize_s:.1f} s) | "
-            f"estimate {d_plan:.0f} µm from the plan{ref}"
+            f"{versus_text}{ref}"
         )
+
+    def _print_candidates(self, u) -> None:
+        """The whole-brain search's candidates of an update, on the console."""
+        dg = u.result.diagnostics
+        print(
+            f"[viewer] update {u.index + 1} ({u.n_snippets} snippets): whole-brain search, "
+            f"{dg['n_scanned']:,} straight trajectories scanned in {dg['scan_s']:.1f} s; "
+            f"{len(dg['seed_score'])} candidates at least 1 mm apart, refined:",
+            flush=True,
+        )
+        for k, (xyz, s0, s1) in enumerate(
+            zip(dg["seed_xyz"], dg["seed_initial_score"], dg["seed_score"])
+        ):
+            _, acr = _region_rgb(self.ba, xyz)
+            path = [a for i, a in enumerate(acr) if a and (i == 0 or a != acr[i - 1])]
+            c = np.mean(xyz, axis=0) * 1e3
+            print(
+                f"    #{k + 1}  score {s1:.3f} (straight start {s0:.3f})  "
+                f"ML {c[0]:.1f} AP {c[1]:.1f} DV {c[2]:.1f} mm  {' > '.join(path[:7])}"
+                + ("   <- best" if k == dg["selected_seed"] else ""),
+                flush=True,
+            )
 
     def _on_finished(self) -> None:
         self.status.setText(self.status.text() + "  —  recording finished")

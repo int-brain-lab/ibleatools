@@ -26,6 +26,8 @@ website:
             file: how-to/tune-feature-computation.qmd
           - text: "Aggregate and denoise"
             file: how-to/aggregate-and-denoise.qmd
+          - text: "Localize a probe while SpikeGLX records"
+            file: how-to/localize-probe-spikeglx.qmd
           - text: "--- Run published models ---"
           - text: "Download a model"
             file: how-to/download-models.qmd

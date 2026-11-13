@@ -2,11 +2,16 @@
 
 A source exposes one probe's AP and LF bands through a small interface the pipeline polls:
 
-- ``fs_ap``, ``fs_lf``, ``n_channels`` (ephys channels, sync excluded), ``geometry`` (ibldsp),
-  ``s2v_ap``, ``s2v_lf`` (``[n_channels]`` volts per int16 count);
+- ``layout`` (:class:`~ephysatlas.realtime.probe.ProbeLayout`: the probe, the shank localized and
+  the channels used), ``has_lf`` (the probe records an LF band; Neuropixels 2.0 does not, and
+  its LF is derived from the wideband AP stream);
+- ``fs_ap``, ``fs_lf``, ``n_channels`` (channels used, sync excluded), ``geometry`` (ibldsp, of
+  the channels used), ``s2v_ap``, ``s2v_lf`` (``[n_channels]`` volts per int16 count; ``s2v_lf``
+  None without an LF band);
 - ``start()`` / ``stop()``;
 - ``acquired_s()``: seconds of data acquired so far (on the AP clock);
-- ``read(band, first_sample, n_samples)``: ``[n_samples, n_channels]`` int16 of a band.
+- ``read(band, first_sample, n_samples)``: ``[n_samples, n_channels]`` int16 of a band, the
+  channels used in ``layout.channels`` order.
 
 :class:`FileReplaySource` replays SpikeGLX files (e.g. the test recordings of
 :mod:`ephysatlas.realtime.data`) as if they were being acquired, at real-time speed, faster, or
@@ -37,14 +42,24 @@ class FileReplaySource:
 
     Args:
         ap_file: The ``.ap.bin`` file (with its ``.meta``); the ``.lf.bin`` next to it is used
-            unless ``lf_file`` is given.
+            unless ``lf_file`` is given, and without one (Neuropixels 2.0) the LF band is derived
+            from the AP band.
         lf_file: The ``.lf.bin`` file.
         speed: Acquisition speed relative to real time (1: real time); None makes the whole
             recording available at ``start()`` (for runs that should not wait).
+        shank: The shank to localize (default: the one with the most channels).
     """
 
-    def __init__(self, ap_file, lf_file=None, speed: Optional[float] = 1.0):
+    def __init__(
+        self,
+        ap_file,
+        lf_file=None,
+        speed: Optional[float] = 1.0,
+        shank: Optional[int] = None,
+    ):
         import spikeglx
+
+        from .probe import LF_DECIMATION, ProbeLayout
 
         ap_file = Path(ap_file)
         lf_file = (
@@ -53,26 +68,45 @@ class FileReplaySource:
             else Path(str(ap_file).replace(".ap.", ".lf."))
         )
         self.sr_ap = spikeglx.Reader(ap_file, ignore_warnings=True)
-        self.sr_lf = spikeglx.Reader(lf_file, ignore_warnings=True)
-        self.name = ap_file.name.split("_g")[0]
-        self.fs_ap, self.fs_lf = float(self.sr_ap.fs), float(self.sr_lf.fs)
-        self.n_channels = int(self.sr_ap.nc - self.sr_ap.nsync)
-        self.geometry = {k: np.asarray(v) for k, v in self.sr_ap.geometry.items()}
-        self.s2v_ap = np.asarray(
-            self.sr_ap.channel_conversion_sample2v["ap"][: self.n_channels]
+        self.has_lf = lf_file.exists() and lf_file != ap_file
+        self.sr_lf = (
+            spikeglx.Reader(lf_file, ignore_warnings=True) if self.has_lf else None
         )
-        self.s2v_lf = np.asarray(
-            self.sr_lf.channel_conversion_sample2v["lf"][: self.n_channels]
+        self.name = ap_file.name.split("_g")[0]
+        self.fs_ap = float(self.sr_ap.fs)
+        self.fs_lf = (
+            float(self.sr_lf.fs) if self.has_lf else self.fs_ap / LF_DECIMATION
+        )
+        n_stream = int(self.sr_ap.nc - self.sr_ap.nsync)
+        self.layout = ProbeLayout.from_meta(
+            self.sr_ap.meta,
+            n_stream,
+            has_lf=self.has_lf,
+            shank=shank,
+            np1_geometry=lambda: self.sr_ap.geometry,
+        )
+        self.channels = self.layout.channels
+        self.n_channels = self.layout.n_channels
+        self.geometry = self.layout.geometry
+        self.s2v_ap = np.asarray(self.sr_ap.channel_conversion_sample2v["ap"])[
+            self.channels
+        ]
+        self.s2v_lf = (
+            np.asarray(self.sr_lf.channel_conversion_sample2v["lf"])[self.channels]
+            if self.has_lf
+            else None
         )
         self.duration_s = float(
-            min(self.sr_ap.ns / self.fs_ap, self.sr_lf.ns / self.fs_lf)
+            self.sr_ap.ns / self.fs_ap
+            if not self.has_lf
+            else min(self.sr_ap.ns / self.fs_ap, self.sr_lf.ns / self.fs_lf)
         )
         self.speed = speed
         self._t0 = None
 
     @classmethod
     def from_recording_dir(
-        cls, rec_dir, speed: Optional[float] = 1.0
+        cls, rec_dir, speed: Optional[float] = 1.0, shank: Optional[int] = None
     ) -> "FileReplaySource":
         """The SpikeGLX files of a test recording directory (``<dir>/sglx/*.ap.bin``)."""
         ap = sorted(Path(rec_dir).joinpath("sglx").glob("*.ap.bin"))
@@ -80,7 +114,7 @@ class FileReplaySource:
             raise FileNotFoundError(
                 f"expected one .ap.bin in {Path(rec_dir) / 'sglx'}, found {len(ap)}"
             )
-        return cls(ap[0], speed=speed)
+        return cls(ap[0], speed=speed, shank=shank)
 
     def start(self) -> None:
         self._t0 = time.perf_counter()
@@ -98,13 +132,19 @@ class FileReplaySource:
         )
 
     def read(self, band: str, first_sample: int, n_samples: int) -> np.ndarray:
+        if band != "ap" and not self.has_lf:
+            raise ValueError("this recording has no LF band (derive it from the AP band)")
         sr = self.sr_ap if band == "ap" else self.sr_lf
         fs = self.fs_ap if band == "ap" else self.fs_lf
         stop = int(first_sample) + int(n_samples)
         if stop > int(round(self.acquired_s() * fs)) + 1:
             raise ValueError(f"{band} samples up to {stop} are not acquired yet")
+        if self.layout.identity:
+            return np.array(
+                sr._raw[int(first_sample) : stop, : self.n_channels], dtype=np.int16
+            )
         return np.array(
-            sr._raw[int(first_sample) : stop, : self.n_channels], dtype=np.int16
+            sr._raw[int(first_sample) : stop][:, self.channels], dtype=np.int16
         )
 
 
@@ -129,17 +169,22 @@ def load_sglx(sdk_dir=None):
 class SpikeGLXSource:
     """An imec probe acquired by a running SpikeGLX, read through its remote command server.
 
-    SpikeGLX streams a Neuropixels 1.0 probe as one stream of 16-bit words per sample: the AP
-    channels, then the LF channels (upsampled to the AP rate in memory), then the sync word.
-    AP samples are fetched as they are; LF samples are the LF channels at every 12th sample. The
-    acquisition clock is the stream's sample count since :meth:`start`. Enable the command
-    server in SpikeGLX (Options / Command Server Settings) and start a run before :meth:`start`.
+    SpikeGLX streams an imec probe as one stream of 16-bit words per sample: the AP channels,
+    then for a probe with an LF band (Neuropixels 1.0) the LF channels (upsampled to the AP rate
+    in memory), then the sync word(s). AP samples are fetched as they are; LF samples are the LF
+    channels at every 12th sample. A probe without an LF band (Neuropixels 2.0: one wideband
+    signal) has ``has_lf`` False and its LF is derived from the AP samples. Only the channels of
+    the shank localized are fetched (:attr:`layout`, from SpikeGLX's site map). The acquisition
+    clock is the stream's sample count since :meth:`start`. Enable the command server in
+    SpikeGLX (Options / Command Server Settings) and start a run before :meth:`start`.
 
     Args:
         probe: Logical imec probe index (``ip``).
         address, port: The SpikeGLX command server.
         sdk_dir: Folder holding the SDK's ``sglx_pkg`` (see :func:`load_sglx`).
-        lf_downsample: AP samples per LF sample (12 for Neuropixels 1.0).
+        lf_downsample: AP samples per LF sample (12 for Neuropixels 1.0; the decimation of a
+            derived LF band).
+        shank: The shank to localize (default: the one with the most channels).
     """
 
     JS_IMEC = 2
@@ -151,8 +196,11 @@ class SpikeGLXSource:
         port: int = 4142,
         sdk_dir=None,
         lf_downsample: int = 12,
+        shank: Optional[int] = None,
     ):
         from ctypes import byref, c_double, c_int
+
+        from .probe import ProbeLayout
 
         self._sglx = s = load_sglx(sdk_dir)
         self.ip, self.lf_downsample = int(probe), int(lf_downsample)
@@ -168,28 +216,45 @@ class SpikeGLXSource:
             raise RuntimeError(
                 f"cannot read the channels of imec probe {self.ip}: {self._error()}"
             )
-        n_ap, n_lf, n_sy = (s.c_sglx_getint(self.h, i) for i in range(nval.value))
-        if n_lf == 0:
+        counts = [int(s.c_sglx_getint(self.h, i)) for i in range(nval.value)]
+        n_ap, n_lf = (counts + [0, 0])[:2]
+        if n_ap == 0:
+            raise ValueError(f"imec probe {self.ip} streams no AP channel")
+        self.n_ap, self.has_lf = int(n_ap), int(n_lf) > 0
+        if self.has_lf and n_lf != n_ap:
             raise ValueError(
-                f"imec probe {self.ip} has no LF band (the localizer needs LF features)"
+                f"imec probe {self.ip} streams {n_ap} AP but {n_lf} LF channels"
             )
-        self.n_channels = int(n_ap)
         self.fs_ap = float(s.c_sglx_getStreamSampleRate(self.h, self.JS_IMEC, self.ip))
         self.fs_lf = self.fs_ap / self.lf_downsample
+        kv = self._geom_map()
+        self.layout = ProbeLayout.from_geom_map(
+            kv,
+            self.n_ap,
+            has_lf=self.has_lf,
+            shank=shank,
+            np1_geometry=lambda: self._np1_geometry(kv),
+        )
+        self.channels = self.layout.channels
+        self.n_channels = self.layout.n_channels
         mult = c_double()
 
         def i16_to_volts(chan: int) -> float:
             if not s.c_sglx_getStreamI16ToVolts(
-                byref(mult), self.h, self.JS_IMEC, self.ip, chan
+                byref(mult), self.h, self.JS_IMEC, self.ip, int(chan)
             ):
                 raise RuntimeError(
                     f"cannot read the gain of channel {chan}: {self._error()}"
                 )
             return mult.value
 
-        self.s2v_ap = np.array([i16_to_volts(c) for c in range(n_ap)])
-        self.s2v_lf = np.array([i16_to_volts(n_ap + c) for c in range(n_lf)])
-        self.geometry = self._geometry()
+        self.s2v_ap = np.array([i16_to_volts(c) for c in self.channels])
+        self.s2v_lf = (
+            np.array([i16_to_volts(self.n_ap + c) for c in self.channels])
+            if self.has_lf
+            else None
+        )
+        self.geometry = self.layout.geometry
         self.name = f"spikeglx_imec{self.ip}"
         self.speed = 1.0  # live: data arrive in real time
         self.duration_s = np.inf
@@ -199,31 +264,35 @@ class SpikeGLXSource:
         err = self._sglx.c_sglx_getError(self.h)
         return err.decode(errors="replace") if isinstance(err, bytes) else str(err)
 
-    def _geometry(self) -> dict:
-        """ibldsp geometry of a Neuropixels 1.0 probe, with SpikeGLX's site positions when
-        available (``getGeomMap``: x from the shank's left edge, z from the tip row)."""
+    def _geom_map(self) -> dict:
+        """SpikeGLX's site map of the probe (``getGeomMap``), empty if unavailable."""
         from ctypes import byref, c_int
 
+        kv, nval, length = {}, c_int(), c_int()
+        if self._sglx.c_sglx_getGeomMap(byref(nval), self.h, self.ip):
+            for i in range(nval.value):
+                item = self._sglx.c_sglx_getstr(byref(length), self.h, i)
+                item = item.decode() if isinstance(item, bytes) else str(item)
+                key, _, val = item.partition("=")
+                kv[key.strip()] = val.strip()
+        return kv
+
+    def _np1_geometry(self, kv: dict) -> dict:
+        """ibldsp geometry of a Neuropixels 1.0 probe, with SpikeGLX's site positions when
+        available (``getGeomMap``: x from the shank's left edge, z from the tip row)."""
         import neuropixel
 
         geometry = {
             k: np.asarray(v) for k, v in neuropixel.trace_header(version=1).items()
         }
-        geometry = {k: v[: self.n_channels] for k, v in geometry.items()}
-        nval, length = c_int(), c_int()
-        if self._sglx.c_sglx_getGeomMap(byref(nval), self.h, self.ip):
-            kv = {}
-            for i in range(nval.value):
-                item = self._sglx.c_sglx_getstr(byref(length), self.h, i).decode()
-                key, _, val = item.partition("=")
-                kv[key.strip()] = val.strip()
-            try:
-                x = np.array([float(kv[f"ch{c}_x"]) for c in range(self.n_channels)])
-                z = np.array([float(kv[f"ch{c}_z"]) for c in range(self.n_channels)])
-                # ibldsp convention: y from the tip site (20 µm for NP1), x as in the meta.
-                geometry["x"], geometry["y"] = x, z - z.min() + geometry["y"].min()
-            except (KeyError, ValueError):
-                pass
+        geometry = {k: v[: self.n_ap] for k, v in geometry.items()}
+        try:
+            x = np.array([float(kv[f"ch{c}_x"]) for c in range(self.n_ap)])
+            z = np.array([float(kv[f"ch{c}_z"]) for c in range(self.n_ap)])
+            # ibldsp convention: y from the tip site (20 µm for NP1), x as in the meta.
+            geometry["x"], geometry["y"] = x, z - z.min() + geometry["y"].min()
+        except (KeyError, ValueError):
+            pass
         return geometry
 
     def start(self) -> None:
@@ -250,7 +319,8 @@ class SpikeGLXSource:
         return max(0.0, (count - self._count0) / self.fs_ap)
 
     def read(self, band: str, first_sample: int, n_samples: int) -> np.ndarray:
-        """``[n_samples, n_channels]`` int16 of a band, ``first_sample`` counted from :meth:`start`.
+        """``[n_samples, n_channels]`` int16 of a band (the channels used), ``first_sample``
+        counted from :meth:`start`.
 
         SpikeGLX receives one LF sample per 12-sample packet and interpolates it linearly into
         the AP-rate stream, starting from the previous LF sample: LF sample ``m`` is exact at
@@ -258,10 +328,13 @@ class SpikeGLXSource:
         samples (SpikeGLX's own ``downsample`` does not land on them).
         """
         if band == "ap":
-            chans = np.arange(self.n_channels)
-            return self._fetch(chans, self._count0 + int(first_sample), int(n_samples))
+            return self._fetch(
+                self.channels, self._count0 + int(first_sample), int(n_samples)
+            )
+        if not self.has_lf:
+            raise ValueError("this probe has no LF band (derive it from the AP band)")
         k = self.lf_downsample
-        chans = self.n_channels + np.arange(len(self.s2v_lf))
+        chans = self.n_ap + self.channels
         m = self._count0 // k + int(first_sample)  # LF sample index on SpikeGLX's clock
         full = self._fetch(chans, (m + 1) * k, int(n_samples) * k)
         return np.ascontiguousarray(full[::k])

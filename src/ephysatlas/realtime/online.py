@@ -6,7 +6,8 @@ worker processes with the release code (:func:`ephysatlas.realtime.features.snip
 Completed snippets are used in acquisition order: after each one the per-channel median over all
 snippets so far is denoised along the probe (:func:`~ephysatlas.realtime.features.aggregate_snippets`)
 and the probe is localized again with :class:`~ephysatlas.alignment.EphysOnlyLocalizer`
-(``feature_set="lf_ap_no_detection"``), starting from the planned trajectory.
+(``feature_set="lf_ap_no_detection"``), starting from the planned trajectory, or without one
+with a whole-brain search (:func:`ephysatlas.realtime.whole_brain.localize_without_plan`).
 
 When the workers fall behind (more than ``max_in_flight`` snippets waiting) new snippets are
 dropped and counted, so the pipeline always works on recent data. With a source that has
@@ -15,6 +16,13 @@ submitted as workers free up, and the updates are the same as a real-time run th
 
 Every update records when its newest snippet finished being acquired and how long the features
 and the localization took after that (``latency_s``), the measure of real-time operation.
+
+Probes other than a standard Neuropixels 1.0 (the source's
+:class:`~ephysatlas.realtime.probe.ProbeLayout`) are localized one shank at a time: the
+shank's channel features are resampled onto the localizer's rows, a probe without an LF band
+gets it from its wideband AP band, and the localizer's probe length is scaled to the shank's
+recorded span. The planned positions given to the pipeline are those of the rows
+(:meth:`~ephysatlas.realtime.probe.ProbeLayout.plan_rows`).
 """
 
 from __future__ import annotations
@@ -100,9 +108,10 @@ class Update:
     latency_s: float  # wall_s - when the newest snippet finished being acquired
     aggregate_s: float
     localize_s: float
-    features: np.ndarray  # [C, 43] in row order
-    result: object  # AlignmentResult
+    features: np.ndarray  # [R, 43] in row order
+    result: object  # AlignmentResult (positions of the localizer's rows)
     snippet_starts: list = field(default_factory=list)
+    recorded_xyz: Optional[np.ndarray] = None  # [n, 3] the channels used (source.channels order)
 
 
 def _init_worker(threads: int) -> None:
@@ -116,14 +125,23 @@ def _init_worker(threads: int) -> None:
     warnings.filterwarnings("ignore")
 
 
-def _compute_snippet(raw_ap, raw_lf, s2v_ap, s2v_lf, fs_ap, fs_lf, geometry):
-    """Worker: int16 snippets -> volts -> snippet features; returns (table, seconds)."""
+def _compute_snippet(
+    raw_ap, raw_lf, s2v_ap, s2v_lf, fs_ap, fs_lf, geometry, neuropixel_version=1
+):
+    """Worker: int16 snippets -> volts -> snippet features; returns (table, seconds). Without
+    ``raw_lf`` (a wideband probe) the LF band is derived from the AP snippet."""
     from .features import snippet_features
+    from .probe import lf_from_wideband
 
     t0 = time.perf_counter()
     ap = (raw_ap.T * s2v_ap[:, None]).astype(np.float32)
-    lf = (raw_lf.T * s2v_lf[:, None]).astype(np.float32)
-    df = snippet_features(ap, lf, fs_ap, fs_lf, geometry)
+    if raw_lf is None:
+        lf, fs_lf = lf_from_wideband(ap, fs_ap)
+    else:
+        lf = (raw_lf.T * s2v_lf[:, None]).astype(np.float32)
+    df = snippet_features(
+        ap, lf, fs_ap, fs_lf, geometry, neuropixel_version=neuropixel_version
+    )
     return df, time.perf_counter() - t0
 
 
@@ -133,7 +151,9 @@ class OnlinePipeline:
     Args:
         source: A source (see :mod:`ephysatlas.realtime.sources`).
         localizer: :class:`~ephysatlas.alignment.EphysOnlyLocalizer` (the real-time feature set).
-        planned_xyz: ``[C, 3]`` planned channel positions (m, row order).
+        planned_xyz: ``[R, 3]`` planned positions of the localizer's rows (m, top first: the
+            channels of a standard Neuropixels 1.0, else ``source.layout.plan_rows(...)``), or
+            None to search the whole brain at every update (slower; left hemisphere).
         config: :class:`OnlineConfig`.
         on_update: Called with each :class:`Update` as soon as it is ready.
         pid: Insertion id passed to the localizer ('' for a new recording).
@@ -143,14 +163,20 @@ class OnlinePipeline:
         self,
         source,
         localizer,
-        planned_xyz: np.ndarray,
+        planned_xyz: Optional[np.ndarray],
         config: Optional[OnlineConfig] = None,
         on_update: Optional[Callable[[Update], None]] = None,
         pid: str = "",
     ):
         self.source = source
-        self.localizer = localizer
-        self.planned_xyz = np.asarray(planned_xyz, dtype=np.float64)
+        self.layout = getattr(source, "layout", None)
+        # A probe other than a standard 1.0 gets the localizer with its probe length scaled.
+        self.localizer = (
+            self.layout.localizer(localizer) if self.layout is not None else localizer
+        )
+        self.planned_xyz = (
+            None if planned_xyz is None else np.asarray(planned_xyz, dtype=np.float64)
+        )
         self.config = config or OnlineConfig()
         self.on_update = on_update
         self.pid = str(pid)
@@ -161,9 +187,17 @@ class OnlinePipeline:
         cfg = self.config
         t_agg = time.perf_counter()
         table = aggregate_snippets([s.features for s in used], self.source.geometry)
-        x = feature_matrix(table, n_channels=self.source.n_channels)
+        if self.layout is not None:
+            x = self.layout.feature_rows(table)
+        else:
+            x = feature_matrix(table, n_channels=self.source.n_channels)
         t_loc = time.perf_counter()
-        result = self.localizer.localize(x, self.planned_xyz, pid=self.pid)
+        if self.planned_xyz is None:
+            from .whole_brain import localize_without_plan
+
+            result = localize_without_plan(self.localizer, x, pid=self.pid)
+        else:
+            result = self.localizer.localize(x, self.planned_xyz, pid=self.pid)
         now = time.perf_counter() - t0
         newest = max(used, key=lambda s: s.t_start)
         update = Update(
@@ -177,6 +211,11 @@ class OnlinePipeline:
             features=x,
             result=result,
             snippet_starts=[float(s.t_start) for s in used],
+            recorded_xyz=(
+                self.layout.channel_xyz(result.channel_xyz)
+                if self.layout is not None
+                else None
+            ),
         )
         self.updates.append(update)
         if self.on_update is not None:
@@ -188,12 +227,19 @@ class OnlinePipeline:
         cfg, src = self.config, self.source
         unlimited = getattr(src, "speed", 1.0) is None
         cap = cfg.n_workers if unlimited else (cfg.max_in_flight or 2 * cfg.n_workers)
+        has_lf = bool(getattr(src, "has_lf", True))
+        version = self.layout.neuropixel_version if self.layout is not None else 1
         ns_ap, ns_lf = (
             snippet_samples(src.fs_ap, cfg.snippet_s),
             snippet_samples(src.fs_lf, cfg.snippet_s),
         )
-        # A snippet is complete once its last AP and LF samples are acquired.
-        need_s = max(ns_ap / src.fs_ap, (ns_lf + LF_LATENCY_SAMPLES) / src.fs_lf)
+        # A snippet is complete once its last AP and LF samples are acquired (a derived LF band
+        # comes from the AP samples).
+        need_s = (
+            max(ns_ap / src.fs_ap, (ns_lf + LF_LATENCY_SAMPLES) / src.fs_lf)
+            if has_lf
+            else ns_ap / src.fs_ap
+        )
         duration = getattr(src, "duration_s", np.inf)
         self._stop = False
         pending, used = {}, []
@@ -225,12 +271,13 @@ class OnlinePipeline:
                     future = pool.submit(
                         _compute_snippet,
                         src.read("ap", n_ap, ns_ap),
-                        src.read("lf", n_lf, ns_lf),
+                        src.read("lf", n_lf, ns_lf) if has_lf else None,
                         src.s2v_ap,
                         src.s2v_lf,
                         src.fs_ap,
                         src.fs_lf,
                         src.geometry,
+                        version,
                     )
                     pending[future] = snip
                 for future in [f for f in pending if f.done()]:
@@ -315,8 +362,10 @@ class OnlinePipeline:
         )
 
     def save(self, out_dir) -> None:
-        """Write ``snippets.csv``, ``updates.csv``, ``updates.npz`` (channel / trace positions and
-        features of every update) and ``snippet_features.pqt`` (every snippet's raw features)."""
+        """Write ``snippets.csv``, ``updates.csv``, ``updates.npz`` (row / trace positions and
+        features of every update; for a probe other than a standard 1.0 also the positions of the
+        channels used, ``recorded_channel_xyz``, with their stream indices and the rows' heights)
+        and ``snippet_features.pqt`` (every snippet's raw features)."""
         from pathlib import Path
 
         out = Path(out_dir)
@@ -329,8 +378,24 @@ class OnlinePipeline:
                 channel_xyz=np.stack([u.result.channel_xyz for u in self.updates]),
                 trace_xyz=np.stack([u.result.trace_xyz for u in self.updates]),
                 features=np.stack([u.features for u in self.updates]),
-                planned_xyz=self.planned_xyz,
+                planned_xyz=(  # NaN without a plan
+                    self.planned_xyz
+                    if self.planned_xyz is not None
+                    else np.full_like(self.updates[0].result.channel_xyz, np.nan)
+                ),
                 valid=np.stack([u.result.valid for u in self.updates]),
+                **(
+                    dict(
+                        recorded_channel_xyz=np.stack(
+                            [u.recorded_xyz for u in self.updates]
+                        ),
+                        recorded_channels=self.layout.channels,
+                        row_height_um=self.layout.row_height_um,
+                        shank=self.layout.shank,
+                    )
+                    if self.layout is not None
+                    else {}
+                ),
             )
         done = [s for s in self.snippets if s.features is not None]
         if done:
