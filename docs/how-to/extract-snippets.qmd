@@ -1,0 +1,112 @@
+---
+title: "How to extract raw snippets to send to the IBL"
+---
+
+This guide is for labs that share Neuropixels recordings with the IBL. Large raw recordings are reduced to short AP and LF snippets, with probe geometry and metadata, in a transferable HDF5 file. **One `.h5` file can contain recordings from multiple subjects, acquisition dates, sessions and probes.** Run extraction once per recording, using the same output path to build a collection. Original AP samples and recorded NP1/3A LF samples are stored unchanged. For NP2, the file also includes LF derived from the wideband AP using `ibl-neuropixel`'s `NP2Converter`.
+
+## Prerequisites
+
+- Python 3.12 or newer
+- A SpikeGLX recording of the probe: the `.ap.bin` or `.ap.cbin` file with its `.meta` file next to it. NP1.0 and 3A also require the LF file and its `.meta` file next to the AP file, with the same name and extension: `.lf.bin` next to `.ap.bin`, or `.lf.cbin` next to `.ap.cbin`. Extraction stops if LF is missing.
+- Supported probes: Neuropixels 1.0, 3A and 2.x (including four-shank 2.4). Neuropixels 2 records no separate LF band; extraction stores both its unchanged wideband data and converter-derived LF. An adjacent NP2 `.lf` file is left untouched and is not used, since its processing history may differ. If your probe type is not supported, the command stops and says so; please tell us the probe type.
+
+## Install
+
+``` bash
+pip install git+https://github.com/int-brain-lab/ibleatools
+```
+
+## Extract the snippets
+
+Run the command once per recording:
+
+``` bash
+ibleatools-snippets /data/subjectA/2026-01-15/probe00/run_g0_t0.imec0.ap.cbin \
+    -o /data/to_send/collection.h5 \
+    --name subjectA_2026-01-15_probe00
+```
+
+- `-o` is the collection to write. The first call creates it; later calls append independent recordings. A collection name such as `collection.h5` or `lab_batch_01.h5` need not describe one subject or date.
+- `--name` is the recording's identifier inside that collection. Use a stable, unique name such as `subjectA_2026-01-15_probe00`; include a session or run identifier when the same probe was recorded more than once that day. Without `--name`, the AP filename without `.ap.bin` / `.ap.cbin` is used. Those filenames often repeat across subjects and dates.
+
+By default the command takes 5 snippets of 5 s, spread over the recording and leaving out the first and last 5 minutes. Options for other cases:
+
+| Option | Meaning |
+|------------------------------------|------------------------------------|
+| `--t-starts 600 900` | Snippet start times in seconds, instead of automatic ones |
+| `--n-snippets`, `--duration` | Number and length (s) of the automatic snippets |
+| `--margin` | Seconds skipped at each end; lower it for recordings shorter than about 10 minutes |
+
+`ibleatools-snippets --help` lists everything.
+
+## LF for Neuropixels 2
+
+Every recording in the file has AP and LF snippets. Neuropixels 2 records no LF band, so the command makes it from the AP data with `NP2Converter.extract_lfp` of `ibl-neuropixel`. It reads the AP samples of each snippet with a short margin on both sides, so the filter does not start at the snippet's edge. The AP snippets are stored unchanged, and no file is written next to your recording.
+
+The file marks LF as `recorded` (NP1.0, 3A) or `derived` (NP2). Derived LF comes with the filter coefficients and has no LF `.meta` file; the AP `.meta` is stored under `ap/meta`. LF snippets start three samples later than the AP snippets, as in the SpikeGLX feature calculator, and `lf/first_sample` gives their position in the LF data.
+
+The converter's low-pass filter is used as it is. Its cutoff is about 3 kHz where 1 kHz was intended; this is to be looked at separately. The AP snippets allow LF to be made again with another filter.
+
+A multi-shank recording stays one recording. The shank of each channel is in its geometry.
+
+## Recordings from multiple subjects and dates
+
+Use the same `-o` for any recordings you want to collect together, with a different `--name` for each:
+
+``` bash
+ibleatools-snippets /data/subjectA/2026-01-15/probe00/run_g0_t0.imec0.ap.cbin \
+    -o collection.h5 --name subjectA_2026-01-15_probe00
+ibleatools-snippets /data/subjectB/2026-02-20/probe00/run_g0_t0.imec0.ap.cbin \
+    -o collection.h5 --name subjectB_2026-02-20_probe00
+```
+
+These calls create independent groups:
+
+``` text
+collection.h5
+  recordings/
+    subjectA_2026-01-15_probe00/
+    subjectB_2026-02-20_probe00/
+```
+
+Each recording has its own source paths, geometry, sampling rates, snippet windows and original metadata. There is no shared subject or acquisition-date requirement. The file-level `created` timestamp describes when the collection was created, not when all its recordings were acquired. Subject/date identifiers in `--name` are chosen by you; the extractor does not parse them into separate metadata fields.
+
+An existing recording name is rejected, never overwritten. Reusing a name for another subject/date does not add a second recording. Choose a distinct name for the distinct recording; keep that name unchanged when retrying. Run only one writer on an output file at a time.
+
+## Resume a batch after a failed recording
+
+Completed recordings normally remain in the output when extraction of a later recording fails. You do not need to repeat the completed ones.
+
+1.  Fix the reported issue, such as a missing NP1/3A LF file or invalid snippet times.
+
+2.  Open the existing collection and list its recording names:
+
+    ``` python
+    import h5py
+
+    with h5py.File("collection.h5", "r") as file:
+        completed = list(file["recordings"])
+    ```
+
+3.  For a failure before the final HDF5 copy, rerun only the missing recording with the same output path and recording name. Do not delete or recreate the output file. If the success log was printed but the batch stopped afterward, the name is already present and that recording can be skipped.
+
+The extractor itself raises an error for names already present. For a batch you want to rerun as a whole, use [the Python example](https://github.com/int-brain-lab/ibleatools/blob/main/examples/snippet_extraction_example.py): it uses a persistent output path, checks names and source paths, skips existing recordings, and extracts the missing ones. Keep its input paths, names and snippet settings unchanged between attempts. To use different snippet settings for an already stored recording, use a new collection or a deliberately distinct recording name.
+
+Temporary `.partial` files are normally removed on errors or Ctrl-C. A hard process termination can leave one behind. Retrying the same output/name recreates the temporary file; it is not a completed recording and should not be renamed into the collection.
+
+### If interruption happened during the final copy
+
+Appending to an existing HDF5 file has a short non-transactional copy step, between the log line ending "smaller than the raw data" and the line starting "Added recording". Interruption or a write failure there can leave an incomplete recording group or damage the file. Merely seeing its name is not proof that the recording completed, and successfully opening the file does not establish that every dataset is intact.
+
+In this case, preserve a copy before attempting recovery and verify the stored recordings before using the example's skip logic. If the file is readable and only the last recording group is incomplete, removing that group after backup and verification allows that recording to be extracted again while preserving the earlier ones. The extractor does not perform this repair automatically. If the container is damaged, restore a known-good backup and resume from the recordings present there. Periodic backups or smaller batch files limit how much work needs repeating after such a failure.
+
+## What the file holds
+
+- Raw AP samples and recorded NP1/3A LF or converter-derived NP2 LF, compressed without loss, with the gains to convert them to volts.
+- The probe geometry, each channel's shank, the original `.meta` text, and the start time of each snippet in your recording.
+
+The SpikeGLX sync channel is not included. A Neuropixels 1.0 probe adds about 0.23 GB to the file with the defaults (5 snippets of 5 s).
+
+## Send us the files
+
+Send us the `.h5` collections. Each can hold any chosen set of recordings from multiple subjects, dates, sessions and probes; use stable recording names so the entries can be identified independently.
