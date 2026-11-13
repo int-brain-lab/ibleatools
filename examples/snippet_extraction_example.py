@@ -1,8 +1,10 @@
-"""Pack recordings from different subjects and dates into one HDF5 file.
+"""Pack recordings from different subjects and dates, then compute features from the file.
 
 Edit the inputs and run by # %% cells. Rerunning skips recordings already present in
 an intact output file. See the how-to for recovery after an interruption during append.
 Each recording stores AP and LF; NP2 LF is derived with NP2Converter while AP stays raw.
+The extraction cells run at the partner lab; the final cell computes features at the IBL.
+This example uses two 1 s snippets; the extraction default is five 5 s snippets.
 """
 
 # %% Imports and configuration
@@ -11,6 +13,11 @@ from pathlib import Path
 
 import h5py
 
+from ephysatlas.feature_calculators import (
+    FeatureComputationOptions,
+    SnippetFileFeatureCalculator,
+    list_recordings,
+)
 from ephysatlas.snippet_extractor import extract_snippets
 
 logging.basicConfig(level=logging.INFO)
@@ -48,6 +55,7 @@ for recording_name, ap_file in recordings:
                     )
                 logger.info("Skipping stored recording %s", recording_name)
                 continue
+    # Optional histology_raw=[...] and trajectory={...} must belong to this recording.
     extract_snippets(
         ap_file,
         output_file,
@@ -58,5 +66,12 @@ for recording_name, ap_file in recordings:
 
 # %% Inspect the collection, including recordings from earlier runs
 logger.info("wrote %s (%.1f MB)", output_file, output_file.stat().st_size / 1e6)
-with h5py.File(output_file) as file:
-    logger.info("recordings in the file: %s", list(file["recordings"]))
+logger.info("recordings in the file: %s", list_recordings(output_file))
+
+# %% Compute features of one recording from the file (our side)
+calc = SnippetFileFeatureCalculator(output_file, recording=recordings[0][0])
+# Without a GPU, skip the waveforms family
+options = FeatureComputationOptions(features_to_compute=["lf", "csd", "ap"])
+df = calc.compute_denoised_features(options=options)
+logger.info("features table: %d rows x %d columns", *df.shape)
+logger.info("index: %s", df.index.names)

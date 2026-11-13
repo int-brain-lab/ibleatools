@@ -1,7 +1,7 @@
 """Pack raw AP and recorded or converter-derived LF snippets into one small HDF5 file.
 
 Partner labs run :func:`extract_snippets` on their raw recordings (hundreds of GB each) and
-send us the output, with the raw samples and their metadata kept together.
+send us the output, which the snippet-file feature calculator reads back.
 
 File layout (``n`` snippets, ``c`` channels, sync channel removed)::
 
@@ -24,6 +24,8 @@ File layout (``n`` snippets, ``c`` channels, sync channel removed)::
                                 source="recorded" for NP1/3A, "derived" for NP2
                                 derived LF has no original .meta; the method attribute
                                 and filter_sos record the NP2Converter filter instead
+        histology/raw/<name>    uint8 (n_bytes,)   original histology bytes, attrs source_path
+        trajectory              group, attrs x, y, z, depth, theta, phi; only when given
 
 Channel rows follow the order of ``spikeglx.Reader`` (``sr[...]`` and ``sr.geometry``).
 """
@@ -53,6 +55,9 @@ from ephysatlas.feature_calculators.spikeglx_like import LF_LATENCY_SAMPLES
 
 LOGGER = logging.getLogger(__name__)
 
+TRAJECTORY_KEYS = ("x", "y", "z", "depth", "theta", "phi")
+# Limit on the total size of the raw histology files of one recording.
+MAX_HISTOLOGY_BYTES = 100 * 1024**2
 # Seed of the stratified draw in get_snippet_start_times (its default).
 SNIPPET_SEED = 0
 
@@ -85,10 +90,12 @@ def extract_snippets(
     ap_file: str | Path,
     output_file: str | Path,
     name: str | None = None,
+    histology_raw: Sequence[str | Path] | None = None,
     t_starts: Sequence[float] | None = None,
     n_snippets: int = 5,
     duration: float = 5.0,
     margin: float = 300.0,
+    trajectory: Mapping[str, float] | None = None,
 ) -> Path:
     """Write raw AP and recorded or derived LF snippets of one SpikeGLX probe recording.
 
@@ -106,11 +113,17 @@ def extract_snippets(
             snippet file, and the recording is added to it.
         name: Name of the recording inside the file, stored under ``recordings/<name>``. If
             None, the AP file name without ``.ap.bin`` / ``.ap.cbin``.
+        histology_raw: Other histology files to copy into the output as raw bytes, e.g.
+            track CSVs of this probe. Each is stored under its file name. The total is
+            limited to 100 MB, which keeps image volumes out.
         t_starts: Snippet start times in seconds. If None, ``n_snippets`` start times are
             chosen by ``get_snippet_start_times`` over the length of the data in the files.
         n_snippets: Number of snippets when ``t_starts`` is None.
         duration: Length of each snippet in seconds, for both bands.
         margin: Seconds skipped at each end of the recording by automatic times.
+        trajectory: Planned probe insertion with the keys ``TRAJECTORY_KEYS``: x, y, z in um
+            relative to bregma, depth in um along the probe, theta and phi in degrees (IBL
+            Alyx units). Other keys are ignored.
 
     Returns:
         Path of the written file.
@@ -119,9 +132,12 @@ def extract_snippets(
         ValueError: ``ap_file`` is not a SpikeGLX AP data file, ``output_file`` already
             holds a recording called ``name``, the probe type is not supported, the
             ``.meta`` file has no channel map, the recording is too short for automatic
-            times, explicit snippets overlap or reach outside the data.
-        FileNotFoundError: The ``.meta`` file of ``ap_file`` or a required NP1/3A LF file
-            does not exist (raised by ``spikeglx``).
+            times, explicit snippets overlap or reach outside the data, the histology
+            files are over 100 MB, or a trajectory value is not a number.
+        FileNotFoundError: The ``.meta`` file of ``ap_file``, a required NP1/3A LF file
+            (both raised by ``spikeglx``), or a histology file does not exist.
+        IsADirectoryError: A ``histology_raw`` path is a folder instead of a file.
+        KeyError: ``trajectory`` lacks one of ``TRAJECTORY_KEYS``.
     """
     ap_file, output_file = Path(ap_file), Path(output_file)
     if ".ap." not in ap_file.name or ap_file.suffix not in (".bin", ".cbin"):
@@ -141,6 +157,19 @@ def extract_snippets(
                     "different recording, give it another name with --name (name=... in "
                     "Python)."
                 )
+
+    # Check the total size and convert the trajectory before opening the recording.
+    # The size limit keeps image volumes out of the file.
+    histology_raw = [Path(path) for path in histology_raw or ()]
+    histology_bytes = sum(path.stat().st_size for path in histology_raw)
+    if histology_bytes > MAX_HISTOLOGY_BYTES:
+        raise ValueError(
+            f"The histology files total {histology_bytes / 1024**2:.0f} MB, over the "
+            f"{MAX_HISTOLOGY_BYTES // 1024**2} MB limit. Leave out image volumes and pass "
+            "only the small channel location, pick and track files."
+        )
+    if trajectory is not None:
+        trajectory = {key: float(trajectory[key]) for key in TRAJECTORY_KEYS}
 
     # Probe facts come from the meta: spikeglx.Reader fails with unclear errors on
     # probe types it doesn't know.
@@ -256,6 +285,16 @@ def extract_snippets(
             if converter is not None:
                 raw_bytes += _write_np2_lf(rec, converter, order, *reads["lf"])
 
+            if histology_raw:
+                group = rec.create_group("histology")
+                for path in histology_raw:
+                    dataset = group.create_dataset(
+                        f"raw/{path.name}",
+                        data=np.frombuffer(path.read_bytes(), dtype=np.uint8),
+                    )
+                    dataset.attrs["source_path"] = str(path.resolve())
+            if trajectory is not None:
+                rec.create_group("trajectory").attrs.update(trajectory)
         size = partial.stat().st_size
         LOGGER.info(
             "Recording %s: %.1f MB, %.2fx smaller than the raw data",
@@ -319,6 +358,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         ".ap.bin/.ap.cbin",
     )
     parser.add_argument(
+        "--histology-raw",
+        type=Path,
+        nargs="+",
+        metavar="PATH",
+        help="other histology files of this probe, copied as they are",
+    )
+    parser.add_argument(
         "--t-starts",
         type=float,
         nargs="+",
@@ -340,6 +386,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=300.0,
         help="seconds skipped at each end when the start times are automatic",
     )
+    parser.add_argument(
+        "--trajectory",
+        type=float,
+        nargs=6,
+        metavar=("X", "Y", "Z", "DEPTH", "THETA", "PHI"),
+        help="planned insertion, as in IBL Alyx trajectories: x y z in um relative to "
+        "bregma (x: ML, right positive; y: AP, anterior positive; z: DV, dorsal "
+        "positive), depth in um along the probe, theta (from straight up) and phi "
+        "(from the +x axis) in degrees. Your own conventions may differ; convert "
+        "them first",
+    )
     args = parser.parse_args(argv)
 
     # Handler on the package logger, added once, so repeated calls do not duplicate messages
@@ -351,15 +408,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         package_logger.addHandler(handler)
     package_logger.setLevel(logging.INFO)
 
+    trajectory = (
+        dict(zip(TRAJECTORY_KEYS, args.trajectory)) if args.trajectory else None
+    )
     try:
         extract_snippets(
             args.ap_file,
             args.output,
             name=args.name,
+            histology_raw=args.histology_raw,
             t_starts=args.t_starts,
             n_snippets=args.n_snippets,
             duration=args.duration,
             margin=args.margin,
+            trajectory=trajectory,
         )
     except Exception as err:
         LOGGER.error("%s", err)

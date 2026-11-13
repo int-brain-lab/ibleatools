@@ -85,6 +85,8 @@ class TestExtractNP1(unittest.TestCase):
             self.assertEqual(f[REC].attrs["neuropixel_version"], 1)
             self.assertEqual(f[REC].attrs["duration"], 0.1)
             self.assertEqual(f[REC].attrs["snippet_method"], "explicit")
+            self.assertNotIn("trajectory", f[REC])
+            self.assertNotIn("histology", f[REC])
             # seed and margin only describe automatic times
             self.assertNotIn("snippet_seed", f[REC].attrs)
             self.assertNotIn("snippet_margin", f[REC].attrs)
@@ -579,6 +581,119 @@ class TestSnippetTimes(unittest.TestCase):
             extract_snippets(ap, self.tmp / "neg.h5", t_starts=[-0.1], duration=0.1)
 
 
+class TestHistologyAndTrajectory(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp)
+        self.ap = write_spikeglx_recording(self.tmp, "np1", 1.0)
+        self.loc = self.tmp / "channel_locations.json"
+        self.loc.write_bytes(b'{"channel_0": {"x": 1}}')
+
+    def test_files_stored_byte_identical(self):
+        """Keep each file's bytes and resolved source path under its file name."""
+        tracks = self.tmp / "tracks.csv"
+        tracks.write_bytes(b"Index,Region acronym\n0,CA1\n")
+        out = extract_snippets(
+            self.ap,
+            self.tmp / "h.h5",
+            histology_raw=[self.loc, tracks],
+            t_starts=[0.1],
+            duration=0.1,
+        )
+        with h5py.File(out) as f:
+            self.assertEqual(set(f[REC]["histology"]), {"raw"})
+            self.assertEqual(
+                set(f[REC]["histology/raw"]), {"channel_locations.json", "tracks.csv"}
+            )
+            for path in (self.loc, tracks):
+                stored = f[REC][f"histology/raw/{path.name}"]
+                self.assertEqual(stored.dtype, np.uint8)
+                self.assertEqual(stored[()].tobytes(), path.read_bytes())
+                self.assertEqual(stored.attrs["source_path"], str(path.resolve()))
+
+    def test_histology_folder_is_not_accepted(self):
+        """Let reading a folder fail and remove the temporary output."""
+        # only files are stored; a folder stops when its bytes are read
+        folder = self.tmp / "tracks"
+        folder.mkdir()
+        with self.assertRaises(IsADirectoryError):
+            extract_snippets(
+                self.ap,
+                self.tmp / "d.h5",
+                histology_raw=[folder],
+                t_starts=[0.1],
+                duration=0.1,
+            )
+        self.assertEqual(list(self.tmp.glob("d.h5*")), [])
+
+    def test_over_limit_raises(self):
+        """Reject oversized raw histology before creating the output folder."""
+        volume = self.tmp / "registered_atlas.tiff"
+        with open(volume, "wb") as fid:
+            fid.truncate(101 * 1024**2)  # a sparse file: no real disk use
+        out = self.tmp / "new" / "big.h5"
+        with self.assertRaisesRegex(ValueError, "100 MB"):
+            extract_snippets(
+                self.ap,
+                out,
+                histology_raw=[volume],
+                t_starts=[0.1],
+                duration=0.1,
+            )
+        self.assertFalse(out.parent.exists())
+
+    def test_missing_histology_path_raises(self):
+        out = self.tmp / "new" / "m.h5"
+        with self.assertRaises(FileNotFoundError):
+            extract_snippets(
+                self.ap,
+                out,
+                histology_raw=[self.loc, self.tmp / "nope.json"],
+                t_starts=[0.1],
+                duration=0.1,
+            )
+        self.assertFalse(out.parent.exists())
+
+    def test_trajectory_stored(self):
+        traj = dict(x=-2243.0, y=-2000.0, z=0.0, depth=4000.0, theta=15.0, phi=180.0)
+        out = extract_snippets(
+            self.ap, self.tmp / "t.h5", trajectory=traj, t_starts=[0.1], duration=0.1
+        )
+        with h5py.File(out) as f:
+            self.assertEqual(
+                {k: float(v) for k, v in f[REC]["trajectory"].attrs.items()}, traj
+            )
+        # integers are stored as floats
+        out = extract_snippets(
+            self.ap,
+            self.tmp / "t_int.h5",
+            trajectory=dict(x=-2243, y=-2000, z=0, depth=4000, theta=15, phi=180),
+            t_starts=[0.1],
+            duration=0.1,
+        )
+        with h5py.File(out) as f:
+            self.assertTrue(
+                all(
+                    isinstance(v, np.floating)
+                    for v in f[REC]["trajectory"].attrs.values()
+                )
+            )
+
+    def test_bad_trajectory_raises(self):
+        """Expose the missing-key and float-conversion errors before writing."""
+        good = dict(x=0, y=0, z=0, depth=1, theta=0, phi=0)
+        out = self.tmp / "new" / "bt.h5"
+        for traj, error in (
+            ({k: v for k, v in good.items() if k != "phi"}, KeyError),  # phi missing
+            ({**good, "x": "a"}, ValueError),  # not a number
+        ):
+            with self.assertRaises(error):
+                extract_snippets(
+                    self.ap, out, trajectory=traj, t_starts=[0.1], duration=0.1
+                )
+            self.assertFalse(out.parent.exists())
+
+
 class TestCli(unittest.TestCase):
     def setUp(self):
         # main() configures the "ephysatlas" logger; undo it so other tests stay quiet
@@ -599,6 +714,9 @@ class TestCli(unittest.TestCase):
                     "out.h5",
                     "--name",
                     "probe00",
+                    "--histology-raw",
+                    "a.json",
+                    "b.csv",
                     "--t-starts",
                     "1",
                     "2.5",
@@ -608,6 +726,13 @@ class TestCli(unittest.TestCase):
                     "2",
                     "--margin",
                     "60",
+                    "--trajectory",
+                    "1",
+                    "2",
+                    "3",
+                    "4000",
+                    "15",
+                    "180",
                 ]
             )
         self.assertEqual(rc, 0)
@@ -615,10 +740,12 @@ class TestCli(unittest.TestCase):
             Path("rec.imec0.ap.bin"),
             Path("out.h5"),
             name="probe00",
+            histology_raw=[Path("a.json"), Path("b.csv")],
             t_starts=[1.0, 2.5],
             n_snippets=3,
             duration=2.0,
             margin=60.0,
+            trajectory=dict(x=1.0, y=2.0, z=3.0, depth=4000.0, theta=15.0, phi=180.0),
         )
 
     def test_main_requires_output(self):
