@@ -160,6 +160,7 @@ In this case, preserve a copy before attempting recovery and verify the stored r
 
 - Raw AP samples and recorded NP1/3A LF or converter-derived NP2 LF, compressed without loss, with the gains to convert them to volts.
 - The probe geometry, each channel's shank, the original `.meta` text, and the start time of each snippet in your recording.
+- A `format_version` attribute on each recording, the integer version of its layout (currently 1), next to the `ibleatools` version that wrote it. Recordings written by ibleatools 0.14.0 have no `format_version` and use layout 1.
 - The original files of `--histology-raw` and the planned trajectory, when given.
 - The channel table (channel positions in metres, Allen region ids and acronyms) when `--channel-locations` is supplied, and the traced track when `--xyz-picks` is supplied.
 

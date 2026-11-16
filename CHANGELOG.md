@@ -5,6 +5,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-11-16
+
+### Added
+- Snippet files store `format_version` (`ephysatlas.snippet_extractor.FORMAT_VERSION`, now 1) on each recording: an integer that increases when the layout of a recording group changes in a way a reader has to handle. Recordings written by 0.14.0 have no such attribute and use layout 1
+
 ### Changed
 - **Breaking.** `download_encoding_volume` and `download_edges_volume` default to `label="2026_W46"` (previously `2026_W42`), the volume predicted by `ea-encoder-channel` `0.0.1` on the same 50 um grid. Pass `label="2026_W42"` for the previous volume
 

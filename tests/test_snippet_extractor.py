@@ -84,6 +84,8 @@ class TestExtractNP1(unittest.TestCase):
         with h5py.File(self.out) as f:
             self.assertEqual(list(f["recordings"]), ["rec_g0_t0.imec0"])
             self.assertEqual(f[REC].attrs["created"], f.attrs["created"])
+            # layout version of this recording group, an integer
+            self.assertEqual(f[REC].attrs["format_version"], 1)
             self.assertTrue(f[REC].attrs["probe_has_lf_band"])
             self.assertEqual(f[REC].attrs["neuropixel_version"], 1)
             self.assertEqual(f[REC].attrs["duration"], 0.1)
