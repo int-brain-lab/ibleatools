@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 - **Breaking.** `download_encoding_volume` and `download_edges_volume` default to `label="2026_W46"` (previously `2026_W42`), the volume predicted by `ea-encoder-channel` `0.0.1` on the same 50 um grid. Pass `label="2026_W42"` for the previous volume
 
+### Fixed
+- Schema metadata and docs for the spectral-parameterisation features had the wrong units (all given as dB rel. V²/Hz): `aperiodic_exponent` is the dimensionless exponent *n* of P ∝ 1/fⁿ, `aperiodic_offset` and `decay_fit_error` are in log₁₀(V²/Hz) (the error is a mean absolute error, not RMS), and `psd_residual_*` are in dB relative to the aperiodic fit. Values are unchanged
+
 ## [0.14.0] - 2026-11-16
 
 ### Added

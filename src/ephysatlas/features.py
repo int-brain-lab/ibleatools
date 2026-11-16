@@ -358,49 +358,49 @@ class ModelLfFeatures(BaseChannelFeatures):
         metadata={"raw_unit": "dB rel. V**2/Hz"},
     )
     psd_residual_lfp: Optional[float] = pa.Field(
-        description="Power in the band 0 - 90 Hz in decibels relative to V ** 2 / Hz after removing the linear fit of the psd decay in log-log space",
-        metadata={"raw_unit": "dB rel. V**2/Hz"},
+        description="Power in the band 0 - 90 Hz in decibels relative to the aperiodic (1/f) fit of the psd decay in log-log space; 0 dB means no power above the aperiodic background",
+        metadata={"raw_unit": "dB rel. aperiodic fit"},
         nullable=True,
     )
     psd_residual_delta: Optional[float] = pa.Field(
-        description="Power in the band 0 - 4 Hz in decibels relative to V ** 2 / Hz after removing the linear fit of the psd decay in log-log space",
-        metadata={"raw_unit": "dB rel. V**2/Hz"},
+        description="Power in the band 0 - 4 Hz in decibels relative to the aperiodic (1/f) fit of the psd decay in log-log space; 0 dB means no power above the aperiodic background",
+        metadata={"raw_unit": "dB rel. aperiodic fit"},
         nullable=True,
     )
     psd_residual_theta: Optional[float] = pa.Field(
-        description="Power in the band 4 - 10 Hz in decibels relative to V ** 2 / Hz after removing the linear fit of the psd decay in log-log space",
-        metadata={"raw_unit": "dB rel. V**2/Hz"},
+        description="Power in the band 4 - 10 Hz in decibels relative to the aperiodic (1/f) fit of the psd decay in log-log space; 0 dB means no power above the aperiodic background",
+        metadata={"raw_unit": "dB rel. aperiodic fit"},
         nullable=True,
     )
     psd_residual_alpha: Optional[float] = pa.Field(
-        description="Power in the band 8 - 12 Hz in decibels relative to V ** 2 / Hz after removing the linear fit of the psd decay in log-log space",
-        metadata={"raw_unit": "dB rel. V**2/Hz"},
+        description="Power in the band 8 - 12 Hz in decibels relative to the aperiodic (1/f) fit of the psd decay in log-log space; 0 dB means no power above the aperiodic background",
+        metadata={"raw_unit": "dB rel. aperiodic fit"},
         nullable=True,
     )
     psd_residual_beta: Optional[float] = pa.Field(
-        description="Power in the band 15 - 30 Hz in decibels relative to V ** 2 / Hz after removing the linear fit of the psd decay in log-log space",
-        metadata={"raw_unit": "dB rel. V**2/Hz"},
+        description="Power in the band 15 - 30 Hz in decibels relative to the aperiodic (1/f) fit of the psd decay in log-log space; 0 dB means no power above the aperiodic background",
+        metadata={"raw_unit": "dB rel. aperiodic fit"},
         nullable=True,
     )
     psd_residual_gamma: Optional[float] = pa.Field(
-        description="Power in the band 30 - 90 Hz in decibels relative to V ** 2 / Hz after removing the linear fit of the psd decay in log-log space",
-        metadata={"raw_unit": "dB rel. V**2/Hz"},
+        description="Power in the band 30 - 90 Hz in decibels relative to the aperiodic (1/f) fit of the psd decay in log-log space; 0 dB means no power above the aperiodic background",
+        metadata={"raw_unit": "dB rel. aperiodic fit"},
         nullable=True,
     )
     aperiodic_offset: Optional[float] = pa.Field(
         nullable=True,
-        description="Y-intercept for the fit of the psd decay in log-log space",
-        metadata={"raw_unit": "dB rel. V**2/Hz"},
+        description="Offset b of the aperiodic fit log10(P) = b - n * log10(f): log10 of the fitted PSD at 1 Hz (multiply by 10 for dB rel. V**2/Hz)",
+        metadata={"raw_unit": "log10(V**2/Hz)"},
     )
     aperiodic_exponent: Optional[float] = pa.Field(
         nullable=True,
-        description="Slope for the fit of the psd decay in log-log space",
-        metadata={"raw_unit": "dB rel. V**2/Hz"},
+        description="Exponent n of the aperiodic fit P ~ 1/f**n, i.e. minus the slope of the psd decay in log-log space",
+        metadata={"raw_unit": "dimensionless"},
     )
     decay_fit_error: Optional[float] = pa.Field(
         nullable=True,
-        description="RMS error of the fit of the psd decay in log-log space",
-        metadata={"raw_unit": "dB rel. V**2/Hz"},
+        description="Mean absolute error of the specparam fit of the psd in log10 power units (multiply by 10 for dB)",
+        metadata={"raw_unit": "log10(V**2/Hz)"},
     )
     decay_fit_r_squared: Optional[float] = pa.Field(
         nullable=True,
@@ -1254,10 +1254,11 @@ def get_psd_decay_features(
     -------
     pd.DataFrame
         One row per channel. Aperiodic-component columns: ``aperiodic_offset``
-        (log10 power at 1 Hz), ``aperiodic_exponent`` (1/f slope in log-log
-        space), ``decay_fit_error`` (RMS fit error), ``decay_fit_r_squared``
+        (log10 of the fitted PSD at 1 Hz, in log10(V**2/Hz)), ``aperiodic_exponent``
+        (dimensionless exponent n of P ~ 1/f**n, minus the log-log slope),
+        ``decay_fit_error`` (fit error in log10 power units), ``decay_fit_r_squared``
         (goodness of fit) and ``decay_n_peaks`` (number of periodic peaks).
-        Residual-power columns (periodic power per band after aperiodic removal):
+        Residual-power columns (power per band in dB relative to the aperiodic fit):
         ``psd_residual_delta``, ``psd_residual_theta``, ``psd_residual_alpha``,
         ``psd_residual_beta``, ``psd_residual_gamma`` and ``psd_residual_lfp``.
 

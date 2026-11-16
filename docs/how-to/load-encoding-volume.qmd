@@ -29,8 +29,8 @@ aggregates/atlas/encoding_volumes/{project}/{label}/
 
 Encoding volumes are versioned along **two** independent axes: the vintage label
 (`label`) and the voxel resolution (`res_um`, in µm). A 25 µm volume is roughly
-`(456, 528, 320)` and ~500 MB; a 50 µm volume is `(228, 264, 160)` — 138 MB for
-`2026_W42`, which is published at 50 µm only.
+`(456, 528, 320)` and ~500 MB; a 50 µm volume is `(228, 264, 160)` — 294 MB for
+`2026_W46`, which is published at 50 µm only.
 
 Which vintages and resolutions exist changes as new ones are published. List them rather
 than assuming:

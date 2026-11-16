@@ -18,7 +18,7 @@ website:
           - text: "--- Compute features on your data ---"
           - text: "SpikeGLX AP/LF files"
             file: how-to/compute-features-spikeglx.qmd
-          - text: "Extract snippets to send to the IBL"
+          - text: "Extract snippets"
             file: how-to/extract-snippets.qmd
           - text: "NWB recordings"
             file: how-to/compute-features-nwb.qmd
