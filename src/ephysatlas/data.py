@@ -448,7 +448,7 @@ def _download_volume_file(stem, local_path, label, project, res_um, one, overwri
 
 
 def download_encoding_volume(
-    local_path, label="2026_W42", project=None, res_um=None, one=None, overwrite=False
+    local_path, label="2026_W46", project=None, res_um=None, one=None, overwrite=False
 ):
     """Download a pre-computed ephys atlas encoding volume from AWS S3.
 
@@ -461,7 +461,7 @@ def download_encoding_volume(
     local_path : Path
         Local directory where the file will be saved.
     label : str, optional
-        Vintage label, e.g. "2026_W42". Defaults to "2026_W42".
+        Vintage label, e.g. "2026_W46". Defaults to "2026_W46".
     project : str, optional
         Project name. Defaults to "ea_active".
     res_um : int, optional
@@ -484,7 +484,7 @@ def download_encoding_volume(
 
 
 def download_edges_volume(
-    local_path, label="2026_W42", project=None, res_um=None, one=None, overwrite=False
+    local_path, label="2026_W46", project=None, res_um=None, one=None, overwrite=False
 ):
     """Download the ephys edges volume of an encoding volume vintage from AWS S3.
 
@@ -497,7 +497,7 @@ def download_edges_volume(
     local_path : Path
         Local directory where the file will be saved.
     label : str, optional
-        Vintage label, e.g. "2026_W42". Defaults to "2026_W42".
+        Vintage label, e.g. "2026_W46". Defaults to "2026_W46".
     project : str, optional
         Project name. Defaults to "ea_active".
     res_um : int, optional

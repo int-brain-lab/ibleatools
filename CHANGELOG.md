@@ -5,13 +5,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+- **Breaking.** `download_encoding_volume` and `download_edges_volume` default to `label="2026_W46"` (previously `2026_W42`), the volume predicted by `ea-encoder-channel` `0.0.1` on the same 50 um grid. Pass `label="2026_W42"` for the previous volume
+
 ## [0.14.0] - 2026-11-16
 
 ### Added
 - `ephysatlas.snippet_extractor.extract_snippets` and `ibleatools-snippets`: pack raw SpikeGLX AP and recorded NP1/3A LF or converter-derived NP2 LF snippets, gains, geometry and original metadata into losslessly compressed HDF5 files. NP2 LF is made with `ibl-neuropixel`'s `NP2Converter.extract_lfp` from the AP samples around each snippet, and its filter coefficients are stored with it. Each recording has a name under `recordings/<name>`; later calls add recordings without replacing existing ones. Supports NP1.0, 3A and NP2.x, explicit or automatic snippet times, and temporary-file cleanup on extraction failure. `--channel-locations` and `--xyz-picks` convert the IBL alignment GUI's output `channel_locations.json` and the traced probe track `xyz_picks.json` (in the format the GUI reads) into the `Histology` contract (a Pydantic model with units and descriptions: channel positions in metres, Allen region ids and acronyms, the traced track). Entries are matched to channels by channel index, and their probe positions (`lateral`, `axial`) must map onto the recording's geometry by one affine transform per shank. `--histology-raw` stores small original histology files and `--trajectory` stores a planned insertion. See `docs/how-to/extract-snippets.qmd` and `examples/snippet_extraction_example.py`.
 - `SnippetFileFeatureCalculator` and `list_recordings` in `ephysatlas.feature_calculators`: select a recording and shank, load stored AP/LF snippets in volts, and compute aggregated/denoised features over the stored windows. Stored anatomical coordinates and regions are exposed by `load_channel_metadata()`. Planned trajectories supply target coordinates.
-
-
 
 ## [0.13.0] - 2026-11-10
 
