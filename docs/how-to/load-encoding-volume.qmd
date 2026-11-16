@@ -54,17 +54,17 @@ one = ONE()
 local_path = Path("/datadisk/ephys-atlas/volumes")
 
 # res_um omitted -> auto-resolves to the finest resolution available for this label
-file_path = download_encoding_volume(local_path, label="2026_W42", one=one)
+file_path = download_encoding_volume(local_path, label="2026_W46", one=one)
 
 data = np.load(file_path, allow_pickle=True)
 ```
 
-`label` defaults to `"2026_W42"`. Pass `res_um` (in µm) to choose a resolution instead of
+`label` defaults to `"2026_W46"`. Pass `res_um` (in µm) to choose a resolution instead of
 the finest one available.
 
 ## What the file contains
 
-`N` is the number of features: 43 for `2026_W42`. The set has the spike-shape columns
+`N` is the number of features: 43 for `2026_W46`. The set has the spike-shape columns
 (`spike_width_secs`, ...) instead of the raw waveform ones (`peak_val`, ...), the
 multi-channel `spatial_spread_um` and `slowness_s_per_m`, and the first spatial
 differences `*_bpr`.
@@ -126,7 +126,7 @@ The published edges sit next to the volume on S3.
 ```python
 from ephysatlas.data import download_edges_volume
 
-edges_file = download_edges_volume(local_path, label="2026_W42", one=one)
+edges_file = download_edges_volume(local_path, label="2026_W46", one=one)
 edges = np.load(edges_file)["ephys_atlas_vol"][..., 0]   # (ML, AP, DV) float16, 0 outside the mask
 ```
 
