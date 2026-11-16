@@ -8,7 +8,9 @@ File layout (``n`` snippets, ``c`` channels, sync channel removed)::
     <output>.h5
       attrs   created
       recordings/<name>/      one group per recording
-        attrs   ibleatools_version, ibl_neuropixel_version, iblatlas_version, created,
+        attrs   format_version (the integer ``FORMAT_VERSION``; recordings written by
+                ibleatools 0.14.0 have none and use layout 1),
+                ibleatools_version, ibl_neuropixel_version, iblatlas_version, created,
                 source_ap_file, source_lf_file, probe_has_lf_band, neuropixel_version,
                 duration, snippet_method, probe_model, referencing_scheme; snippet_seed
                 and snippet_margin only when the snippet times were chosen automatically
@@ -64,6 +66,10 @@ from ephysatlas.feature_calculators.spikeglx_like import LF_LATENCY_SAMPLES
 
 LOGGER = logging.getLogger(__name__)
 
+# Version of the layout of one recording group, stored as its ``format_version`` attribute.
+# Increase it when a dataset or attribute is renamed, removed or changes meaning. Adding an
+# optional group or attribute does not need a new version.
+FORMAT_VERSION = 1
 TRAJECTORY_KEYS = ("x", "y", "z", "depth", "theta", "phi")
 # Limit on the total size of the raw histology files of one recording.
 MAX_HISTOLOGY_BYTES = 100 * 1024**2
@@ -279,6 +285,8 @@ def extract_snippets(
             )
             f.attrs["created"] = created
             rec = f.create_group(f"recordings/{name}")
+            # Per recording: a file can hold recordings added by different ibleatools versions.
+            rec.attrs["format_version"] = FORMAT_VERSION
             rec.attrs["ibleatools_version"] = ibleatools_version
             # The geometry, row order and gains stored below are this version's reading of the meta.
             rec.attrs["ibl_neuropixel_version"] = ibl_neuropixel_version
