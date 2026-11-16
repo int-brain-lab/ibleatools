@@ -73,15 +73,15 @@ expects the denoised unit — see [aggregate and denoise](../how-to/aggregate-an
 | `psd_alpha` | dB rel. V²/Hz | Power in the band 8 – 12 Hz |
 | `psd_beta` | dB rel. V²/Hz | Power in the band 15 – 30 Hz |
 | `psd_gamma` | dB rel. V²/Hz | Power in the band 30 – 90 Hz |
-| `psd_residual_lfp` * | dB rel. V²/Hz | Power in 0 – 90 Hz after removing the linear fit of the PSD decay in log-log space |
-| `psd_residual_delta` * | dB rel. V²/Hz | Power in 0 – 4 Hz after removing the PSD-decay fit |
-| `psd_residual_theta` * | dB rel. V²/Hz | Power in 4 – 10 Hz after removing the PSD-decay fit |
-| `psd_residual_alpha` * | dB rel. V²/Hz | Power in 8 – 12 Hz after removing the PSD-decay fit |
-| `psd_residual_beta` * | dB rel. V²/Hz | Power in 15 – 30 Hz after removing the PSD-decay fit |
-| `psd_residual_gamma` * | dB rel. V²/Hz | Power in 30 – 90 Hz after removing the PSD-decay fit |
-| `aperiodic_offset` * | dB rel. V²/Hz | Y-intercept of the PSD-decay fit in log-log space |
-| `aperiodic_exponent` * | dB rel. V²/Hz | Slope of the PSD-decay fit in log-log space |
-| `decay_fit_error` * | dB rel. V²/Hz | RMS error of the PSD-decay fit |
+| `psd_residual_lfp` * | dB rel. aperiodic fit | Power in 0 – 90 Hz relative to the aperiodic (1/f) fit of the PSD decay; 0 dB = no power above the background |
+| `psd_residual_delta` * | dB rel. aperiodic fit | Power in 0 – 4 Hz relative to the aperiodic fit |
+| `psd_residual_theta` * | dB rel. aperiodic fit | Power in 4 – 10 Hz relative to the aperiodic fit |
+| `psd_residual_alpha` * | dB rel. aperiodic fit | Power in 8 – 12 Hz relative to the aperiodic fit |
+| `psd_residual_beta` * | dB rel. aperiodic fit | Power in 15 – 30 Hz relative to the aperiodic fit |
+| `psd_residual_gamma` * | dB rel. aperiodic fit | Power in 30 – 90 Hz relative to the aperiodic fit |
+| `aperiodic_offset` * | log₁₀(V²/Hz) | Offset *b* of the aperiodic fit log₁₀ P = *b* − *n* log₁₀ f, i.e. log₁₀ of the fitted PSD at 1 Hz (×10 for dB rel. V²/Hz) |
+| `aperiodic_exponent` * | dimensionless | Exponent *n* of the aperiodic fit P ∝ 1/fⁿ (minus the log-log slope) |
+| `decay_fit_error` * | log₁₀(V²/Hz) | Mean absolute error of the specparam fit, in log₁₀ power (×10 for dB) |
 | `decay_fit_r_squared` * | dimensionless | R² of the PSD-decay fit |
 | `decay_n_peaks` * | count | Number of peaks detected in the residual after removing the PSD-decay fit |
 | `rms_lf_no_car` * | dB rel. V | LFP RMS destriped **without** common-average referencing. Opt in via `LfParams(compute_rms_no_car=True)` |
