@@ -563,14 +563,23 @@ class SpatialEncoder:
         if getattr(self, "_bank_nn", None) is None:
             self._bank_nn = ChannelNN(bank["xyz"])
         candidates = self._bank_nn.query_radius(
-            xyz_m.astype(np.float64), r_m=radius_m, k_cap=8 * m_max
+            xyz_m.astype(np.float64), r_m=radius_m, k_cap=bank["xyz"].shape[0]
         )
         pool = np.full((xyz_m.shape[0], 8 * m_max), -1, dtype=np.int64)
         for i, cand in enumerate(candidates):
             cand = np.asarray(cand, dtype=int)
+            # Channels sit on a grid, so many candidates are equally far from the query, and the
+            # search lists such ties in an order that differs between machines. Each pool slot
+            # gets its own random key below, so that order would decide which neighbours are drawn
+            # (and a golden file would only reproduce on the machine that wrote it): order the
+            # candidates by distance, to the nanometre (coarser than float noise), then bank index.
+            dist = np.linalg.norm(
+                bank["xyz"][cand].astype(np.float64) - xyz_m[i], axis=1
+            )
+            cand = cand[np.lexsort((cand, np.round(dist * 1e9)))][: pool.shape[1]]
             if not allow_same_probe and cand.size:
                 cand = cand[bank["pid"][cand] != str(pids[i])]
-            pool[i, : cand.size] = cand[: pool.shape[1]]
+            pool[i, : cand.size] = cand
         rng = np.random.default_rng(NEIGHBOUR_DRAW_SEED)
         for _ in range(draws):
             keys = rng.random(pool.shape)
