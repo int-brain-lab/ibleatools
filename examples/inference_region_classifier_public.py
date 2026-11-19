@@ -8,7 +8,7 @@ Usage::
 
     # from the Hub
     python examples/inference_region_classifier_public.py \\
-        --model int-brain-lab/ea-decoder-channel-xgboost --revision 2026_W32
+        --model int-brain-lab/ea-decoder-channel-xgboost --revision 0.0.1
 
     # from a local packaged directory
     python examples/inference_region_classifier_public.py --model /path/to/model_dir
@@ -62,7 +62,7 @@ def main(argv=None):
     index = clf.index
     _logger.info(f"model      : {index['model_id']}")
     _logger.info(f"task       : {index['task']} ({index.get('granularity')} level)")
-    _logger.info(f"vintage    : {index['vintage']}")
+    _logger.info(f"version    : {index['model_version']}, trained on {index['data_vintage']}")
     _logger.info(f"features   : {len(clf.inputs['features'])}")
     _logger.info(f"row index  : {clf.inputs['index']}")
     _logger.info(f"returns    : {index['outputs']['kind']} -> {index['outputs']['columns']}")

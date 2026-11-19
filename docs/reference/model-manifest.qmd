@@ -17,7 +17,7 @@ ibleatools only ever **reads** this file:
 
 ```python
 model = load_pretrained(
-    "int-brain-lab/ea-decoder-channel-xgboost", revision="2026_W42"
+    "int-brain-lab/ea-decoder-channel-xgboost", revision="0.0.1"
 )
 print(model.index)   # the parsed manifest
 ```
@@ -31,7 +31,8 @@ Every manifest, regardless of family, carries these.
 | `model_id` | str | Human-readable release id, e.g. `2026_W42_Cosmos_flimsy-thistle-cat` |
 | `task` | str | What the model does: `region-classification`, `spatial-encoding`, `unit-encoding`, … |
 | `model_class` | str | **The dispatch key.** Selects the wrapper class |
-| `vintage` | str | The release this model belongs to |
+| `model_version` | str | The model version, `X.Y.Z`: the Hub tag it is published under |
+| `data_vintage` | str | The feature release it was trained on, `YYYY_Www` |
 | `granularity` | str | `channel` or `unit` |
 | `method` | str | Model type, e.g. `xgboost`, `transformer`, `hierarchical_gmm` |
 | `artifacts` | dict | Role → filename(s), for every published file the loader needs |
@@ -61,7 +62,7 @@ of loading partially.
 ### `environment`
 
 The versions the model was trained with. This is the reference to compare against when
-[`selftest`](../how-to/download-models.qmd) fails. The region decoder `2026_W42`:
+[`selftest`](../how-to/download-models.qmd) fails. The region decoder `0.0.1`:
 
 ```json
 {
@@ -85,7 +86,8 @@ The versions the model was trained with. This is the reference to compare agains
   "model_id": "2026_W42_Cosmos_flimsy-thistle-cat",
   "task": "region-classification",
   "model_class": "xgboost.sklearn.XGBClassifier",
-  "vintage": "2026_W42",
+  "model_version": "0.0.1",
+  "data_vintage": "2026_W42",
   "granularity": "channel",
   "method": "xgboost",
   "artifacts": {
@@ -139,7 +141,8 @@ classes and region map, with a whole-probe model per seed instead of folds:
   "model_id": "ea-decoder-channel-transformer",
   "task": "region-classification-transformer",
   "model_class": "ProbeTransformer",
-  "vintage": "2026_W42",
+  "model_version": "0.0.1",
+  "data_vintage": "2026_W42",
   "granularity": "channel",
   "artifacts": {
     "weights": "best_model.pt",
@@ -177,10 +180,11 @@ first one.
 
 ```json
 {
-  "model_id": "2026_W42_encoder",
+  "model_id": "0.0.1_encoder",
   "task": "spatial-encoding",
   "model_class": "NeighborInpaintingModel",
-  "vintage": "2026_W42",
+  "model_version": "0.0.1",
+  "data_vintage": "2026_W42",
   "granularity": "channel",
   "method": "transformer",
   "artifacts": {
@@ -245,10 +249,11 @@ without the position input; an `ephysatlas` that predates the option cannot load
 
 ```json
 {
-  "model_id": "2026_W42_unit",
+  "model_id": "0.0.1_unit",
   "task": "unit-encoding",
   "model_class": "UnitAutoencoder",
-  "vintage": "2026_W42",
+  "model_version": "0.0.1",
+  "data_vintage": "2026_W42",
   "granularity": "unit",
   "method": "hierarchical_gmm",
   "artifacts": {
@@ -283,7 +288,7 @@ without the position input; an `ephysatlas` that predates the option cannot load
                      "latent_dim": 60, "n_types": 30, "n_subtypes": 300,
                      "max_subtypes_per_type": 10, "min_units_per_subtype": 20},
     "context": {"n_cell_pcs": 50, "n_gene_pcs": 50,
-                "source_model": "int-brain-lab/ea-encoder-channel", "data_vintage": "2026_W41"}
+                "source_model": "int-brain-lab/ea-encoder-channel@0.0.1"}
   }
 }
 ```
@@ -297,7 +302,7 @@ unit. The artifacts split the model into its parts:
 - the context networks for the type and sub-type weights;
 - the training members each sub-type is read out through.
 
-`config.context.source_model` names the spatial-encoder release whose context volumes the
+`config.context.source_model` names the spatial-encoder release (`repo@version`) whose context volumes the
 unit model shares.
 
 ## Feature-order digests

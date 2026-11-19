@@ -3,7 +3,7 @@
 One function serves every model family:
 
     >>> from ephysatlas import load_pretrained
-    >>> model = load_pretrained("int-brain-lab/ea-decoder-channel-xgboost", revision="2026_W32")
+    >>> model = load_pretrained("int-brain-lab/ea-decoder-channel-xgboost", revision="0.0.1")
     >>> out = model.predict(df_features)
 
 :func:`load_pretrained` resolves the id to a local directory, reads the publication manifest
@@ -20,11 +20,12 @@ from ephysatlas import model_registry
 
 logger = logging.getLogger(__name__)
 
-# Default release (feature vintage) of each published channel-level region decoder, by Hugging
-# Face repo id: the release the alignment GUI loads unless another is chosen.
-DECODER_VINTAGES = {
-    "int-brain-lab/ea-decoder-channel-xgboost": "2026_W42",
-    "int-brain-lab/ea-decoder-channel-transformer": "2026_W42",
+# Default release (model version, the Hub tag) of each published channel-level region decoder, by
+# Hugging Face repo id: the release the alignment GUI loads unless another is chosen. The feature
+# release a model was trained on is the ``data_vintage`` of its manifest.
+DECODER_VERSIONS = {
+    "int-brain-lab/ea-decoder-channel-xgboost": "0.0.1",
+    "int-brain-lab/ea-decoder-channel-transformer": "0.0.1",
 }
 
 
@@ -112,10 +113,9 @@ def load_pretrained(
     Args:
         model_id (str or Path): A Hugging Face repo id (``owner/name``), or a path to an
             already-downloaded model directory.
-        revision (str, optional): Hugging Face branch/tag to pin: a version such as ``"0.0.1"``
-            for the encoders, a vintage such as ``"2026_W42"`` for the region decoders. Omitted,
-            it resolves to ``main``, which tracks the *currently recommended* model and moves
-            when a new model is published.
+        revision (str, optional): Hugging Face branch/tag to pin: the model version, such as
+            ``"0.0.1"`` (the manifest's ``model_version``). Omitted, it resolves to ``main``, which
+            tracks the *currently recommended* model and moves when a new model is published.
         cache_dir (Path, optional): Where downloads are placed.
         repo_id (str, optional): Hugging Face repository, when it cannot be read off
             ``model_id``.

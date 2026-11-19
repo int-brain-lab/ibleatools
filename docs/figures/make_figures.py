@@ -166,7 +166,7 @@ from one.api import ONE  # noqa: E402
 from ephysatlas import load_pretrained  # noqa: E402
 
 model = load_pretrained(
-    "int-brain-lab/ea-decoder-channel-transformer", revision="2026_W42"
+    "int-brain-lab/ea-decoder-channel-transformer", revision="0.0.1"
 )
 df_example = pd.read_parquet(model.path_model / "example" / "features_sample.parquet")
 out = model.predict(df_example)
@@ -201,7 +201,7 @@ for k, pid in enumerate(pids):
         axs=axs[3 * k : 3 * k + 3],
     )
     axs[3 * k].set_ylabel(f"probe {pid[:8]}\ndepth from probe tip (µm)")
-fig.suptitle("ProbeTransformer (2026_W42) on its two example probes, Cosmos regions")
+fig.suptitle("ProbeTransformer (0.0.1) on its two example probes, Cosmos regions")
 fig.savefig(FIGURES / "predictions_along_probe.png", dpi=110)
 plt.close(fig)
 logger.info("wrote predictions_along_probe.png")
@@ -227,7 +227,7 @@ logger.info("wrote predictions_one_probe.png")
 from iblatlas.atlas import AllenAtlas  # noqa: E402
 
 ba = AllenAtlas(res_um=25)
-encoder = load_pretrained("int-brain-lab/ea-encoder-channel", revision="2026_W42")
+encoder = load_pretrained("int-brain-lab/ea-encoder-channel", revision="0.0.1")
 
 # Every 4th voxel (100 µm) of the coronal plane at AP = -2 mm, inside the brain, with the
 # Cosmos outlines
@@ -244,7 +244,7 @@ fig, axs = ephysatlas.plots.figure_encoder_coronal(
     },
 )
 fig.suptitle(
-    "Spatial encoder (2026_W42): expected features on the coronal plane AP = −2 mm"
+    "Spatial encoder (0.0.1): expected features on the coronal plane AP = −2 mm"
 )
 fig.savefig(FIGURES / "encoder_coronal_maps.png", dpi=110)
 plt.close(fig)

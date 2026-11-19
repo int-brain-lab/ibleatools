@@ -27,7 +27,7 @@ outdir = Path("figures")
 outdir.mkdir(exist_ok=True)
 
 ba = AllenAtlas(res_um=25)
-encoder = load_pretrained("int-brain-lab/ea-encoder-channel", revision="2026_W42")
+encoder = load_pretrained("int-brain-lab/ea-encoder-channel", revision="0.0.1")
 logger.info("the encoder predicts %d features", len(encoder.features))
 
 # %% An LF, an AP and a spike-shape feature on the coronal plane AP = -2 mm
@@ -44,7 +44,7 @@ fig, axs = ephysatlas.plots.figure_encoder_coronal(
     },
 )
 fig.suptitle(
-    "Spatial encoder (2026_W42): expected features on the coronal plane AP = −2 mm"
+    "Spatial encoder (0.0.1): expected features on the coronal plane AP = −2 mm"
 )
 fig.savefig(outdir / "encoder_coronal_maps.png", dpi=110)
 logger.info("wrote %s", outdir / "encoder_coronal_maps.png")

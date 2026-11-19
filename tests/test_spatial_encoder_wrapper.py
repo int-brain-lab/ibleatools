@@ -106,7 +106,8 @@ def make_spatial_model_dir(
     index = {
         "task": "spatial-encoding",
         "model_class": "NeighborInpaintingModel",
-        "vintage": "2026_W39",
+        "model_version": "0.0.1",
+        "data_vintage": "2026_W39",
         "artifacts": {
             "weights": model_registry.ENCODER_WEIGHTS_FILE,
             "confidence": model_registry.ENCODER_CONFIDENCE_FILE,
@@ -174,6 +175,12 @@ class TestSpatialEncoderAccessors(unittest.TestCase):
         model = self._encoder().load_confidence_model()
         self.assertIsInstance(model, ProbeSequenceConfidenceTransformer)
         self.assertFalse(model.training)
+
+    def test_channel_model_reads_its_data_vintage_from_the_manifest(self):
+        from ephysatlas.alignment import ChannelModel
+
+        model = ChannelModel(str(make_spatial_model_dir(self.tmp)), device="cpu")
+        self.assertEqual(model.data_vintage, "2026_W39")
 
     def test_neighbor_bank_is_a_copy_of_the_published_bank(self):
         encoder = self._encoder()

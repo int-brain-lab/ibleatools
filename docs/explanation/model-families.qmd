@@ -81,7 +81,7 @@ expected there. `mixture_weights` gives the cell-type composition and `sample` d
 training units. For your own units, `encode`, `posterior` and `assign` place them in the
 mixture. See [predict unit phenotypes](../how-to/predict-unit-phenotypes.qmd).
 
-`2026_W42` is the release of this model. The repository's earlier tags hold a previous,
+`0.0.1` is the release of this model. The repository's earlier tags hold a previous,
 flat-mixture model that this version of `ephysatlas` does not load.
 
 ## One load path
@@ -91,7 +91,7 @@ Every family loads the same way:
 ```python
 from ephysatlas import load_pretrained
 
-model = load_pretrained(repo_id, revision="2026_W42")
+model = load_pretrained(repo_id, revision="0.0.1")
 out = model.predict(df)
 ```
 

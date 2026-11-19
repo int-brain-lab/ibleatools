@@ -128,7 +128,7 @@ calc = SpikeGLXFileFeatureCalculator(
 df = calc.compute_denoised_features(n_snippets=3, duration_ap=1.0, duration_lf=5.0)
 df["outside"] = df["channel_labels"] == 3     # the one derived column the decoder needs
 
-model = load_pretrained("int-brain-lab/ea-decoder-channel-xgboost", revision="2026_W42")
+model = load_pretrained("int-brain-lab/ea-decoder-channel-xgboost", revision="0.0.1")
 out = model.predict(df)
 print(out["predicted_acronym"].value_counts())
 ```

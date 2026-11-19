@@ -45,6 +45,15 @@ class TestClassAcronyms(unittest.TestCase):
             model_registry.class_acronyms([315], "NotARealMapping")
 
 
+class TestDecoderVersions(unittest.TestCase):
+    def test_default_decoder_releases_are_versions(self):
+        # Every published model is tagged by its version (X.Y.Z), not by a data week.
+        from ephysatlas.models import DECODER_VERSIONS
+
+        for repo, version in DECODER_VERSIONS.items():
+            self.assertRegex(version, r"^\d+\.\d+\.\d+$", repo)
+
+
 class TestResolveModel(unittest.TestCase):
     def test_hf_needs_a_repo_id_for_a_bare_model_name(self):
         # A slashless name has no implicit hub repo: resolving it must raise rather than guess.
@@ -188,6 +197,14 @@ class TestLoadModelDispatch(unittest.TestCase):
         self.assertEqual(info["FEATURES"], FEATURES)
         self.assertEqual(info["CLASSES"], CLASSES)
         self.assertEqual(info["MODEL_CLASS"], "xgboost.sklearn.XGBClassifier")
+
+    def test_versions_come_from_the_manifest(self):
+        # The model version (the Hub tag) and the data release it was trained on, each under its
+        # own name: there is no ``VINTAGE`` that meant one or the other depending on the model.
+        _, info = regionclassifier.load_model(self.path_model)
+        self.assertEqual(info["MODEL_VERSION"], "0.0.1")
+        self.assertEqual(info["DATA_VINTAGE"], "2026_W32")
+        self.assertNotIn("VINTAGE", info)
 
     def test_weights_filename_comes_from_the_manifest(self):
         # The loader must honour artifacts.weights rather than hardcoding model.ubj.

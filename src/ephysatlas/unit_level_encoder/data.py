@@ -75,13 +75,13 @@ def set_seed(seed: int) -> None:
 
 
 def resolve_channel_release_file(
-    channel_model: str | Path, vintage: str, filename: str
+    channel_model: str | Path, revision: str, filename: str
 ) -> Path:
     """Locate a file of the published channel-level release the unit model is tied to.
 
     Args:
         channel_model: A local release directory, or a Hugging Face repo id (``owner/name``).
-        vintage: Release tag, used as the Hub revision.
+        revision: Hub tag (model version) of the release; ignored for a local directory.
         filename: File path inside the release.
 
     Returns:
@@ -98,13 +98,15 @@ def resolve_channel_release_file(
     from huggingface_hub import hf_hub_download
 
     return Path(
-        hf_hub_download(repo_id=str(channel_model), filename=filename, revision=vintage)
+        hf_hub_download(
+            repo_id=str(channel_model), filename=filename, revision=revision
+        )
     )
 
 
-def load_channel_split(channel_model: str | Path, vintage: str) -> dict:
-    """The channel model's authoritative probe split for ``vintage`` (``split.json``)."""
-    path = resolve_channel_release_file(channel_model, vintage, "split.json")
+def load_channel_split(channel_model: str | Path, revision: str) -> dict:
+    """The authoritative probe split (``split.json``) of the channel release at ``revision``."""
+    path = resolve_channel_release_file(channel_model, revision, "split.json")
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
@@ -207,7 +209,9 @@ def load_prepared_data(
     beryl = br.remap(allen, source_map="Allen", target_map="Beryl").astype(np.int64)
 
     if split_manifest is None:
-        split_manifest = load_channel_split(cfg.channel_model, cfg.vintage)
+        split_manifest = load_channel_split(
+            cfg.channel_model, cfg.channel_model_revision
+        )
     split = build_split(pids, split_manifest)
 
     if bool(getattr(cfg, "mirror_x_to_single_hemisphere", False)):

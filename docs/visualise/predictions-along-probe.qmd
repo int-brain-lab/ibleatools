@@ -23,7 +23,7 @@ import pandas as pd
 from ephysatlas import load_pretrained
 
 model = load_pretrained(
-    "int-brain-lab/ea-decoder-channel-transformer", revision="2026_W42"
+    "int-brain-lab/ea-decoder-channel-transformer", revision="0.0.1"
 )
 df = pd.read_parquet(model.path_model / "example" / "features_sample.parquet")
 out = model.predict(df)

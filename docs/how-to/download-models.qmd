@@ -10,8 +10,8 @@ on it.
 
 | Hugging Face repo | Family | Direction | Tag |
 |---|---|---|---|
-| [`int-brain-lab/ea-decoder-channel-xgboost`](https://huggingface.co/int-brain-lab/ea-decoder-channel-xgboost) | Region decoder | features → brain region, per channel | `2026_W42` |
-| [`int-brain-lab/ea-decoder-channel-transformer`](https://huggingface.co/int-brain-lab/ea-decoder-channel-transformer) | Whole-probe region decoder | a probe's features → brain region per channel | `2026_W42` |
+| [`int-brain-lab/ea-decoder-channel-xgboost`](https://huggingface.co/int-brain-lab/ea-decoder-channel-xgboost) | Region decoder | features → brain region, per channel | `0.0.1` |
+| [`int-brain-lab/ea-decoder-channel-transformer`](https://huggingface.co/int-brain-lab/ea-decoder-channel-transformer) | Whole-probe region decoder | a probe's features → brain region per channel | `0.0.1` |
 | [`int-brain-lab/ea-encoder-channel`](https://huggingface.co/int-brain-lab/ea-encoder-channel) | Spatial encoder | position → channel features | `0.0.1` |
 | [`int-brain-lab/ea-encoder-unit`](https://huggingface.co/int-brain-lab/ea-encoder-unit) | Unit encoder | position → unit phenotype; units → putative cell types | `0.0.1` |
 
@@ -26,7 +26,7 @@ for how they differ conceptually.
 from ephysatlas import load_pretrained
 
 model = load_pretrained(
-    "int-brain-lab/ea-decoder-channel-xgboost", revision="2026_W42"
+    "int-brain-lab/ea-decoder-channel-xgboost", revision="0.0.1"
 )
 ```
 
@@ -40,9 +40,9 @@ does not change any calling code.
 ## Pin a revision for reproducibility
 
 ```python
-# Pinned: always loads the 2026_W42 release
+# Pinned: always loads release 0.0.1
 model = load_pretrained(
-    "int-brain-lab/ea-decoder-channel-xgboost", revision="2026_W42"
+    "int-brain-lab/ea-decoder-channel-xgboost", revision="0.0.1"
 )
 
 # Not pinned: loads 'main', which changes when a new model is published
@@ -61,20 +61,19 @@ WARNING  no revision pinned for int-brain-lab/ea-decoder-channel-xgboost: using 
          is published. Pass revision='<tag>' for a reproducible result.
 ```
 
-The tags of the encoders are **versions** (`0.0.1`, `0.1.0`, ...); their manifests record the
-feature release (vintage) they were trained on. The tags of the region decoders are
-**vintages** — `YYYY_Www` week labels matching the feature release the model belongs to, so a
-decoder and its features must come from the same vintage; see
-[core concepts](../explanation/concepts.qmd). An encoder's `predict` takes only
+Every model is tagged by its **version** (`0.0.1`, `0.1.0`, ...), its manifest's
+`model_version`. The manifest's `data_vintage` records the feature release the model was
+trained on, a `YYYY_Www` week label. A region decoder and its features must come from the same
+vintage; see [core concepts](../explanation/concepts.qmd). An encoder's `predict` takes only
 positions, so it has no feature vintage to match.
 
-`ephysatlas.models.DECODER_VINTAGES` holds the default vintage of each published region
+`ephysatlas.models.DECODER_VERSIONS` holds the default version of each published region
 decoder, the one the [alignment GUI](https://int-brain-lab.github.io/ibl-alignment-gui/channel_prediction.html) loads unless told otherwise:
 
 ```python
-from ephysatlas.models import DECODER_VINTAGES
+from ephysatlas.models import DECODER_VERSIONS
 
-DECODER_VINTAGES["int-brain-lab/ea-decoder-channel-xgboost"]   # '2026_W42'
+DECODER_VERSIONS["int-brain-lab/ea-decoder-channel-xgboost"]   # '0.0.1'
 ```
 
 ## Controlling where downloads land
@@ -86,7 +85,7 @@ from pathlib import Path
 
 model = load_pretrained(
     "int-brain-lab/ea-decoder-channel-xgboost",
-    revision="2026_W42",
+    revision="0.0.1",
     cache_dir=Path("/data/models"),
 )
 ```
@@ -164,9 +163,10 @@ The manifest describes the model, and a loaded model exposes it as `model.index`
 ```python
 index = model.index
 
-index["model_id"]      # '2026_W42_Cosmos_flimsy-thistle-cat'
+index["model_id"]      # '2026_W42_Cosmos_...'
 index["task"]          # 'region-classification'
-index["vintage"]       # '2026_W42'
+index["model_version"] # '0.0.1', the Hub tag
+index["data_vintage"]  # '2026_W42', the feature release it was trained on
 index["granularity"]   # 'channel'
 index["model_class"]   # 'xgboost.sklearn.XGBClassifier'
 
