@@ -11,7 +11,8 @@ File layout (``n`` snippets, ``c`` channels, sync channel removed)::
         attrs   format_version (the integer ``FORMAT_VERSION``; recordings written by
                 ibleatools 0.14.0 have none and use layout 1),
                 ibleatools_version, ibl_neuropixel_version, iblatlas_version, created,
-                source_ap_file, source_lf_file, probe_has_lf_band, neuropixel_version,
+                source_ap_file, source_lf_file, probe_has_lf_band, neuropixel_version (the
+                probe family, 1 or 2; see ``NEUROPIXEL_FAMILY``),
                 duration, snippet_method, probe_model, referencing_scheme; snippet_seed
                 and snippet_margin only when the snippet times were chosen automatically
                 (snippet_method "stratified", not "explicit")
@@ -23,7 +24,8 @@ File layout (``n`` snippets, ``c`` channels, sync channel removed)::
           sample2volts          float64 (c,)
           meta                  uint8 (n_bytes,)   the original .ap.meta file, exact bytes
         lf/                     always present; as ap/, plus attrs source and latency_samples
-                                source="recorded" for NP1/3A, "derived" for NP2
+                                source="recorded" for the NP1 family (3A, NP1.0, NHP
+                                long), "derived" for the NP2 family (NP2.1, NP2.4, quad base)
                                 derived LF has no original .meta; the method attribute
                                 and filter_sos record the NP2Converter filter instead
         histology/raw/<name>    uint8 (n_bytes,)   original histology bytes, attrs source_path
@@ -75,6 +77,11 @@ TRAJECTORY_KEYS = ("x", "y", "z", "depth", "theta", "phi")
 MAX_HISTOLOGY_BYTES = 100 * 1024**2
 # Seed of the stratified draw in get_snippet_start_times (its default).
 SNIPPET_SEED = 0
+# spikeglx major version -> probe family, stored as ``neuropixel_version``. The NP1 family
+# (3A/3B, NHP long probes) records LF in a file of its own and high-pass filters AP; the
+# NP2 family (single shank, four shank, quad base) records full band AP, from which LF is
+# derived. NP2.4 and quad-base recordings may come unsplit (all shanks) or split per shank.
+NEUROPIXEL_FAMILY = {1: 1, "NHPlong": 1, 2: 2, 2.4: 2, "NP2QB": 2}
 
 
 def _plan_reads(
@@ -116,7 +123,7 @@ def extract_snippets(
 ) -> Path:
     """Write raw AP and recorded or derived LF snippets of one SpikeGLX probe recording.
 
-    AP and NP1/3A LF samples are copied unchanged. NP2 LF is made from the AP samples
+    AP and NP1-family LF samples are copied unchanged. NP2-family LF is made from the AP samples
     around each snippet with ``neuropixel.NP2Converter.extract_lfp``, and converted to
     int16 as the converter does.
     All LF windows start ``LF_LATENCY_SAMPLES`` late, matching the direct SpikeGLX feature
@@ -124,7 +131,7 @@ def extract_snippets(
 
     Args:
         ap_file: The SpikeGLX ``.ap.bin`` or ``.ap.cbin`` file. Its ``.meta`` file must be next
-            to it. NP1/3A also require the LF file of the same name and extension
+            to it. NP1-family probes (3A, NP1.0, NHP long) also require the LF file of the same name and extension
             (``.lf.bin`` or ``.lf.cbin``) with its ``.meta`` file next to it.
         output_file: ``.h5`` file to write; its folder is created. If it exists, it must be a
             snippet file, and the recording is added to it.
@@ -156,8 +163,8 @@ def extract_snippets(
             times, explicit snippets overlap or reach outside the data, the histology
             files are over 100 MB, a trajectory value is not a number, or the
             histology json files don't fit the recording or ``Histology``.
-        FileNotFoundError: The ``.meta`` file of ``ap_file``, a required NP1/3A LF file
-            (both raised by ``spikeglx``), or a histology file does not exist.
+        FileNotFoundError: The ``.meta`` file of ``ap_file``, or the LF file required for
+            an NP1-family probe (the former raised by ``spikeglx``), or a histology file does not exist.
         IsADirectoryError: A ``histology_raw`` path is a folder instead of a file.
         KeyError: ``trajectory`` lacks one of ``TRAJECTORY_KEYS``.
         IndexError: iblatlas doesn't know a ``brain_region_id`` of ``channel_locations``.
@@ -203,7 +210,7 @@ def extract_snippets(
     ibl_neuropixel_version = importlib.metadata.version("ibl-neuropixel")
     md = spikeglx.read_meta_data(ap_file.with_suffix(".meta"))
     version = spikeglx._get_neuropixel_major_version_from_meta(md)
-    if version not in (1, 2, 2.4):
+    if version not in NEUROPIXEL_FAMILY:
         raise ValueError(
             f"Probe type imDatPrb_type={md.get('imDatPrb_type'):g} (part number "
             f"{md.get('imDatPrb_pn')}) is not supported by ibl-neuropixel "
@@ -216,14 +223,20 @@ def extract_snippets(
             "so the electrode positions are unknown. Use the .meta file SpikeGLX wrote "
             "for this recording."
         )
-    neuropixel_version = int(version)
-    probe_has_lf_band = version == 1
+    neuropixel_version = NEUROPIXEL_FAMILY[version]
+    probe_has_lf_band = neuropixel_version == 1
 
-    # NP1/3A record LF in a file of its own, next to the AP file. spikeglx.Reader raises
-    # FileNotFoundError below if it is missing.
+    # The NP1 family records LF in a file of its own, next to the AP file. Its AP band is
+    # high-pass filtered, so LF can't be derived from it when SpikeGLX didn't save LF.
     lf_file = None
     if probe_has_lf_band:
         lf_file = ap_file.with_name(ap_file.name.replace(".ap.", ".lf."))
+        if not lf_file.exists():
+            raise FileNotFoundError(
+                f"{lf_file} not found. {md.get('imDatPrb_pn') or 'This'} probes record LF "
+                "in a separate file and high-pass filter AP, so LF can't be derived from "
+                "AP. Pass a recording for which SpikeGLX saved the LF band."
+            )
 
     # The recording is always written to its own temporary file first, then renamed or
     # copied into the output, so a failure never leaves a half-written output.
@@ -236,7 +249,7 @@ def extract_snippets(
         if probe_has_lf_band:
             readers["lf"] = spikeglx.Reader(lf_file)
         else:
-            # Always derive NP2 LF from the original AP, regardless of adjacent LF files.
+            # Always derive NP2-family LF from the original AP, regardless of adjacent LF files.
             converter = NP2Converter(ap_file, compress=False)
         sr_ap = readers["ap"]
         # Converted on the Reader's geometry, so the channels follow the stored data rows.
@@ -374,7 +387,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="ibleatools-snippets",
         description="Pack AP and LF snippets of one SpikeGLX probe recording into HDF5; "
-        "NP2 LF is derived using ibl-neuropixel's NP2Converter.",
+        "NP2-family LF is derived using ibl-neuropixel's NP2Converter.",
     )
     parser.add_argument(
         "ap_file", type=Path, help="the .ap.bin or .ap.cbin file of the probe"

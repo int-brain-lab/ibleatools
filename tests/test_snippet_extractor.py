@@ -293,6 +293,8 @@ class TestProbeTypes(unittest.TestCase):
             ("np1", "3B2", 1, True),
             ("3a", "3A", 1, True),
             ("np24_shank", "NP2.4", 2, False),
+            ("nhp", "NHPlong", 1, True),
+            ("qb_shank", "NP2QB", 2, False),
         )
         for template, probe_version, major_version, has_lf in cases:
             with self.subTest(template=template):
@@ -375,35 +377,41 @@ class TestProbeTypes(unittest.TestCase):
             )  # No original LF meta exists for this stream.
 
     def test_np2_lf_exactly_matches_full_converter_output(self):
-        """Match all samples across chunk seams and recording ends, for one or four shanks."""
-        for n_shanks in (1, 4):
-            with self.subTest(shanks=n_shanks):
-                # The template contains the original four-shank map; restore its full
-                # channel count to represent an unsplit probe.
-                edits = (
-                    {
-                        "NP2.4_shank": None,
-                        "nSavedChans": "385",
-                        "snsApLfSy": "384,0,1",
-                        "snsSaveChanSubset": "0:384",
-                    }
-                    if n_shanks == 4
-                    else None
-                )
-                folder = self.tmp / f"np2_{n_shanks}"
-                # Exercise a partial final LF bin: the AP length is not divisible by 12.
+        """Match all samples across chunk seams and recording ends, split or unsplit.
+
+        NP2.4 and quad-base (NP2QB) recordings come either split per shank by the
+        converter, or unsplit with all shanks (the quad base has one sync channel each).
+        """
+        # The NP2.4 template contains the original four-shank map; restore its full
+        # channel count to represent an unsplit probe.
+        np24_unsplit = {
+            "NP2.4_shank": None,
+            "nSavedChans": "385",
+            "snsApLfSy": "384,0,1",
+            "snsSaveChanSubset": "0:384",
+        }
+        # Exercise a partial final LF bin: the AP length is not divisible by 12. The middle
+        # interval crosses a converter seam; the last reaches the LF end. The unsplit quad
+        # base has 1540 channels, so it is kept shorter and skips the end of the data.
+        cases = (
+            ("np24_shank", None, 1, 4.1001, [0.0, 1.9501, 3.9992]),
+            ("np24_shank", np24_unsplit, 4, 4.1001, [0.0, 1.9501, 3.9992]),
+            ("qb_shank", None, 1, 4.1001, [0.0, 1.9501, 3.9992]),
+            ("qb", None, 4, 2.1001, [0.0, 1.9501]),
+        )
+        for template, edits, n_shanks, n_seconds, times in cases:
+            with self.subTest(template=template, shanks=n_shanks):
+                folder = self.tmp / f"{template}_{n_shanks}"
                 ap = write_spikeglx_recording(
-                    folder, "np24_shank", 4.1001, edits=edits, with_lf=False
+                    folder, template, n_seconds, edits=edits, with_lf=False
                 )
-                # The middle interval crosses a converter seam; the last reaches the LF end.
-                times = [0.0, 1.9501, 3.9992]
                 out = extract_snippets(
-                    ap, self.tmp / f"np2_{n_shanks}.h5", t_starts=times, duration=0.1
+                    ap, folder.with_suffix(".h5"), t_starts=times, duration=0.1
                 )
                 converter = NP2Converter(ap, post_check=False, compress=False)
                 self.addCleanup(converter.sr.close)
                 if n_shanks == 1:
-                    # process() refuses already-split NP2.4 input; its LF-only path still
+                    # process() refuses already-split input; its LF-only path still
                     # provides the reference conversion for these existing files.
                     status = converter._process_NP21(assert_shanks=False)
                 else:
@@ -473,8 +481,8 @@ class TestProbeTypes(unittest.TestCase):
                 np.testing.assert_array_equal(volts, sr[n0 : n0 + 3000, :96].T)
 
     def test_recorded_lf_is_required(self):
-        """Missing NP1/3A LF stops with the LF file's name, before any output is created."""
-        for template in ("np1", "3a"):
+        """Missing NP1-family LF stops with the LF file's name, before any output exists."""
+        for template in ("np1", "3a", "nhp"):
             with self.subTest(template=template):
                 ap = write_spikeglx_recording(
                     self.tmp / template, template, 1.0, with_lf=False
@@ -484,6 +492,7 @@ class TestProbeTypes(unittest.TestCase):
                 with self.assertRaises(FileNotFoundError) as error:
                     extract_snippets(ap, output, t_starts=[0.1], duration=0.1)
                 self.assertIn(str(lf), str(error.exception))
+                self.assertIn("high-pass", str(error.exception))
                 self.assertFalse(output.parent.exists())
 
     def test_unknown_probe_type_raises_clear_error(self):
