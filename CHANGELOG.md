@@ -5,6 +5,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-11-20
+
 ### Changed
 - **Breaking.** Every published model is tagged by its version (`X.Y.Z`) and its manifest says what is what: `model_version` (the Hub tag) and `data_vintage` (the `YYYY_Www` feature release it was trained on) replace `vintage`, which held the data release for three models and the release tag for the unit model. `meta_from_manifest` returns `MODEL_VERSION` and `DATA_VINTAGE`, and `ChannelModel.vintage` is now `ChannelModel.data_vintage`, read from the manifest with no fallback. `ephysatlas.models.DECODER_VINTAGES` is now `DECODER_VERSIONS`, `0.0.1` for both region decoders
 - **Breaking.** `unit_level_encoder.Config.vintage`, which was used as the Hub revision of the channel model, is now `Config.channel_model_revision` (default `0.0.1`); `prepare_latest_cells_encoder_data` takes `channel_model_revision` (CLI `--channel-model-revision`) and records it in the prepared-data manifest instead of `context_vintage`, so data prepared before is prepared again once
