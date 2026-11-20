@@ -5,6 +5,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- The snippet extractor supports Neuropixels NHP long (NP1030, NP1 family: recorded LF required) and quad-base (NP2020/NP2021, NP2 family: LF derived from AP) probes, split per shank or unsplit. `neuropixel_version` stores the probe family (1 or 2), as listed in `ephysatlas.snippet_extractor.NEUROPIXEL_FAMILY`
+- A missing LF file of an NP1-family probe stops extraction with a message explaining why LF can't be derived from its high-pass filtered AP
+
 ## [0.15.0] - 2026-11-16
 
 ### Added
