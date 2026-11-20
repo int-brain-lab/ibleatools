@@ -14,7 +14,7 @@ The region decoder's manifest names the table it expects:
 from ephysatlas import load_pretrained
 
 model = load_pretrained(
-    "int-brain-lab/ea-decoder-channel-xgboost", revision="2026_W42"
+    "int-brain-lab/ea-decoder-channel-xgboost", revision="0.0.1"
 )
 print(model.index["inputs"]["table"])   # raw_ephys_features_denoised.pqt
 ```
@@ -205,7 +205,7 @@ Compare the table against the model's declared input list:
 from ephysatlas import load_pretrained
 
 model = load_pretrained(
-    "int-brain-lab/ea-decoder-channel-xgboost", revision="2026_W42"
+    "int-brain-lab/ea-decoder-channel-xgboost", revision="0.0.1"
 )
 
 required = set(model.inputs["features"])

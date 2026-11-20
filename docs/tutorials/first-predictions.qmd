@@ -39,13 +39,13 @@ print(ephysatlas.__version__)
 ## 2. Download a published model
 
 There is one entry point for every model family: `load_pretrained`. Give it a Hugging Face
-repository id, and pin a **revision** — a vintage tag such as `2026_W42`:
+repository id, and pin a **revision**, the model version such as `0.0.1`:
 
 ```python
 from ephysatlas import load_pretrained
 
 model = load_pretrained(
-    "int-brain-lab/ea-decoder-channel-transformer", revision="2026_W42"
+    "int-brain-lab/ea-decoder-channel-transformer", revision="0.0.1"
 )
 ```
 
@@ -72,7 +72,8 @@ index = model.index
 print(index["model_id"])            # ea-decoder-channel-transformer
 print(index["task"])                # region-classification-transformer
 print(index["granularity"])         # channel
-print(index["vintage"])             # 2026_W42
+print(index["model_version"])       # 0.0.1, the Hub tag
+print(index["data_vintage"])        # 2026_W42, the feature release it was trained on
 
 print(len(model.inputs["features"]))    # 51   — feature columns it needs
 print(model.inputs["position_column"])  # axial_um — each channel's depth on the probe

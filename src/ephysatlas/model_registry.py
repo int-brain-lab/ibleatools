@@ -115,7 +115,7 @@ def resolve_model(
 
     Args:
         model_id (str): A Hugging Face repo id (``owner/name``).
-        revision (str, optional): Hugging Face branch/tag to pin, e.g. ``"2026_W32"``. Omitted,
+        revision (str, optional): Hugging Face branch/tag to pin, e.g. ``"0.0.1"``. Omitted,
             it resolves to ``main``.
         cache_dir (Path, optional): Where to place downloads. Defaults to
             ``~/.cache/ephysatlas/models``.
@@ -170,7 +170,8 @@ def meta_from_manifest(manifest: dict) -> dict:
     inputs = manifest.get("inputs") or {}
     return {
         "MODEL_CLASS": manifest.get("model_class"),
-        "VINTAGE": manifest.get("vintage"),
+        "MODEL_VERSION": manifest.get("model_version"),
+        "DATA_VINTAGE": manifest.get("data_vintage"),
         "FEATURES": list(inputs.get("features") or []),
         "CLASSES": list(config.get("classes") or []),
         "REGION_MAP": config.get("region_map"),

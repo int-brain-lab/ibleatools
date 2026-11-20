@@ -31,7 +31,7 @@ the single [`load_pretrained`](https://int-brain-lab.github.io/ibleatools/api/lo
 ```python
 from ephysatlas import load_pretrained
 
-model = load_pretrained("int-brain-lab/ea-decoder-channel-xgboost", revision="2026_W42")
+model = load_pretrained("int-brain-lab/ea-decoder-channel-xgboost", revision="0.0.1")
 model.selftest()
 out = model.predict(df_features)
 ```

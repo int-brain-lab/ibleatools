@@ -125,9 +125,9 @@ Predict brain regions from a table of features, using the published whole-probe 
 import pandas as pd
 from ephysatlas import load_pretrained
 
-# Public Hugging Face repo — no account or token needed. Pin the vintage.
+# Public Hugging Face repo — no account or token needed. Pin the model version.
 model = load_pretrained(
-    "int-brain-lab/ea-decoder-channel-transformer", revision="2026_W42"
+    "int-brain-lab/ea-decoder-channel-transformer", revision="0.0.1"
 )
 
 # Check that this install reproduces the model's shipped output before trusting it
@@ -165,8 +165,8 @@ Full walkthrough in the [tutorial](tutorials/first-predictions.qmd).
 
 | Hugging Face repo | Family | What it predicts | Tag |
 |---|---|---|---|
-| [`int-brain-lab/ea-decoder-channel-xgboost`](https://huggingface.co/int-brain-lab/ea-decoder-channel-xgboost) | Region decoder | Brain region per channel, from features | `2026_W42` |
-| [`int-brain-lab/ea-decoder-channel-transformer`](https://huggingface.co/int-brain-lab/ea-decoder-channel-transformer) | Whole-probe region decoder | Brain region per channel, from a whole probe's features | `2026_W42` |
+| [`int-brain-lab/ea-decoder-channel-xgboost`](https://huggingface.co/int-brain-lab/ea-decoder-channel-xgboost) | Region decoder | Brain region per channel, from features | `0.0.1` |
+| [`int-brain-lab/ea-decoder-channel-transformer`](https://huggingface.co/int-brain-lab/ea-decoder-channel-transformer) | Whole-probe region decoder | Brain region per channel, from a whole probe's features | `0.0.1` |
 | [`int-brain-lab/ea-encoder-channel`](https://huggingface.co/int-brain-lab/ea-encoder-channel) | Spatial encoder | Features per channel, from position | `0.0.1` |
 | [`int-brain-lab/ea-encoder-unit`](https://huggingface.co/int-brain-lab/ea-encoder-unit) | Unit encoder | Unit phenotypes and cell-type composition, from position | `0.0.1` |
 
@@ -204,7 +204,7 @@ your browser.
 | [Tune the computation](how-to/tune-feature-computation.qmd) | Single snippets, snippet windows, per-feature parameters, inspecting destriped data |
 | [Aggregate and denoise](how-to/aggregate-and-denoise.qmd) | Turn per-snippet features into the table a model expects |
 | **How-to: run published models** | |
-| [Download a model](how-to/download-models.qmd) | `load_pretrained`, pinning a vintage, and the self-test |
+| [Download a model](how-to/download-models.qmd) | `load_pretrained`, pinning a version, and the self-test |
 | [Predict regions](how-to/predict-regions.qmd) | Run the region decoders and read their output |
 | [Predict features from position](how-to/predict-features-from-position.qmd) | Run the spatial encoder — position in, features out |
 | [Predict unit phenotypes](how-to/predict-unit-phenotypes.qmd) | Run the unit encoder — position in, unit phenotypes and cell types out |

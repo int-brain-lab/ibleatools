@@ -87,7 +87,8 @@ def write_region_manifest(
     classes=CLASSES,
     features=FEATURES,
     region_map: str = "Cosmos",
-    vintage: str = "2026_W32",
+    model_version: str = "0.0.1",
+    data_vintage: str = "2026_W32",
     folds=None,
 ) -> dict:
     """Write the region-classifier manifest fields the load path reads back.
@@ -106,7 +107,8 @@ def write_region_manifest(
     index = {
         "task": TASK_REGION_CLASSIFICATION,
         "model_class": MODEL_CLASS,
-        "vintage": vintage,
+        "model_version": model_version,
+        "data_vintage": data_vintage,
         "granularity": "channel",
         "artifacts": {"weights": "model.ubj", "folds": folds},
         "inputs": {
@@ -210,7 +212,7 @@ def unit_test_config():
 
     return Config(
         device="cpu",
-        vintage="2026_W41",
+        channel_model_revision="0.0.1",
         waveform_shape=(4, 16),
         acg_shape=(2, 8),
         stpc_shape=(6,),
@@ -328,7 +330,8 @@ def make_unit_model_dir(path_models: Path, *, checksums: bool = True) -> Path:
     index = {
         "task": "unit-encoding",
         "model_class": "UnitAutoencoder",
-        "vintage": "2026_W42",
+        "model_version": "0.0.1",
+        "data_vintage": "2026_W42",
         "granularity": "unit",
         "artifacts": {
             "autoencoder": model_registry.UNIT_AE_FILE,

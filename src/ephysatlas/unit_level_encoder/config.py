@@ -16,11 +16,11 @@ def _default_dir(env_var: str, name: str) -> Path:
 DEFAULT_DATA_DIR = _default_dir("EPHYS_ATLAS_DATA_DIR", "data")
 DEFAULT_RESULTS_DIR = _default_dir("EPHYS_ATLAS_RESULTS_DIR", "results")
 
-# Where the published models live on the Hugging Face Hub. The unit model reuses the channel
-# model's frozen context volumes and probe split for the same vintage.
+# Where the published models live on the Hugging Face Hub. The unit model reuses the frozen context
+# volumes and probe split of a channel model release (``Config.channel_model_revision``).
 UNIT_MODEL_REPO_ID = "int-brain-lab/ea-encoder-unit"
-# Hub tag (version) of the released unit-level model. It is trained on the units, probe split and context
-# volumes of ``Config.vintage``.
+# Hub tag (version) of the released unit-level model. Its units are the cells aggregates of
+# ``ephysatlas.data.CELLS_AGGREGATES_LABEL``.
 UNIT_MODEL_REVISION = "0.0.1"
 CHANNEL_MODEL_REPO_ID = "int-brain-lab/ea-encoder-channel"
 
@@ -34,10 +34,11 @@ class Config:
 
     seed: int = 0
     project: str = "ibl_neuropixel_brainwide_01"
-    vintage: str = "2026_W41"
     # Published channel-level model (repo id or local release directory) that provides the frozen
-    # MERFISH/AGEA context volumes and the authoritative probe split for ``vintage``.
+    # MERFISH/AGEA context volumes and the authoritative probe split, and its Hub tag (model
+    # version; ignored for a local release directory).
     channel_model: str = CHANNEL_MODEL_REPO_ID
+    channel_model_revision: str = "0.0.1"
 
     # Raw IBL downloads (cells aggregates) go under data_dir; the prepared unit arrays under
     # prepared_data_dir; training checkpoints under model_dir; diagnostics under output_dir.

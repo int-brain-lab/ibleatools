@@ -314,7 +314,7 @@ And when a model is involved, the model's own manifest is authoritative:
 from ephysatlas import load_pretrained
 
 model = load_pretrained(
-    "int-brain-lab/ea-decoder-channel-xgboost", revision="2026_W42"
+    "int-brain-lab/ea-decoder-channel-xgboost", revision="0.0.1"
 )
 print(model.inputs["features"])   # exactly what this model needs, in order
 ```

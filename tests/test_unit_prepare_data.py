@@ -61,14 +61,14 @@ class TestFrozenContextAtlas(unittest.TestCase):
         return _ensure_frozen_context_atlas(
             out_dir=self.out_dir,
             channel_model=release or self.release,
-            vintage="2026_W39",
+            revision="0.0.1",
         )
 
     def test_copies_the_release_volumes_and_reports_their_hashes(self):
         from ephysatlas.unit_level_encoder.prepare_data import channel_context_sha1
 
         context_dir, hashes = self._ensure()
-        self.assertEqual(hashes, channel_context_sha1(self.release, "2026_W39"))
+        self.assertEqual(hashes, channel_context_sha1(self.release, "0.0.1"))
         for name in ENCODER_CONTEXT_FILES:
             self.assertEqual(
                 (context_dir / name).read_bytes(), (self.release / name).read_bytes()
@@ -117,7 +117,7 @@ class TestPreparedDataFreshness(unittest.TestCase):
         _write_volumes(self.release, value=1.0)
         self.cfg = Config(
             device="cpu",
-            vintage="2026_W39",
+            channel_model_revision="0.0.1",
             channel_model=str(self.release),
             data_dir=self.tmp / "data",
             prepared_data_dir=self.tmp / "prepared",
@@ -135,8 +135,8 @@ class TestPreparedDataFreshness(unittest.TestCase):
             "context_type": "merfish_agea_pca",
             "n_cell_pcs": 50,
             "n_gene_pcs": 50,
-            "context_vintage": "2026_W39",
-            "context_volumes_sha1": channel_context_sha1(self.release, "2026_W39"),
+            "channel_model_revision": "0.0.1",
+            "context_volumes_sha1": channel_context_sha1(self.release, "0.0.1"),
             "waveform_feature_names": list(FEATURE_NAMES),
         }
 

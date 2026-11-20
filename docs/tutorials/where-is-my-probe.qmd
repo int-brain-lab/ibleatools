@@ -97,10 +97,10 @@ from ephysatlas import load_pretrained
 
 df["outside"] = df["channel_labels"] == 3   # the one derived column the decoders need
 
-xgb = load_pretrained("int-brain-lab/ea-decoder-channel-xgboost", revision="2026_W42")
+xgb = load_pretrained("int-brain-lab/ea-decoder-channel-xgboost", revision="0.0.1")
 out_xgb = xgb.predict(df)
 
-transformer = load_pretrained("int-brain-lab/ea-decoder-channel-transformer", revision="2026_W42")
+transformer = load_pretrained("int-brain-lab/ea-decoder-channel-transformer", revision="0.0.1")
 out = transformer.predict(df)
 
 print(out["predicted_acronym"].value_counts())
@@ -163,7 +163,7 @@ from ephysatlas.alignment import ChannelModel, align_histology, plot_alignment_r
 from ephysatlas.alignment.geometry import histology_track, region_ids
 
 ba = AllenAtlas(res_um=25)    # downloads the Allen volumes on first use
-model = ChannelModel()        # the spatial encoder, at the alignment's default vintage
+model = ChannelModel()        # the spatial encoder, at the alignment's default version
 
 # Recorded features, one row per channel, top of the probe first
 pid = df.index.get_level_values("pid")[0]

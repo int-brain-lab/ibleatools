@@ -32,7 +32,7 @@ print(encoder.inputs["columns"])        # ['x', 'y', 'z']
 print(len(encoder.features))            # 43 predicted features
 ```
 
-`2026_W42` is trained on the `2026_W42` features, with channel positions refreshed from
+`0.0.1` is trained on the `2026_W42` features, with channel positions refreshed from
 the current alignments and without the insertions whose alignment was revised. It
 predicts the 43 features of the denoised table, spike-shape columns included, with the
 first-difference CSD columns named `*_bpr`.
@@ -184,8 +184,10 @@ global NumPy seed. Two runs give identical numbers.
 
 From `2026_W45` on, the release says how it predicts, in `config.prediction` of its manifest: the
 context interpolated between the voxels of its 200 µm grid (`trilinear_context`), and the mean over
-four random neighbour sets, as in training, from a fixed seed (`neighbour_draws`). On its held-out
-insertions this raises R² in every tissue, the root regions included, and takes about twice as long.
+four random neighbour sets, as in training, from a fixed seed (`neighbour_draws`); the candidates
+are ordered by distance, then by bank index, before each draw, so every machine draws the same
+sets. On its held-out insertions this raises R² in every tissue, the root regions included, and
+takes about twice as long.
 Pass either argument to `predict` or `predict_xyz` to override it; a release without the block
 predicts from the nearest voxel and the nearest neighbours, as it did when it was published.
 

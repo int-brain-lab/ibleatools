@@ -106,7 +106,8 @@ def make_spatial_model_dir(
     index = {
         "task": "spatial-encoding",
         "model_class": "NeighborInpaintingModel",
-        "vintage": "2026_W39",
+        "model_version": "0.0.1",
+        "data_vintage": "2026_W39",
         "artifacts": {
             "weights": model_registry.ENCODER_WEIGHTS_FILE,
             "confidence": model_registry.ENCODER_CONFIDENCE_FILE,
@@ -175,6 +176,12 @@ class TestSpatialEncoderAccessors(unittest.TestCase):
         self.assertIsInstance(model, ProbeSequenceConfidenceTransformer)
         self.assertFalse(model.training)
 
+    def test_channel_model_reads_its_data_vintage_from_the_manifest(self):
+        from ephysatlas.alignment import ChannelModel
+
+        model = ChannelModel(str(make_spatial_model_dir(self.tmp)), device="cpu")
+        self.assertEqual(model.data_vintage, "2026_W39")
+
     def test_neighbor_bank_is_a_copy_of_the_published_bank(self):
         encoder = self._encoder()
         bank = encoder.neighbor_bank()
@@ -194,6 +201,63 @@ class _FakeContextManager:
     def sample_context_numpy_m(self, xyz_m, mode="clip"):
         ctx = np.asarray(xyz_m, np.float64) @ self.weights + 1.0
         return {"cell_pc": ctx[:, :50], "gene_pc": ctx[:, 50:]}
+
+
+class TestNeighbourDrawsTieOrder(unittest.TestCase):
+    """Averaged neighbour draws must not depend on the order the search lists its candidates.
+
+    Channels sit on a regular grid, so many are exactly as far from a query as others, and the
+    search lists such ties in an order that differs between machines. Each listed candidate gets its
+    own random key, so that order decided which neighbours were drawn: the golden predictions of
+    ea-encoder-channel 0.0.1 could not be reproduced away from the machine that wrote them.
+    """
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        # A 5 x 5 grid at 50 um around the query: rings of 4 and 8 channels at equal distances,
+        # 24 candidates for 8 neighbour slots.
+        centre = np.array([-2e-3, -2e-3, -3e-3])
+        grid = [
+            (i, j, 0) for i in range(-2, 3) for j in range(-2, 3) if (i, j) != (0, 0)
+        ]
+        xyz = centre + np.array(grid) * 50e-6
+        bank = dict(
+            xyz=xyz.astype(np.float32),
+            feat=np.random.default_rng(0)
+            .normal(size=(len(xyz), len(FEATURES)))
+            .astype(np.float32),
+            pid=np.array(["bank"] * len(xyz)),
+        )
+        self.path_model = make_spatial_model_dir(self.tmp, bank=bank)
+        self.query = centre[None, :]
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _predict(self):
+        from unittest import mock
+
+        from ephysatlas import load_pretrained
+        from ephysatlas.models.encoder_inpainting import SpatialEncoder
+
+        fake = _FakeContextManager()
+        with mock.patch.object(SpatialEncoder, "_context_manager", lambda self: fake):
+            encoder = load_pretrained(self.path_model, device="cpu")
+            return encoder.predict_xyz(self.query, "query", neighbour_draws=3)
+
+    def test_draws_do_not_depend_on_the_order_of_the_candidates(self):
+        from unittest import mock
+
+        from ephysatlas.spatial_encoder.utils import ChannelNN
+
+        listed = self._predict()
+        search = ChannelNN.query_radius
+
+        def reversed_search(nn, *args, **kwargs):
+            return [c[::-1] for c in search(nn, *args, **kwargs)]
+
+        with mock.patch.object(ChannelNN, "query_radius", reversed_search):
+            np.testing.assert_allclose(self._predict(), listed, rtol=1e-6, atol=1e-6)
 
 
 class TestSpatialEncoderPredictHemispheres(unittest.TestCase):

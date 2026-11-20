@@ -12,7 +12,7 @@ Example:
 To run a published model, there is a single entry point for every model family:
 
     >>> from ephysatlas import load_pretrained
-    >>> model = load_pretrained("int-brain-lab/ea-decoder-channel-xgboost", revision="2026_W32")
+    >>> model = load_pretrained("int-brain-lab/ea-decoder-channel-xgboost", revision="0.0.1")
     >>> out = model.predict(df_features)
 """
 

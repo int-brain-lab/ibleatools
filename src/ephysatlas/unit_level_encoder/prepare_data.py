@@ -404,7 +404,7 @@ def _sha1(path: Path) -> str:
     return hashfile.sha1(Path(path))
 
 
-def channel_context_files(channel_model: str | Path, vintage: str) -> dict[str, Path]:
+def channel_context_files(channel_model: str | Path, revision: str) -> dict[str, Path]:
     """The frozen molecular-context volumes of a channel-level release, as local files.
 
     Published releases keep them at the release root; older staged releases kept them under
@@ -415,19 +415,19 @@ def channel_context_files(channel_model: str | Path, vintage: str) -> dict[str, 
     files = {}
     for name in ENCODER_CONTEXT_FILES:
         try:
-            files[name] = resolve_channel_release_file(channel_model, vintage, name)
+            files[name] = resolve_channel_release_file(channel_model, revision, name)
         except Exception:  # noqa: BLE001 - older layout keeps the volumes under context/
             files[name] = resolve_channel_release_file(
-                channel_model, vintage, f"context/{name}"
+                channel_model, revision, f"context/{name}"
             )
     return files
 
 
-def channel_context_sha1(channel_model: str | Path, vintage: str) -> dict[str, str]:
+def channel_context_sha1(channel_model: str | Path, revision: str) -> dict[str, str]:
     """sha1 of each frozen context volume of a channel-level release."""
     return {
         name: _sha1(path)
-        for name, path in channel_context_files(channel_model, vintage).items()
+        for name, path in channel_context_files(channel_model, revision).items()
     }
 
 
@@ -435,14 +435,14 @@ def _ensure_frozen_context_atlas(
     *,
     out_dir: Path,
     channel_model: str | Path,
-    vintage: str,
+    revision: str,
 ) -> tuple[Path, dict[str, str]]:
     """Copy the exact frozen molecular-context volumes of the channel-level release.
 
     Reusing the channel model's PCA volumes guarantees that the unit model and the channel model
     share the same PCA basis and sign convention. A copy already in ``out_dir`` is kept only when
-    its bytes match the release's: volumes left over from another release or vintage would
-    otherwise silently put the unit contexts in a different PCA basis.
+    its bytes match the release's: volumes left over from another release would otherwise
+    silently put the unit contexts in a different PCA basis.
 
     Returns:
         tuple: The context directory, and ``{volume name: sha1}`` of the volumes it now holds.
@@ -451,13 +451,13 @@ def _ensure_frozen_context_atlas(
     context_dir.mkdir(parents=True, exist_ok=True)
 
     hashes = {}
-    for name, src in channel_context_files(channel_model, vintage).items():
+    for name, src in channel_context_files(channel_model, revision).items():
         dst = context_dir / name
         expected = _sha1(src)
         if not dst.exists() or _sha1(dst) != expected:
             if dst.exists():
                 print(
-                    f"[context] replacing {dst}: it is not the {vintage} release's {name}"
+                    f"[context] replacing {dst}: it is not the {revision} release's {name}"
                 )
             shutil.copy2(src, dst)
         hashes[name] = expected
@@ -761,7 +761,7 @@ def prepare_latest_cells_encoder_data(
     use_stpc: bool = True,
     stpc_window_ms: float = 80.0,
     channel_model: str | Path = CHANNEL_MODEL_REPO_ID,
-    context_vintage: str = "2026_W41",
+    channel_model_revision: str = "0.0.1",
     n_cell_pcs: int = 50,
     n_gene_pcs: int = 50,
     mirror_x_to_single_hemisphere: bool = True,
@@ -1138,7 +1138,7 @@ def prepare_latest_cells_encoder_data(
     context_dir, context_sha1 = _ensure_frozen_context_atlas(
         out_dir=out_dir,
         channel_model=channel_model,
-        vintage=context_vintage,
+        revision=channel_model_revision,
     )
     ctx, ctx_names = _build_context(
         xyz_m,
@@ -1299,7 +1299,7 @@ def prepare_latest_cells_encoder_data(
         "n_cell_pcs": int(n_cell_pcs),
         "n_gene_pcs": int(n_gene_pcs),
         "channel_model": str(channel_model),
-        "context_vintage": str(context_vintage),
+        "channel_model_revision": str(channel_model_revision),
         "context_atlas_dir": str(context_dir),
         # Identity of the volumes the contexts were sampled from; checked before reuse.
         "context_volumes_sha1": context_sha1,
@@ -1409,7 +1409,12 @@ if __name__ == "__main__":
         default=CHANNEL_MODEL_REPO_ID,
         help="channel-level release (HF repo id or local directory) providing the context volumes",
     )
-    parser.add_argument("--context-vintage", type=str, default="2026_W41")
+    parser.add_argument(
+        "--channel-model-revision",
+        type=str,
+        default="0.0.1",
+        help="Hub tag (model version) of --channel-model; ignored for a local directory",
+    )
     parser.add_argument("--n-cell-pcs", type=int, default=50)
     parser.add_argument("--n-gene-pcs", type=int, default=50)
     parser.add_argument("--no-mirror-x", action="store_true")
@@ -1431,7 +1436,7 @@ if __name__ == "__main__":
         use_stpc=not args.no_stpc,
         stpc_window_ms=args.stpc_window_ms,
         channel_model=args.channel_model,
-        context_vintage=args.context_vintage,
+        channel_model_revision=args.channel_model_revision,
         n_cell_pcs=args.n_cell_pcs,
         n_gene_pcs=args.n_gene_pcs,
         mirror_x_to_single_hemisphere=not args.no_mirror_x,

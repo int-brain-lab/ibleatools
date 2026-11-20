@@ -31,7 +31,7 @@ outdir = Path("figures")
 outdir.mkdir(exist_ok=True)
 
 model = load_pretrained(
-    "int-brain-lab/ea-decoder-channel-transformer", revision="2026_W42"
+    "int-brain-lab/ea-decoder-channel-transformer", revision="0.0.1"
 )
 df = pd.read_parquet(model.path_model / "example" / "features_sample.parquet")
 out = model.predict(df)
@@ -80,7 +80,7 @@ for k, pid in enumerate(pids):
         axs=axs[3 * k : 3 * k + 3],
     )
     axs[3 * k].set_ylabel(f"probe {pid[:8]}\ndepth from probe tip (µm)")
-fig.suptitle("ProbeTransformer (2026_W42) on its two example probes, Cosmos regions")
+fig.suptitle("ProbeTransformer (0.0.1) on its two example probes, Cosmos regions")
 fig.savefig(outdir / "predictions_along_probe.png", dpi=110)
 logger.info("wrote %s", outdir / "predictions_along_probe.png")
 plt.close("all")

@@ -26,7 +26,7 @@ If you have not loaded a model yet, start with
 from ephysatlas import load_pretrained
 
 transformer = load_pretrained(
-    "int-brain-lab/ea-decoder-channel-transformer", revision="2026_W42"
+    "int-brain-lab/ea-decoder-channel-transformer", revision="0.0.1"
 )
 
 print(transformer.inputs["index"])             # ['pid', 'channel']
@@ -190,7 +190,7 @@ table:
 
 ```python
 xgb = load_pretrained(
-    "int-brain-lab/ea-decoder-channel-xgboost", revision="2026_W42"
+    "int-brain-lab/ea-decoder-channel-xgboost", revision="0.0.1"
 )
 
 print(len(xgb.inputs["features"]))   # 48
@@ -368,7 +368,7 @@ matches its recorded hash, meaning the model directory has been edited. Re-downl
 
 **Predictions look uniformly wrong** — check three things in order: `model.selftest()`
 passes; your features are denoised; the feature vintage matches
-`model.index["vintage"]`.
+`model.index["data_vintage"]`.
 
 **Everything predicted `void` or `root`** — often a sign the input is raw rather than
 denoised, so the feature values sit far outside the training distribution.

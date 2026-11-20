@@ -67,8 +67,9 @@ class ChannelModel:
         )
         self.model = self.encoder.model.to(self.device).eval()
         self.features = list(self.encoder.features)
-        # The feature release the model was trained on (its manifest), which its Hub tag need not be.
-        self.vintage = str((self.encoder.index or {}).get("vintage") or VINTAGE)
+        # The feature release the model was trained on, from its manifest (its Hub tag is the
+        # model version).
+        self.data_vintage = str(self.encoder.index["data_vintage"])
         self.e_mean = self.model.e_mean.detach().cpu().numpy().astype(np.float64)
         self.e_std = self.model.e_std.detach().cpu().numpy().astype(np.float64)
 

@@ -79,8 +79,9 @@ def prepare_unit_data(cfg: Config, split_manifest: dict | None = None):
 
     Args:
         cfg: Unit-model configuration.
-        split_manifest: Probe split to use. Defaults to the channel release's ``split.json`` for
-            ``cfg.vintage``; pass a released unit model's own split to reproduce it exactly.
+        split_manifest: Probe split to use. Defaults to the ``split.json`` of the channel release
+            ``cfg.channel_model_revision``; pass a released unit model's own split to reproduce it
+            exactly.
     """
     data_dir = Path(cfg.prepared_data_dir)
     expected_ctx_dim = int(cfg.n_cell_pcs) + int(cfg.n_gene_pcs)
@@ -116,10 +117,11 @@ def prepare_unit_data(cfg: Config, split_manifest: dict | None = None):
                 and manifest.get("context_type") == "merfish_agea_pca"
                 and int(manifest.get("n_cell_pcs", -1)) == int(cfg.n_cell_pcs)
                 and int(manifest.get("n_gene_pcs", -1)) == int(cfg.n_gene_pcs)
-                and str(manifest.get("context_vintage")) == str(cfg.vintage)
+                and str(manifest.get("channel_model_revision"))
+                == str(cfg.channel_model_revision)
                 # The contexts must come from exactly the volumes of cfg.channel_model.
                 and manifest.get("context_volumes_sha1")
-                == channel_context_sha1(cfg.channel_model, cfg.vintage)
+                == channel_context_sha1(cfg.channel_model, cfg.channel_model_revision)
                 # Prepared with the current unit waveform features.
                 and list(manifest.get("waveform_feature_names", []))
                 == list(FEATURE_NAMES)
@@ -142,7 +144,7 @@ def prepare_unit_data(cfg: Config, split_manifest: dict | None = None):
             stpc_window_ms=80.0,
             allow_peak_fallback=False,
             channel_model=cfg.channel_model,
-            context_vintage=cfg.vintage,
+            channel_model_revision=cfg.channel_model_revision,
             n_cell_pcs=cfg.n_cell_pcs,
             n_gene_pcs=cfg.n_gene_pcs,
             mirror_x_to_single_hemisphere=cfg.mirror_x_to_single_hemisphere,
