@@ -449,3 +449,11 @@ class TestDownloadVolumes(unittest.TestCase):
                 ephysatlas.data.download_edges_volume(
                     Path("local"), label="L", res_um=25, one=MagicMock()
                 )
+
+
+class TestAlphaOutlierColumns(unittest.TestCase):
+    def test_db_alpha_features_are_not_used(self):
+        df = pd.DataFrame(
+            {"psd_alpha": [-98.0, -99.0], "psd_alpha_csd": [-80.0, -81.0]}
+        )
+        self.assertEqual(ephysatlas.data.alpha_outlier_columns(df), [])
