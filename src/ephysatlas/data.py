@@ -518,14 +518,8 @@ def download_edges_volume(
     )
 
 
-# Alpha-power columns for the outlier filter, in priority order: the first group fully
-# present in the dataframe is used (legacy names first, so existing behaviour is unchanged).
-ALPHA_OUTLIER_CANDIDATE_GROUPS = (
-    ("alpha_mean", "alpha_std"),
-    ("psd_alpha", "psd_alpha_csd"),
-    ("psd_alpha",),
-    ("psd_alpha_csd",),
-)
+# Alpha columns for the outlier filter; linear only, dB columns would all be flagged (#180).
+ALPHA_OUTLIER_CANDIDATE_GROUPS = (("alpha_mean", "alpha_std"),)
 
 
 def alpha_outlier_columns(df: pd.DataFrame) -> list[str]:
