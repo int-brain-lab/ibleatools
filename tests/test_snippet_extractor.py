@@ -806,6 +806,12 @@ class TestChannelLocations(unittest.TestCase):
                     d["channel_0"][key],
                 )
 
+        def reversed_order(d):
+            # As if the entries were paired with the channels in reverse order, which turns
+            # the probe upside down
+            for entry in (v for k, v in d.items() if k.startswith("channel_")):
+                entry["lateral"], entry["axial"] = -entry["lateral"], -entry["axial"]
+
         # iblatlas BrainRegions.get raises IndexError for an id it doesn't know.
         cases = [
             (drop_channel, ValueError, "one entry per channel"),
@@ -814,6 +820,7 @@ class TestChannelLocations(unittest.TestCase):
             (nan_coordinate, ValueError, "finite"),
             (unknown_region, IndexError, ""),
             (swapped_positions, ValueError, "positions"),
+            (reversed_order, ValueError, "positions"),
         ]
         for change, error, message in cases:
             with self.subTest(change.__name__):
@@ -822,6 +829,19 @@ class TestChannelLocations(unittest.TestCase):
                 with self.assertRaisesRegex(error, message):
                     self.extract(channel_locations=self._write(d))
                 self.assertFalse(self.out.parent.exists())
+
+        # Every entry given the next channel's position. On the two columns of an NP2
+        # shank that is a mirror plus a 15 um skew.
+        ap = write_spikeglx_recording(self.tmp / "np2", "np24_shank", 1.0)
+        d = channel_locations_dict(ap.with_suffix(".meta"))
+        for entry in (v for k, v in d.items() if k.startswith("channel_")):
+            entry["lateral"], entry["axial"] = (
+                86 - entry["lateral"],
+                entry["axial"] + 15 * (entry["lateral"] - 27) / 32,
+            )
+        with self.assertRaisesRegex(ValueError, "positions"):
+            self.extract(ap, channel_locations=self._write(d))
+        self.assertFalse(self.out.parent.exists())
 
     def test_multi_shank_positions_fit_per_shank(self):
         # An unsplit four-shank NP2.4: ibl-neuropixel's x is within each shank, while the
@@ -883,6 +903,139 @@ class TestChannelLocations(unittest.TestCase):
             self.assertNotIn("channels", histology)
 
 
+class TestDroppedChannels(unittest.TestCase):
+    """Channels missing from channel_locations.json are computed from the alignment."""
+
+    @classmethod
+    def setUpClass(cls):
+        from iblatlas.atlas import AllenAtlas
+        from ibllib.pipes.ephys_alignment import EphysAlignment
+
+        cls.tmp = Path(tempfile.mkdtemp())
+        cls.addClassCleanup(shutil.rmtree, cls.tmp)
+        cls.ap = write_spikeglx_recording(cls.tmp, "np1", 1.0)
+        geometry = spikeglx.geometry_from_meta(
+            spikeglx.read_meta_data(cls.ap.with_suffix(".meta"))
+        )
+        # A straight track through the brain (um), off the 25 um voxel grid so no channel
+        # sits on a region boundary, and an alignment (m) that moves the depth 2000 um to
+        # 2300 um along the track.
+        picks = np.c_[
+            np.full(10, -1990.0), np.full(10, -1990.0), np.linspace(-200, -4500, 10)
+        ]
+        feature, track = [-0.006, 0.002, 0.006], [-0.006, 0.0023, 0.006]
+        ea = EphysAlignment(picks / 1e6, brain_atlas=AllenAtlas(25))
+        # The full json as the GUI writes it, in a sorter layout 20 um lower than the geometry
+        axial = geometry["y"].astype(float) - 20
+        xyz = ea.get_channel_locations(feature, track, depths=axial / 1e6) * 1e6
+        regions = ea.get_brain_locations(xyz / 1e6)
+        full = {"origin": {"bregma": [5739, 5400, 332]}}
+        for row, ind in enumerate(geometry["ind"].tolist()):
+            full[f"channel_{ind}"] = {
+                **dict(zip("xyz", xyz[row].tolist())),
+                "axial": float(axial[row]),
+                "lateral": float(geometry["x"][row]),
+                "brain_region_id": int(regions.id[row]),
+                "brain_region": regions.acronym[row],
+            }
+        # The sorter dropped some channels; the json lists the others as channel_0, 1, ...
+        kept = [
+            ind for ind in range(384) if ind not in {5, 17, 100, *range(200, 230), 383}
+        ]
+        subset = {f"channel_{k}": full[f"channel_{ind}"] for k, ind in enumerate(kept)}
+        subset["origin"] = full["origin"]
+
+        cls.alignment = {"2026-01-01T12:00:00": [feature, track]}
+        (cls.tmp / "prev_alignments.json").write_text(json.dumps(cls.alignment))
+        (cls.tmp / "xyz_picks.json").write_text(
+            json.dumps({"xyz_picks": picks.tolist()})
+        )
+        (cls.tmp / "full.json").write_text(json.dumps(full))
+        (cls.tmp / "channel_locations.json").write_text(json.dumps(subset))
+        np.save(cls.tmp / "channels.rawInd.npy", kept)
+
+    def setUp(self):
+        self.out = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.out)
+
+    def extract(self, out, **kw):
+        return extract_snippets(
+            self.ap,
+            out,
+            t_starts=[0.1],
+            duration=0.1,
+            xyz_picks=self.tmp / "xyz_picks.json",
+            **kw,
+        )
+
+    def test_missing_channels_match_the_full_json(self):
+        full = self.extract(
+            self.out / "full.h5", channel_locations=self.tmp / "full.json"
+        )
+        filled = self.extract(
+            self.out / "filled.h5",
+            channel_locations=self.tmp / "channel_locations.json",
+            alignment=self.tmp / "prev_alignments.json",
+            channel_index=self.tmp / "channels.rawInd.npy",
+        )
+        with h5py.File(full) as f, h5py.File(filled) as g:
+            expected, channels = (
+                f[REC]["histology/channels"],
+                g[REC]["histology/channels"],
+            )
+            for key in "xyz":
+                np.testing.assert_allclose(
+                    channels[key][()], expected[key][()], atol=1e-9
+                )
+            np.testing.assert_array_equal(
+                channels["atlas_id"][()], expected["atlas_id"][()]
+            )
+            self.assertEqual(
+                set(g[REC]["histology/raw"]),
+                {
+                    "channel_locations.json",
+                    "xyz_picks.json",
+                    "prev_alignments.json",
+                    "channels.rawInd.npy",
+                },
+            )
+
+    def test_rejected_inputs_create_nothing(self):
+        # A later alignment that the json was not made from: the latest one is used
+        other = self.out / "other_alignments.json"
+        later = {
+            "2026-01-02T12:00:00": [[-0.006, 0.002, 0.006], [-0.006, 0.0025, 0.006]]
+        }
+        other.write_text(json.dumps({**self.alignment, **later}))
+        off_by_one = self.out / "off_by_one.npy"
+        np.save(off_by_one, np.load(self.tmp / "channels.rawInd.npy") + 1)
+        alignment, raw_ind = (
+            self.tmp / "prev_alignments.json",
+            self.tmp / "channels.rawInd.npy",
+        )
+        cases = [
+            ("no alignment", dict(channel_index=raw_ind), "one entry per channel"),
+            (
+                "other alignment",
+                dict(alignment=other, channel_index=raw_ind),
+                "reproduce",
+            ),
+            (
+                "off by one",
+                dict(alignment=alignment, channel_index=off_by_one),
+                "positions",
+            ),
+        ]
+        for name, kw, message in cases:
+            with self.subTest(name):
+                out = self.out / "new" / "out.h5"
+                with self.assertRaisesRegex(ValueError, message):
+                    self.extract(
+                        out, channel_locations=self.tmp / "channel_locations.json", **kw
+                    )
+                self.assertFalse(out.parent.exists())
+
+
 class TestCli(unittest.TestCase):
     def setUp(self):
         # main() configures the "ephysatlas" logger; undo it so other tests stay quiet
@@ -907,6 +1060,10 @@ class TestCli(unittest.TestCase):
                     "cl.json",
                     "--xyz-picks",
                     "picks.json",
+                    "--alignment",
+                    "prev_alignments.json",
+                    "--channel-index",
+                    "channels.rawInd.npy",
                     "--histology-raw",
                     "a.json",
                     "b.csv",
@@ -935,6 +1092,8 @@ class TestCli(unittest.TestCase):
             name="probe00",
             channel_locations=Path("cl.json"),
             xyz_picks=Path("picks.json"),
+            alignment=Path("prev_alignments.json"),
+            channel_index=Path("channels.rawInd.npy"),
             histology_raw=[Path("a.json"), Path("b.csv")],
             t_starts=[1.0, 2.5],
             n_snippets=3,
