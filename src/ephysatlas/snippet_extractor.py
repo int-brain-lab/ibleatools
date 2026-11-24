@@ -30,7 +30,8 @@ File layout (``n`` snippets, ``c`` channels, sync channel removed)::
                                 and filter_sos record the NP2Converter filter instead
         histology/raw/<name>    uint8 (n_bytes,)   original histology bytes, attrs source_path
         histology/channels/     ``Histology.channels`` (x, y, z, atlas_id, acronym), from
-                                channel_locations; only when given
+                                channel_locations, and from alignment for the channels
+                                missing from it; only when given
         histology/xyz_picks     ``Histology.xyz_picks``, from xyz_picks; only when given
         trajectory              group, attrs x, y, z, depth, theta, phi; only when given
 
@@ -114,6 +115,8 @@ def extract_snippets(
     name: str | None = None,
     channel_locations: str | Path | None = None,
     xyz_picks: str | Path | None = None,
+    alignment: str | Path | None = None,
+    channel_index: str | Path | None = None,
     histology_raw: Sequence[str | Path] | None = None,
     t_starts: Sequence[float] | None = None,
     n_snippets: int = 5,
@@ -140,9 +143,14 @@ def extract_snippets(
         channel_locations: ``channel_locations.json`` of this probe, as the IBL alignment
             GUI writes it. Stored as ``histology/channels`` (``read_histology``) and raw.
         xyz_picks: ``xyz_picks.json`` of this probe. Stored as ``histology/xyz_picks`` and raw.
+        alignment: ``prev_alignments.json`` of this probe, as the IBL alignment GUI writes
+            it. With ``xyz_picks``, it gives the channels missing from
+            ``channel_locations``, e.g. dropped by the spike sorter. Stored raw.
+        channel_index: ``channels.rawInd.npy`` of the spike sorter, when the
+            ``channel_locations`` entries are numbered by the sorter's channels. Stored raw.
         histology_raw: Other histology files to copy into the output as raw bytes, e.g.
             track CSVs of this probe. Each is stored under its file name. The total is
-            limited to 100 MB including the two json inputs, which keeps image
+            limited to 100 MB including the histology inputs above, which keeps image
             volumes out.
         t_starts: Snippet start times in seconds. If None, ``n_snippets`` start times are
             chosen by ``get_snippet_start_times`` over the length of the data in the files.
@@ -190,11 +198,9 @@ def extract_snippets(
 
     # Check the total size and convert the trajectory before opening the recording.
     # The size limit keeps image volumes out of the file.
-    # The histology json files are also stored as raw bytes.
-    histology_raw = [
-        Path(p)
-        for p in (*(histology_raw or ()), *filter(None, (channel_locations, xyz_picks)))
-    ]
+    # The histology inputs are also stored as raw bytes.
+    inputs = (channel_locations, xyz_picks, alignment, channel_index)
+    histology_raw = [Path(p) for p in (*(histology_raw or ()), *filter(None, inputs))]
     histology_bytes = sum(path.stat().st_size for path in histology_raw)
     if histology_bytes > MAX_HISTOLOGY_BYTES:
         raise ValueError(
@@ -253,7 +259,9 @@ def extract_snippets(
             converter = NP2Converter(ap_file, compress=False)
         sr_ap = readers["ap"]
         # Converted on the Reader's geometry, so the channels follow the stored data rows.
-        histology = read_histology(channel_locations, xyz_picks, sr_ap.geometry)
+        histology = read_histology(
+            channel_locations, xyz_picks, sr_ap.geometry, alignment, channel_index
+        )
 
         order = sr_ap.raw_channel_order[: sr_ap.nc - sr_ap.nsync]
         bands = {band: (sr.fs, sr.ns) for band, sr in readers.items()}
@@ -409,6 +417,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("--xyz-picks", type=Path, help="xyz_picks.json of this probe")
     parser.add_argument(
+        "--alignment",
+        type=Path,
+        help="prev_alignments.json of this probe; with --xyz-picks, gives the channels "
+        "missing from --channel-locations",
+    )
+    parser.add_argument(
+        "--channel-index",
+        type=Path,
+        help="channels.rawInd.npy of the spike sorter, when the --channel-locations "
+        "entries are numbered by the sorter's channels",
+    )
+    parser.add_argument(
         "--histology-raw",
         type=Path,
         nargs="+",
@@ -469,6 +489,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             name=args.name,
             channel_locations=args.channel_locations,
             xyz_picks=args.xyz_picks,
+            alignment=args.alignment,
+            channel_index=args.channel_index,
             histology_raw=args.histology_raw,
             t_starts=args.t_starts,
             n_snippets=args.n_snippets,
