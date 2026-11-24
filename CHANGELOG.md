@@ -5,13 +5,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-11-24
+
 ### Added
-- The snippet extractor supports Neuropixels NHP long (NP1030, NP1 family: recorded LF required) and quad-base (NP2020/NP2021, NP2 family: LF derived from AP) probes, split per shank or unsplit. `neuropixel_version` stores the probe family (1 or 2), as listed in `ephysatlas.snippet_extractor.NEUROPIXEL_FAMILY`
-- A missing LF file of an NP1-family probe stops extraction with a message explaining why LF can't be derived from its high-pass filtered AP
-- `ibleatools-snippets --alignment prev_alignments.json --channel-index channels.rawInd.npy` computes the channels missing from `channel_locations.json` (e.g. dropped by Kilosort 2) from the alignment, as the alignment GUI does. `examples/snippet_extraction_petersen.py` shows it on a Petersen lab session
+- The snippet extractor supports Neuropixels NHP long (NP1030, NP1 family: recorded LF required) and quad-base (NP2020/NP2021, NP2 family: LF derived from AP) probes, split per shank or unsplit. `neuropixel_version` stores the probe family (1 or 2), as listed in `ephysatlas.snippet_extractor.NEUROPIXEL_FAMILY` (#179)
+- A missing LF file of an NP1-family probe stops extraction with a message explaining why LF can't be derived from its high-pass filtered AP (#179)
+- `ibleatools-snippets --alignment prev_alignments.json --channel-index channels.rawInd.npy` computes the channels missing from `channel_locations.json` (e.g. dropped by Kilosort 2) from the alignment, as the alignment GUI does. `examples/snippet_extraction_petersen.py` shows it on a Petersen lab session (#184)
 
 ### Changed
-- The snippet extractor's check that the `channel_locations.json` entries belong to the right channels allows only a lateral mirror and a shift per shank, instead of any affine map, which accepted entries off by one channel on NP2 shanks or in reverse order
+- The snippet extractor's check that the `channel_locations.json` entries belong to the right channels allows only a lateral mirror and a shift per shank, instead of any affine map, which accepted entries off by one channel on NP2 shanks or in reverse order (#184)
 
 ### Fixed
 - `psd_alpha` and `psd_alpha_csd` were set to NaN on every channel by the outlier treatment (#180)
