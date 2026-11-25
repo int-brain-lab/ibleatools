@@ -50,8 +50,11 @@ to guide an insertion.
     ```
 
    (to keep results elsewhere, set `EPHYS_ATLAS_RESULTS_DIR` to the folder that holds
-   `alignment\`). Without these files the localizer fits itself on first use, which needs the
-   IBL feature release and IBL database credentials.
+   `alignment\`). The search without a plan also needs `train_axes.npz` in that folder, the
+   directions of the model's training insertions; add it if your copy of the zip lacks it.
+   Without these files the localizer fits itself on first use, which needs the IBL feature
+   release and IBL database credentials; without `train_axes.npz` alone, the search without a
+   plan computes it the same way or, if it cannot, runs without its direction prior and says so.
 
 3. The SpikeGLX SDK: download the [SpikeGLX-CPP-SDK](https://github.com/billkarsh/SpikeGLX-CPP-SDK)
    (Code / Download ZIP) and unzip it into `%USERPROFILE%\SpikeGLX\`, which gives
@@ -85,9 +88,10 @@ The localizer is most accurate starting from the planned trajectory (see
     numbers above are an example. For an IBL insertion (with IBL database credentials),
     `plan_from_alyx(pid)` reads the planned trajectory from Alyx.
 
-Without a plan, every update searches the whole brain instead: it scores ~230,000 straight
-trajectories (400 µm apart, 10-30° from vertical, every 30° of azimuth), takes the five best
-that are at least 1 mm apart on average, refines each one and keeps the best.
+Without a plan, every update searches the whole brain instead: it scores ~320,000 straight
+trajectories (400 µm apart, 2-35° from vertical, every 30° of azimuth), favouring the
+directions of the IBL insertions the model was trained on (a direction prior), takes the five
+best that are at least 1 mm apart on average, refines each one and keeps the best.
 
 ## Run
 
@@ -126,17 +130,19 @@ simulated probe, start the run and use the same command.
 - The estimate after one snippet is about as good as after five minutes.
 - On 196 held-out IBL insertions (medians): 536 µm from the histology-based alignment, against
   754 µm for the plan; Cosmos region accuracy 0.74 (plan 0.57), Beryl 0.35 (plan 0.21).
-- Without a plan, on 20 of these insertions (medians): 658 µm from the histology, against 485 µm
-  for the search from the plan and 907 µm for the plan itself. It is closer to the histology than
-  the plan for 11 of the 20 but more than 1.5 mm off for 4, and the hemisphere cannot be told
-  (the estimate is shown in the left one): use a plan when there is one.
+- Without a plan, on 20 of these insertions (medians, before the direction prior): 658 µm from
+  the histology, against 485 µm for the search from the plan and 907 µm for the plan itself. It
+  is closer to the histology than the plan for 11 of the 20 but more than 1.5 mm off for 4, and
+  the hemisphere cannot be told (the estimate is shown in the left one): use a plan when there
+  is one. The direction prior lowered the mean distance from 1,083 to 963 µm on the 119 test
+  insertions of LFPformer (Dey et al., NeurIPS 2026), with a model retrained without their mice.
 - Plans off by up to ~0.25 mm or 10° cost nothing; a plan 1 mm or more off is only partly
-  corrected. The model assumes the probe is 10-30° from vertical, tip down, as in the IBL
-  insertions it was fitted on.
+  corrected. From a plan the model assumes the probe is 10-30° from vertical, tip down, as in the
+  IBL insertions it was fitted on; without one, 2-35°.
 - The Open Ephys version of the same localizer (a Probe Viewer plugin,
   [`alonsaguy/probe-viewer`](https://github.com/alonsaguy/probe-viewer), branch
-  `realtime-localization`) runs in C++ with the same whole-brain search and Pinpoint reader
-  (Neuropixels 1.0 only).
+  `realtime-localization`) runs in C++ with the same Pinpoint reader and whole-brain search, but
+  not yet its direction prior (10-30° from vertical) (Neuropixels 1.0 only).
 
 ## Other probes {#other-probes}
 

@@ -225,13 +225,9 @@ class TestPinpointPlan(unittest.TestCase):
 
 
 class TestNoPlanPrior(unittest.TestCase):
-    def test_no_centre_or_direction_term(self):
-        from ephysatlas.alignment.ephys_only import (
-            DepthBins,
-            PlanPrior,
-            ScoreConfig,
-        )
-        from ephysatlas.realtime.whole_brain import NoPlanPrior
+    @staticmethod
+    def _case():
+        from ephysatlas.alignment.ephys_only import DepthBins, ScoreConfig
 
         cfg = ScoreConfig()
         bins = DepthBins.from_valid(np.ones(384, dtype=bool), cfg)
@@ -252,13 +248,128 @@ class TestNoPlanPrior(unittest.TestCase):
             [[1, 0, 0], [0, np.cos(theta), -np.sin(theta)], [0, np.sin(theta), np.cos(theta)]]
         )
         moved = straight @ rot.T + np.array([-2000.0, -3000.0, -1000.0])
-        traces = np.stack([straight, moved])
+        return cfg, bins, params, planned, np.stack([straight, moved])
+
+    def test_no_centre_or_direction_term(self):
+        from ephysatlas.alignment.ephys_only import PlanPrior
+        from ephysatlas.realtime.whole_brain import NoPlanPrior
+
+        cfg, bins, params, planned, traces = self._case()
         no_plan = NoPlanPrior(params, cfg)
         cost = no_plan.evaluate(traces, no_plan.reference(None, bins))
         self.assertAlmostEqual(cost[0], cost[1], places=9)
         with_plan = PlanPrior(params, cfg)
         plan_cost = with_plan.evaluate(traces, with_plan.reference(planned, bins))
         self.assertGreater(plan_cost[1], plan_cost[0] + 10.0)
+
+    def test_the_direction_prior_takes_the_direction_term(self):
+        from ephysatlas.alignment.ephys_only import rho_t2
+        from ephysatlas.realtime.whole_brain import DirectionPrior, NoPlanPrior
+
+        cfg, bins, params, _, traces = self._case()
+        # One training axis, vertical: the 20° tilt costs the plan prior's angle term, the move
+        # nothing.
+        no_plan = NoPlanPrior(params, cfg, DirectionPrior([[0.0, 0.0, -1.0]], *params["axis"]))
+        cost = no_plan.evaluate(traces, no_plan.reference(None, bins))
+        self.assertAlmostEqual(cost[1] - cost[0], float(rho_t2(20.0, *params["axis"])), places=6)
+
+
+def _tilted(deg, azimuth_deg=0.0):
+    """Unit directions ``deg`` from vertical (tip down) at azimuth ``azimuth_deg`` from +x."""
+    t, p = np.broadcast_arrays(
+        np.deg2rad(np.atleast_1d(deg)), np.deg2rad(np.atleast_1d(azimuth_deg))
+    )
+    return np.column_stack([np.sin(t) * np.cos(p), np.sin(t) * np.sin(p), -np.cos(t)])
+
+
+class TestDirectionPrior(unittest.TestCase):
+    def test_one_axis_is_the_plan_direction_term(self):
+        from ephysatlas.alignment.ephys_only import rho_t2
+        from ephysatlas.realtime.whole_brain import DirectionPrior
+
+        angles = np.array([0.0, 5.0, 20.0, 40.0])
+        prior = DirectionPrior([[0.0, 0.0, -1.0]], 4.0, 4.4, weight=2.0)
+        np.testing.assert_allclose(
+            prior(_tilted(angles)), 2.0 * rho_t2(angles, 4.0, 4.4), atol=1e-6
+        )
+        np.testing.assert_allclose(prior(3.0 * _tilted(angles)), prior(_tilted(angles)))
+        off = DirectionPrior([[0.0, 0.0, -1.0]], 4.0, 4.4, weight=0.0)
+        np.testing.assert_array_equal(off(_tilted(angles)), 0.0)
+
+    def test_a_mixture_favours_the_training_directions(self):
+        from ephysatlas.alignment.ephys_only import rho_t2
+        from ephysatlas.realtime.whole_brain import DirectionPrior
+
+        axes = _tilted([15.0, 15.0], [0.0, 180.0])  # 15° either way along x
+        prior = DirectionPrior(axes, 4.0, 4.4)
+        # On a training axis (30° from the other), vertical (15° from both), and 15° along y
+        # (21° from both).
+        on_axis, between, across = prior(np.vstack([axes[:1], _tilted(0.0), _tilted(15.0, 90.0)]))
+        expected = -np.log(0.5 * (1.0 + np.exp(-rho_t2(30.0, 4.0, 4.4))))
+        self.assertAlmostEqual(on_axis, float(expected), places=6)
+        self.assertGreater(between, on_axis)
+        self.assertGreater(across, between)
+        self.assertGreaterEqual(on_axis, 0.0)
+
+
+class TestWholeBrainAngles(unittest.TestCase):
+    def test_search_range_and_the_localizer_range(self):
+        from types import SimpleNamespace
+
+        from ephysatlas.alignment.ephys_only import AnnealConfig
+        from ephysatlas.realtime.whole_brain import (
+            WholeBrainConfig,
+            scan_angles,
+            search_anneal_config,
+        )
+
+        loc = SimpleNamespace(anneal_cfg=AnnealConfig())
+        cfg = WholeBrainConfig()
+        acfg = search_anneal_config(loc, cfg)
+        self.assertEqual((acfg.min_angle_deg, acfg.max_angle_deg), (2.0, 35.0))
+        angles = scan_angles(acfg, cfg)
+        self.assertEqual(len(angles), 7 * 12)
+        np.testing.assert_allclose(sorted({t for t, _ in angles}), np.linspace(2.0, 35.0, 7))
+        old = WholeBrainConfig(min_angle_deg=None, max_angle_deg=None, n_thetas=5)
+        acfg = search_anneal_config(loc, old)
+        self.assertEqual((acfg.min_angle_deg, acfg.max_angle_deg), (10.0, 30.0))
+        self.assertEqual(sorted({t for t, _ in scan_angles(acfg, old)}), [10.0, 15.0, 20.0, 25.0, 30.0])
+
+
+class TestTrainingAxes(unittest.TestCase):
+    def test_cached_per_model_from_the_training_insertions_only(self):
+        from types import SimpleNamespace
+
+        from ephysatlas.realtime.whole_brain import AXES_FILE, training_axes
+
+        rows = np.arange(384) * 10.0  # µm below the top channel; rows run from the top
+        t = np.deg2rad(15.0)
+        vertical = np.column_stack([np.full(384, -1000.0), np.zeros(384), -(rows + 100.0)])
+        # Right hemisphere, 15° laterally: mirrored into the left one.
+        lateral = np.column_stack(
+            [1000.0 + rows * np.sin(t), np.zeros(384), -(rows * np.cos(t) + 100.0)]
+        )
+        human = {"a": vertical * 1e-6, "b": lateral * 1e-6}
+
+        class Model:
+            def split(self):
+                return dict(train_pids=["a", "b", "c"], validation_pids=["v"], test_pids=["t"])
+
+        class Data:
+            pids = np.array(["a", "b", "v", "t"])
+
+            def probe(self, pid):
+                return dict(human_xyz=human[pid])  # a KeyError for anything not trained on
+
+        with tempfile.TemporaryDirectory() as tmp:
+            loc = SimpleNamespace(fit_dir=Path(tmp), model_commit="abc", channel_model=Model())
+            axes = training_axes(loc, Data())
+            np.testing.assert_allclose(
+                axes, [[0.0, 0.0, -1.0], [-np.sin(t), 0.0, -np.cos(t)]], atol=1e-9
+            )
+            with np.load(Path(tmp) / AXES_FILE) as f:
+                self.assertEqual(f["pids"].tolist(), ["a", "b"])
+            np.testing.assert_array_equal(training_axes(loc), axes)  # cached: no dataset needed
 
 
 def _np2_sites(electrodes, shanks):
