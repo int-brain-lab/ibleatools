@@ -214,13 +214,19 @@ class TestNeighbourDrawsTieOrder(unittest.TestCase):
 
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
-        # A 5 x 5 grid at 50 um around the query: rings of 4 and 8 channels at equal distances,
-        # 24 candidates for 8 neighbour slots.
-        centre = np.array([-2e-3, -2e-3, -3e-3])
-        grid = [
-            (i, j, 0) for i in range(-2, 3) for j in range(-2, 3) if (i, j) != (0, 0)
-        ]
-        xyz = centre + np.array(grid) * 50e-6
+        self.centre = np.array([-2e-3, -2e-3, -3e-3])
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _model_on_grid(self, half_width):
+        """A model whose bank is a square grid at 50 um around the query, the query point left out.
+
+        Channels on the grid form rings at equal distances from the query.
+        """
+        span = range(-half_width, half_width + 1)
+        grid = [(i, j, 0) for i in span for j in span if (i, j) != (0, 0)]
+        xyz = self.centre + np.array(grid) * 50e-6
         bank = dict(
             xyz=xyz.astype(np.float32),
             feat=np.random.default_rng(0)
@@ -228,13 +234,9 @@ class TestNeighbourDrawsTieOrder(unittest.TestCase):
             .astype(np.float32),
             pid=np.array(["bank"] * len(xyz)),
         )
-        self.path_model = make_spatial_model_dir(self.tmp, bank=bank)
-        self.query = centre[None, :]
+        return make_spatial_model_dir(self.tmp / f"grid_{half_width}", bank=bank)
 
-    def tearDown(self):
-        shutil.rmtree(self.tmp, ignore_errors=True)
-
-    def _predict(self):
+    def _predict(self, path_model):
         from unittest import mock
 
         from ephysatlas import load_pretrained
@@ -242,22 +244,35 @@ class TestNeighbourDrawsTieOrder(unittest.TestCase):
 
         fake = _FakeContextManager()
         with mock.patch.object(SpatialEncoder, "_context_manager", lambda self: fake):
-            encoder = load_pretrained(self.path_model, device="cpu")
-            return encoder.predict_xyz(self.query, "query", neighbour_draws=3)
+            encoder = load_pretrained(path_model, device="cpu")
+            return encoder.predict_xyz(self.centre[None, :], "query", neighbour_draws=3)
 
     def test_draws_do_not_depend_on_the_order_of_the_candidates(self):
         from unittest import mock
 
         from ephysatlas.spatial_encoder.utils import ChannelNN
 
-        listed = self._predict()
         search = ChannelNN.query_radius
 
         def reversed_search(nn, *args, **kwargs):
-            return [c[::-1] for c in search(nn, *args, **kwargs)]
+            # The search lists each query's hits, and their distances, in the opposite order.
+            out = search(nn, *args, **kwargs)
+            if kwargs.get("return_distance"):
+                inds, dists = out
+                return [c[::-1] for c in inds], [d[::-1] for d in dists]
+            return [c[::-1] for c in out]
 
-        with mock.patch.object(ChannelNN, "query_radius", reversed_search):
-            np.testing.assert_allclose(self._predict(), listed, rtol=1e-6, atol=1e-6)
+        # The pool holds 8 * m_max = 64 candidates. A 5 x 5 grid gives 24 candidates, all in the
+        # pool. An 11 x 11 grid gives 120, and the pool's cut falls inside the ring of 8 channels
+        # at 224 um (positions 61 to 68), so which of them enter the pool must not depend on order.
+        for half_width in (2, 5):
+            with self.subTest(grid=2 * half_width + 1):
+                path_model = self._model_on_grid(half_width)
+                listed = self._predict(path_model)
+                with mock.patch.object(ChannelNN, "query_radius", reversed_search):
+                    np.testing.assert_allclose(
+                        self._predict(path_model), listed, rtol=1e-6, atol=1e-6
+                    )
 
 
 class TestSpatialEncoderPredictHemispheres(unittest.TestCase):

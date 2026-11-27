@@ -106,5 +106,40 @@ class TestNeighbourDraws(unittest.TestCase):
             )  # channels 20.. belong to the query's own probe
 
 
+class TestNeighbourPoolAtATie(unittest.TestCase):
+    """Which channels enter the pool when its last slots fall inside a ring of equal distances.
+
+    An 11 x 11 grid at 50 um around the query (the query point left out) has 120 channels. The pool
+    holds the nearest 8 * m_max = 64: the 60 channels nearer than 224 um, and 4 of the 8 channels of
+    the ring at 224 um (sqrt(20) grid steps), which are the ring's 4 lowest bank indices.
+    """
+
+    def setUp(self):
+        span = range(-5, 6)
+        grid = np.array([(i, j, 0) for i in span for j in span if (i, j) != (0, 0)])
+        # squared distance of each channel to the query, in grid steps
+        self.steps2 = np.sum(grid**2, axis=1)
+        n = len(grid)
+        self.encoder = object.__new__(SpatialEncoder)
+        # Centred on the origin, so the channels of a ring are exactly as far from the query.
+        self.encoder._bank = dict(
+            xyz=(grid * 50e-6).astype(np.float32),
+            feat=np.arange(n, dtype=np.float32)[:, None],  # feature = bank index
+            pid=np.array(["bank"] * n),
+        )
+        self.encoder.config = dict(neighbourhood=dict(m_max=8, radius_um=500.0))
+
+    def test_the_pool_takes_the_lowest_bank_indices_of_the_tied_ring(self):
+        # 200 draws of 8 of the 64 reach every slot (one is missed with probability ~1e-11).
+        drawn = set()
+        query, pids = np.zeros((1, 3), np.float32), np.array(["query"])
+        for e_n, _, mask in self.encoder._neighbour_draws(query, pids, 200):
+            drawn |= set(e_n[mask].astype(int).ravel())
+        ring = np.flatnonzero(self.steps2 == 20)
+        expected = set(np.flatnonzero(self.steps2 < 20)) | set(ring[:4])
+        self.assertEqual(len(expected), 64)
+        self.assertEqual(drawn, expected)
+
+
 if __name__ == "__main__":
     unittest.main()
