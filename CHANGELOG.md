@@ -5,8 +5,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.17.1] - 2026-11-27
+
 ### Fixed
-- Channel-model prediction with neighbour draws (the release default) is about as fast as in 0.15.0 again: 0.16.0 recomputed the distance of every channel in the radius and sorted all of them for each query, which made prediction about twice as slow. The predictions are unchanged. `ChannelNN.query_radius` takes `return_distance=True` to return the distances of its hits
+- Channel-model prediction with neighbour draws (the release default) is about as fast as in 0.15.0 again: 0.16.0 recomputed the distance of every channel in the radius and sorted all of them for each query, which made prediction about twice as slow. The predictions are unchanged. `ChannelNN.query_radius` takes `return_distance=True` to return the distances of its hits (#186)
 
 ## [0.17.0] - 2026-11-24
 
