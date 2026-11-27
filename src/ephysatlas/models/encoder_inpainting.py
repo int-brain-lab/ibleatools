@@ -562,21 +562,28 @@ class SpatialEncoder:
         allow_same_probe = bool(neighbourhood.get("allow_same_probe", False))
         if getattr(self, "_bank_nn", None) is None:
             self._bank_nn = ChannelNN(bank["xyz"])
-        candidates = self._bank_nn.query_radius(
-            xyz_m.astype(np.float64), r_m=radius_m, k_cap=bank["xyz"].shape[0]
+        candidates, distances = self._bank_nn.query_radius(
+            xyz_m.astype(np.float64),
+            r_m=radius_m,
+            k_cap=bank["xyz"].shape[0],
+            return_distance=True,
         )
-        pool = np.full((xyz_m.shape[0], 8 * m_max), -1, dtype=np.int64)
-        for i, cand in enumerate(candidates):
+        n_pool = 8 * m_max
+        pool = np.full((xyz_m.shape[0], n_pool), -1, dtype=np.int64)
+        for i, (cand, dist) in enumerate(zip(candidates, distances)):
             cand = np.asarray(cand, dtype=int)
             # Channels sit on a grid, so many candidates are equally far from the query, and the
             # search lists such ties in an order that differs between machines. Each pool slot
             # gets its own random key below, so that order would decide which neighbours are drawn
             # (and a golden file would only reproduce on the machine that wrote it): order the
             # candidates by distance, to the nanometre (coarser than float noise), then bank index.
-            dist = np.linalg.norm(
-                bank["xyz"][cand].astype(np.float64) - xyz_m[i], axis=1
-            )
-            cand = cand[np.lexsort((cand, np.round(dist * 1e9)))][: pool.shape[1]]
+            key = np.round(dist * 1e9)
+            if cand.size > n_pool:
+                # Only the nearest n_pool, and those tied with the last of them, can enter the pool:
+                # sort just these, not every channel in the radius.
+                keep = key <= np.partition(key, n_pool - 1)[n_pool - 1]
+                cand, key = cand[keep], key[keep]
+            cand = cand[np.lexsort((cand, key))][:n_pool]
             if not allow_same_probe and cand.size:
                 cand = cand[bank["pid"][cand] != str(pids[i])]
             pool[i, : cand.size] = cand

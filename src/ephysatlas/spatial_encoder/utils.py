@@ -930,18 +930,41 @@ class ChannelNN:
             KDTree(self.X, leaf_size=40) if (self.X.shape[0] and _HAS_KDT) else None
         )
 
-    def query_radius(self, q_xyz_m: np.ndarray, r_m: float, k_cap: int = 8):
+    def query_radius(
+        self,
+        q_xyz_m: np.ndarray,
+        r_m: float,
+        k_cap: int = 8,
+        return_distance: bool = False,
+    ):
+        """Bank channels within ``r_m`` of each query position, at most ``k_cap`` per query.
+
+        Args:
+            q_xyz_m (np.ndarray): ``[N, 3]`` query positions, in metres.
+            r_m (float): Search radius, in metres.
+            k_cap (int, optional): Most hits kept per query.
+            return_distance (bool, optional): Also return the distance of each hit, so a caller
+                that orders the hits does not compute the distances again.
+
+        Returns:
+            list[np.ndarray]: The bank indices of each query's hits, nearest first with the KD-tree
+            and unordered with the brute-force fallback. With ``return_distance``, a tuple
+            ``(indices, distances)`` of two such lists, the distances in metres and in the same
+            order as the indices.
+        """
         if self.tree is not None:
-            inds, _ = self.tree.query_radius(
+            inds, dists = self.tree.query_radius(
                 q_xyz_m, r=r_m, return_distance=True, sort_results=True
             )
-            return [ii[:k_cap] for ii in inds]
+            inds = [ii[:k_cap] for ii in inds]
+            return (inds, [dd[:k_cap] for dd in dists]) if return_distance else inds
         # brute force
-        out = []
+        out, out_dist = [], []
         X = self.X
         for q in q_xyz_m:
             if X.shape[0] == 0:
                 out.append(np.array([], dtype=int))
+                out_dist.append(np.array([]))
                 continue
             d2 = np.sum((X - q[None, :]) ** 2, axis=1)
             filtered_indices = np.where(d2 <= (r_m**2))[0]
@@ -949,7 +972,8 @@ class ChannelNN:
                 J = np.argpartition(d2[filtered_indices], k_cap)[:k_cap]
                 filtered_indices = filtered_indices[J]
             out.append(filtered_indices)
-        return out
+            out_dist.append(np.sqrt(d2[filtered_indices]))
+        return (out, out_dist) if return_distance else out
 
 
 class NeighborCollate:
