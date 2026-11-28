@@ -98,29 +98,40 @@ class QCDataset:
 
 
 def insertion_mice(
-    pids, cache: Optional[Path] = None, one=None, chunk: int = 50
+    pids,
+    project: str = "ibl_neuropixel_brainwide_01",
+    data_dir: Optional[Path] = None,
+    one=None,
 ) -> dict:
-    """``{pid: subject}``, the mouse of each insertion (for the swap test), from Alyx, cached in
-    ``cache`` (a CSV with columns ``pid`` and ``subject``; only the insertions it lacks are queried,
-    ``chunk`` at a time)."""
-    pids = [str(p) for p in pids]
-    known = {}
-    if cache is not None and Path(cache).exists():
-        table = pd.read_csv(cache, dtype=str)
-        known = dict(zip(table["pid"], table["subject"]))
-    todo = [p for p in pids if p not in known]
-    if todo:
-        if one is None:
-            from one.api import ONE
+    """The mouse of each insertion, for the swap test.
 
-            one = ONE(base_url="https://alyx.internationalbrainlab.org", silent=True)
-        for k in range(0, len(todo), chunk):
-            part = todo[k : k + chunk]
-            for rec in one.alyx.rest(
-                "insertions", "list", django=f"id__in,{part}", no_cache=True
-            ):
-                known[str(rec["id"])] = str(rec["session_info"]["subject"])
-        if cache is not None:
-            table = pd.DataFrame(sorted(known.items()), columns=["pid", "subject"])
-            table.to_csv(cache, index=False)
-    return {p: known[p] for p in pids if p in known}
+    Read from the ``subject`` column of the project's probe details
+    (:func:`ephysatlas.data.download_probe_details`, public S3 bucket).
+
+    Parameters
+    ----------
+    pids : iterable of str
+        Insertion ids.
+    project : str, optional
+        Project of the probe details.
+    data_dir : Path, optional
+        Local data root, defaults to :func:`default_data_dir`.
+    one : one.api.ONE, optional
+        Only to read the private bucket, see :func:`ephysatlas.data.get_s3`.
+
+    Returns
+    -------
+    dict
+        ``{pid: subject}``; insertions missing from the probe details are left out.
+    """
+    from ephysatlas.data import download_probe_details
+
+    root = data_dir or default_data_dir()
+    path = download_probe_details(root, project=project, one=one)
+    table = pd.read_parquet(path)
+    if "subject" not in table:  # local copy older than the subject column
+        path = download_probe_details(root, project=project, one=one, overwrite=True)
+        table = pd.read_parquet(path)
+    table = table[["pid", "subject"]].dropna()
+    known = dict(zip(table["pid"].astype(str), table["subject"].astype(str)))
+    return {p: known[p] for p in map(str, pids) if p in known}

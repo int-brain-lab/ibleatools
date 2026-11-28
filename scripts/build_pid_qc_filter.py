@@ -57,7 +57,7 @@ def main():
         bins = bin_dataset(ds)
         reference = qp.build_reference(bins, ba)
     if stages & {"measures", "planted"}:
-        mice = insertion_mice(ds.pids, cache=s.out_dir / "mice.csv")
+        mice = insertion_mice(ds.pids)
         pairs = qp.mouse_pairs(ds, s, mice)
     if "measures" in stages:
         qp.stage_measures(ds, bins, s, ba, reference, pairs)

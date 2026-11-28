@@ -22,7 +22,6 @@ from iblatlas.atlas import AllenAtlas
 # The models live in the left hemisphere, folded about the atlas midline.
 from ephysatlas.hemispheres import mirror_xyz_to_left
 
-from one.api import ONE
 
 from tqdm import tqdm
 
@@ -260,11 +259,7 @@ def LoadInsertionData(
     """
 
     print("Loading ephys features")
-    one = ONE(base_url="https://alyx.internationalbrainlab.org")
-    # path_data = Path('../ephys-atlas-decoding/features')
-    path_data = download_tables(
-        path_data, label=VINTAGE, project=project, one=one, agg_level=agg
-    )
+    path_data = download_tables(path_data, label=VINTAGE, project=project, agg_level=agg)
     df_features = read_features_from_disk(path_data, strict=False)
 
     # Pre-allocate containers
@@ -1553,7 +1548,7 @@ def _histology_trace_around_channels(
 # ============================================================
 def _make_histology_probe_bank(
     *,
-    one,
+    one=None,
     ephys: np.ndarray,  # [P,C,F_e] raw
     probe_positions: np.ndarray,  # [P,C,3] m
     probe_ids: list[int],  # indices into arrays

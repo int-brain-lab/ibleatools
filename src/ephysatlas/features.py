@@ -1099,6 +1099,9 @@ class ModelProbeDetails(pa.DataFrameModel):
         "'external', 'tip', 'ground' or 'on_shank'. See spikeglx.get_referencing_scheme.",
     )
     lab: Optional[str] = pa.Field(nullable=True)
+    subject: Optional[str] = pa.Field(
+        nullable=True, description="Subject (mouse) nickname"
+    )
     pname: Optional[str] = pa.Field(nullable=True)
     spike_sorting: Optional[str] = pa.Field(nullable=True)
     spike_sorting_version: Optional[str] = pa.Field(nullable=True)

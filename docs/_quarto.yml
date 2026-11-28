@@ -205,7 +205,9 @@ quartodoc:
         - data.read_features_from_disk
         - data.download_cells_features
         - data.read_cells_features
+        - data.get_s3
         - data.download_probe_details
+        - data.download_histology_picks
         - data.read_probe_details
         - data.download_project_data
         - data.download_lfp_features

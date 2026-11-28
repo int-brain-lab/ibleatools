@@ -5,6 +5,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- `ephysatlas.data.get_s3(one=None)`: the bucket the atlas aggregates are read from, the public IBL bucket (anonymous) by default, the private one of a logged-in `ONE` when given
+- `ephysatlas.data.download_histology_picks`: the traced probe tracks of a project's insertions (Alyx `xyz_picks`), `projects/{project}/histology_picks.json`
+- `df_probe_details.pqt` has a `subject` column (the mouse), in `ModelProbeDetails`
+- `FEATURES_LABEL` (`2026_W42`) and `VOLUMES_LABEL` (`2026_W46`), the published releases, as the defaults of `download_tables` and of the volume downloads
+
+### Changed
+- Every download function reads the public S3 bucket without an account; `one` is optional and only reads the private bucket. No function creates a `ONE` instance any more (`_project_s3`, `alignment.load_probe`, `spatial_encoder.utils.LoadInsertionData`)
+- `alignment.data.HistologyTraces` reads the published tracks; Alyx is queried only for insertions that are not published, and only with a `one`. `build_probe_confidence_datasets` and the histology bank take `one=None`
+- `unit_level_encoder.prepare_data.prepare_latest_cells_encoder_data` takes `one=None` instead of `one_base_url` (and the CLI drops `--one-base-url`)
+- `download_lfp_features` / `read_lfp_features` use the lfpack v05 archives (`lf_compressed_v05_*_all.h5`, 1,099 insertions)
+- `download_tables` defaults to `2026_W42` (was `2024_W50`)
+- `qc.data.insertion_mice` reads the mice from the probe details' `subject` column instead of Alyx; it takes `project`, `data_dir` and `one=None` instead of `cache` and `chunk`
+
 ## [0.17.0] - 2026-11-24
 
 ### Added

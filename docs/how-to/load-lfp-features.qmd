@@ -4,18 +4,19 @@ title: "How to load compressed LFP"
 
 This guide downloads and loads the **full-recording compressed LFP** archives produced by
 [lfpack](https://github.com/int-brain-lab/lfpack). They are lossy HDF5 encodings of the
-entire LFP trace for every insertion (release **v04**, 1099 insertions), at three tiers.
+entire LFP trace for every insertion (release **v05**, 1099 insertions), at three tiers.
 
 Unlike the [cells aggregates](load-cells-features.qmd), which hold short per-cell
 snippets, these are the **whole recording**, decompressed on demand.
 
-::: {.callout-important}
-These archives are in a private S3 bucket and need an IBL account — pass a logged-in
-[`one.api.ONE`](https://int-brain-lab.github.io/ONE/) instance.
+::: {.callout-note}
+These aggregates are on the **public** IBL S3 bucket and download without an account. IBL
+members can pass a logged-in [`one.api.ONE`](https://int-brain-lab.github.io/ONE/) instance as
+`one` to read releases of the private bucket that are not public.
 :::
 
 ::: {.callout-note}
-Reading v04 (lfpack format 2) requires **`lfpack>=1.0.0`**. The v03 archives and their
+Reading v05 (lfpack format 2, as v04) requires **`lfpack>=1.0.0`**. The v03 archives and their
 `mild` / `aggressive` levels are removed: asking for either level raises `ValueError`.
 `small` replaces `mild`.
 :::
@@ -25,11 +26,11 @@ Reading v04 (lfpack format 2) requires **`lfpack>=1.0.0`**. The v03 archives and
 All tiers use the same codec (ε = 100). They differ only in α, the wavelet-packet
 threshold, which is the only parameter that moves decoding:
 
-| `level` | α | File | Size | File / float32 at 250 Hz |
-|---|---|---|---|---|
-| `small` | 14 | `lf_compressed_v04_a14_small_all.h5` | 11.2 GB | 0.57 % |
-| `default` | 7 | `lf_compressed_v04_a07_default_all.h5` | 21.5 GB | 1.10 % |
-| `fine` | 2.5 | `lf_compressed_v04_a2p5_fine_all.h5` | 46.1 GB | 2.35 % |
+| `level` | α | File | Size |
+|---|---|---|---|
+| `small` | 14 | `lf_compressed_v05_a14_small_all.h5` | 15.1 GB |
+| `default` | 7 | `lf_compressed_v05_a07_default_all.h5` | 29.8 GB |
+| `fine` | 2.5 | `lf_compressed_v05_a2p5_fine_all.h5` | 64.4 GB |
 
 Use `default` unless size matters (`small`, which decodes like the former v03 `mild` at a
 third of the size) or fidelity matters (`fine`).
@@ -47,9 +48,9 @@ fully flagged bad and decode to zeros
 aggregates/atlas/projects/{project}/
 │
 └── lfp_aggregates/
-    ├── lf_compressed_v04_a14_small_all.h5     small   (ε=100, α=14)   ~11 GB
-    ├── lf_compressed_v04_a07_default_all.h5   default (ε=100, α=7)    ~21.5 GB
-    └── lf_compressed_v04_a2p5_fine_all.h5     fine    (ε=100, α=2.5)  ~46 GB
+    ├── lf_compressed_v05_a14_small_all.h5     small   (ε=100, α=14)   ~15 GB
+    ├── lf_compressed_v05_a07_default_all.h5   default (ε=100, α=7)    ~30 GB
+    └── lf_compressed_v05_a2p5_fine_all.h5     fine    (ε=100, α=2.5)  ~64 GB
 ```
 
 Each archive is a single multi-recording HDF5 file with one top-level group per insertion
@@ -60,19 +61,17 @@ Each archive is a single multi-recording HDF5 file with one top-level group per 
 ```python
 from pathlib import Path
 
-from one.api import ONE
 import ephysatlas.data
 
-one = ONE(base_url="https://alyx.internationalbrainlab.org")
 local_path = Path("/datadisk/ephys-atlas")
 project = "ibl_neuropixel_brainwide_01"
 
-# default tier (~21.5 GB)
-ephysatlas.data.download_lfp_features(local_path, project=project, one=one)
+# default tier (~30 GB)
+ephysatlas.data.download_lfp_features(local_path, project=project)
 
-# small tier (~11 GB)
+# small tier (~15 GB)
 ephysatlas.data.download_lfp_features(
-    local_path, project=project, one=one, level="small"
+    local_path, project=project, level="small"
 )
 ```
 

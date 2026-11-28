@@ -750,7 +750,7 @@ def prepare_latest_cells_encoder_data(
     out_dir: Path,
     project: str = PROJECT_DEFAULT,
     download: bool = True,
-    one_base_url: str = "https://alyx.internationalbrainlab.org",
+    one=None,
     target_channels: int = 20,
     overwrite_multichannel_cache: bool = False,
     waveforms_voltage_path: Path | str | None = None,
@@ -773,6 +773,9 @@ def prepare_latest_cells_encoder_data(
     ``exclude_pids``: insertions left out; None leaves out those the automatic QC marks bad for
     their alignment, AP band or waveforms (``ephysatlas.fixtures.pid_qc_filter``; LF problems do
     not affect the units), an empty list keeps every insertion.
+
+    ``one``: the cells aggregates are downloaded from the public S3 bucket; pass a logged-in
+    ``one.api.ONE`` only to read the private one (see :func:`ephysatlas.data.get_s3`).
     """
     root_path = Path(root_path).expanduser().resolve()
     out_dir = Path(out_dir).expanduser().resolve()
@@ -791,10 +794,8 @@ def prepare_latest_cells_encoder_data(
         or not (cells_agg_path / "waveforms.table.pqt").exists()
     )
 
+    # Downloads read the public S3 bucket; a logged-in ``one`` reads the private one instead.
     if download and (need_small or need_acg3d or need_stpc):
-        from one.api import ONE
-
-        one = ONE(base_url=one_base_url)
         ephysatlas.data.download_project_data(
             root_path,
             project=project,
@@ -806,9 +807,6 @@ def prepare_latest_cells_encoder_data(
     # the large multi-channel waveform files may still require the cell-feature
     # downloader, depending on the installed ephysatlas version.
     if download and need_large and not allow_peak_fallback:
-        from one.api import ONE
-
-        one = ONE(base_url=one_base_url)
         ephysatlas.data.download_cells_features(
             root_path,
             project=project,
@@ -1380,9 +1378,6 @@ if __name__ == "__main__":
         help="where the prepared unit arrays are written",
     )
     parser.add_argument("--project", type=str, default=PROJECT_DEFAULT)
-    parser.add_argument(
-        "--one-base-url", type=str, default="https://alyx.internationalbrainlab.org"
-    )
     parser.add_argument("--target-channels", type=int, default=20)
     parser.add_argument("--overwrite-multichannel-cache", action="store_true")
     parser.add_argument("--waveforms-voltage-path", type=Path, default=None)
@@ -1425,7 +1420,6 @@ if __name__ == "__main__":
         root_path=args.root_path,
         out_dir=args.out_dir,
         project=args.project,
-        one_base_url=args.one_base_url,
         target_channels=args.target_channels,
         overwrite_multichannel_cache=args.overwrite_multichannel_cache,
         waveforms_voltage_path=args.waveforms_voltage_path,

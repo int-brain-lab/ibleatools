@@ -589,7 +589,7 @@ class SyntheticProbeConfidenceDataset(Dataset):
 # ============================================================
 def build_probe_confidence_datasets(
     *,
-    one,
+    one=None,
     pid_names: list[str],
     ctx_manager,
     ephys: np.ndarray,
@@ -604,6 +604,10 @@ def build_probe_confidence_datasets(
 
     This is kept in model.py because it instantiates SyntheticProbeConfidenceDataset,
     while the lower-level histology-bank construction lives in utils.py.
+
+    ``one`` (optional, a logged-in ``one.api.ONE``) fetches the histology tracks of insertions
+    that are not published; the published ones are read from the public S3 bucket
+    (:class:`ephysatlas.alignment.data.HistologyTraces`).
     """
     train_ids = list(split_info["p_tr_ids"])
     val_ids = (

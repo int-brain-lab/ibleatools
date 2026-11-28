@@ -49,7 +49,7 @@ class ChannelDataset:
         data_dir: Optional[Path] = None,
         exclude_pids=None,
     ) -> "ChannelDataset":
-        """Load the release's features (downloaded from IBL S3 on first use; ONE credentials).
+        """Load the release's features (downloaded from the public IBL S3 bucket on first use).
 
         Insertions the automatic QC marks bad (``ephysatlas.fixtures.pid_qc_filter``) are left
         out, exactly as for model training, unless ``exclude_pids`` lists others (an empty list
@@ -102,8 +102,8 @@ def load_probe(
     """One insertion's channels from the feature release, in row order (top of the probe first).
 
     Unlike :class:`ChannelDataset` this keeps insertions on the misaligned list -- those are the
-    ones worth realigning. The release table is downloaded on first use (ONE credentials) and
-    kept in memory.
+    ones worth realigning. The release table is downloaded from the public S3 bucket on first
+    use and kept in memory.
 
     Returns:
         dict | None: ``features`` [C, F] (feature units, the release's feature order),
@@ -118,12 +118,7 @@ def load_probe(
         root = Path(data_dir or default_data_dir())
         path = root / project / vintage / agg
         if not any(path.glob("raw_ephys_features*.pqt")):
-            from one.api import ONE
-
-            one = ONE(base_url="https://alyx.internationalbrainlab.org")
-            path = download_tables(
-                root, label=vintage, project=project, agg_level=agg, one=one
-            )
+            path = download_tables(root, label=vintage, project=project, agg_level=agg)
         _TABLE_CACHE[key] = read_features_from_disk(path, strict=False)
     df = _TABLE_CACHE[key]
     if str(pid) not in df.index.get_level_values("pid"):
@@ -144,44 +139,65 @@ def load_probe(
 
 
 class HistologyTraces:
-    """Reconstructed histology tracks (Alyx ``xyz_picks``), cached in a JSON file.
+    """Reconstructed histology tracks (Alyx ``xyz_picks``) of the atlas insertions.
+
+    The tracks of the published insertions are read from the public S3 bucket
+    (:func:`ephysatlas.data.download_histology_picks`, downloaded on the first insertion missing
+    from the local cache). Insertions that are not published are fetched from Alyx only when
+    ``one`` is given, and kept in the local cache.
 
     Args:
-        cache_path (Path, optional): Cache file; defaults to
+        cache_path (Path, optional): Local cache of the tracks fetched from Alyx; defaults to
             ``<data_dir>/alignment/histology_picks.json``.
-        one: A ``one.api.ONE`` instance for fetching picks missing from the cache (created on
-            first use).
+        one (one.api.ONE, optional): A logged-in ONE instance, to fetch the tracks of insertions
+            that are not published. Without it, those insertions have no track.
+        project (str, optional): Project of the published tracks.
     """
 
-    def __init__(self, cache_path: Optional[Path] = None, one=None):
+    def __init__(
+        self,
+        cache_path: Optional[Path] = None,
+        one=None,
+        project: str = "ibl_neuropixel_brainwide_01",
+    ):
         self.cache_path = Path(
             cache_path or default_data_dir() / "alignment" / "histology_picks.json"
         )
         self._one = one
+        self._project = project
+        self._published = None
         self._picks = {}
         if self.cache_path.exists():
             self._picks = json.loads(self.cache_path.read_text(encoding="utf-8"))
-
-    @property
-    def one(self):
-        if self._one is None:
-            from one.api import ONE
-
-            self._one = ONE(base_url="https://alyx.internationalbrainlab.org")
-        return self._one
 
     def _save(self) -> None:
         self.cache_path.parent.mkdir(parents=True, exist_ok=True)
         self.cache_path.write_text(json.dumps(self._picks), encoding="utf-8")
 
+    def _published_picks(self) -> dict:
+        """The published tracks ``{pid: picks}``, downloaded once."""
+        if self._published is None:
+            from ephysatlas.data import download_histology_picks
+
+            path = download_histology_picks(default_data_dir(), project=self._project)
+            self._published = json.loads(path.read_text(encoding="utf-8"))
+        return self._published
+
     def picks(self, pid: str) -> Optional[np.ndarray]:
         """``[n, 3]`` histology picks (m), or None when the insertion has none."""
         pid = str(pid)
         if pid not in self._picks:
-            recs = self.one.alyx.rest("insertions", "list", id=pid)
-            picks = ((recs[0].get("json") or {}).get("xyz_picks")) if recs else None
-            self._picks[pid] = picks
-            self._save()
+            published = self._published_picks()
+            if pid in published:
+                self._picks[pid] = published[pid]
+            elif self._one is not None:
+                recs = self._one.alyx.rest("insertions", "list", id=pid)
+                self._picks[pid] = (
+                    ((recs[0].get("json") or {}).get("xyz_picks")) if recs else None
+                )
+                self._save()
+            else:
+                return None
         picks = self._picks[pid]
         if picks is None:
             return None

@@ -9,9 +9,10 @@ population coupling (stPC) and spike-triggered LFP (stLFP).
 Where [channel features](load-channel-features.qmd) have one row per recording channel,
 these have one row per spike-sorted **unit**.
 
-::: {.callout-important}
-These aggregates are in a private S3 bucket and need an IBL account — pass a logged-in
-[`one.api.ONE`](https://int-brain-lab.github.io/ONE/) instance to every download function.
+::: {.callout-note}
+These aggregates are on the **public** IBL S3 bucket and download without an account. IBL
+members can pass a logged-in [`one.api.ONE`](https://int-brain-lab.github.io/ONE/) instance as
+`one` to read releases of the private bucket that are not public.
 :::
 
 ## S3 layout
@@ -57,15 +58,13 @@ how to recompute them on a new dataset.
 ```python
 from pathlib import Path
 
-from one.api import ONE
 import ephysatlas.data
 
-one = ONE(base_url="https://alyx.internationalbrainlab.org")
 local_path = Path("/datadisk/ephys-atlas")
 project = "ibl_neuropixel_brainwide_01"
 
 # probe details + cells_aggregates/ (~1 GB; waveforms and 3D ACGs excluded)
-ephysatlas.data.download_project_data(local_path, project=project, one=one)
+ephysatlas.data.download_project_data(local_path, project=project)
 ```
 
 The large arrays are opt-in, because most analyses do not need them:
@@ -73,24 +72,24 @@ The large arrays are opt-in, because most analyses do not need them:
 ```python
 # + waveforms.voltage.npy and waveforms.table.pqt  (~8 GB extra)
 ephysatlas.data.download_project_data(
-    local_path, project=project, one=one, large_files=True
+    local_path, project=project, large_files=True
 )
 
 # + clusters.acgs_3d.npy and acgs_3d.times.npy  (~3.5 GB extra)
 ephysatlas.data.download_project_data(
-    local_path, project=project, one=one, acg3d=True
+    local_path, project=project, acg3d=True
 )
 ```
 
 To fetch only one of the two parts:
 
 ```python
-ephysatlas.data.download_probe_details(local_path, project=project, one=one)
-ephysatlas.data.download_cells_features(local_path, project=project, one=one)
+ephysatlas.data.download_probe_details(local_path, project=project)
+ephysatlas.data.download_cells_features(local_path, project=project)
 
 # the same opt-ins apply here
 ephysatlas.data.download_cells_features(
-    local_path, project=project, one=one, large_files=True, acg3d=True
+    local_path, project=project, large_files=True, acg3d=True
 )
 ```
 

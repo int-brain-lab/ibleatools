@@ -517,7 +517,6 @@ class TestLoadersExcludePids(unittest.TestCase):
         for c in ("x", "y", "z", "x_target", "y_target", "z_target"):
             df[c] = 0.0
         with (
-            mock.patch.object(utils, "ONE"),
             mock.patch.object(utils, "download_tables"),
             mock.patch.object(utils, "read_features_from_disk", return_value=df),
         ):
@@ -534,3 +533,29 @@ class TestLoadersExcludePids(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestInsertionMice(unittest.TestCase):
+    """The mouse of each insertion comes from the published probe details, no Alyx."""
+
+    def test_insertion_mice(self):
+        from ephysatlas.qc import data as qcdata
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            stale, fresh = tmp.joinpath("stale.pqt"), tmp.joinpath("fresh.pqt")
+            pd.DataFrame({"pid": ["a", "b"], "lab": ["x", "y"]}).to_parquet(stale)
+            pd.DataFrame(
+                {"pid": ["a", "b", "c"], "subject": ["m1", "m2", None]}
+            ).to_parquet(fresh)
+
+            def download(root, project, one=None, overwrite=False):
+                return fresh if overwrite else stale
+
+            with mock.patch(
+                "ephysatlas.data.download_probe_details", side_effect=download
+            ) as dl:
+                mice = qcdata.insertion_mice(["b", "a", "c", "d"], data_dir=tmp)
+        # a local copy without the subject column is downloaded again
+        self.assertTrue(dl.call_args.kwargs["overwrite"])
+        self.assertEqual(mice, {"b": "m2", "a": "m1"})

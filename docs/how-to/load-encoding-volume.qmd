@@ -14,9 +14,10 @@ To browse the volumes without downloading them, use the
 [IBL Ephys Atlas viewer](https://ephys-atlas.iblcore.org/). To draw them on atlas slices,
 see [atlas maps](../visualise/atlas-maps.qmd#the-published-encoding-volumes).
 
-::: {.callout-important}
-These volumes are in a private S3 bucket and need an IBL account — pass a logged-in
-[`one.api.ONE`](https://int-brain-lab.github.io/ONE/) instance.
+::: {.callout-note}
+These aggregates are on the **public** IBL S3 bucket and download without an account. IBL
+members can pass a logged-in [`one.api.ONE`](https://int-brain-lab.github.io/ONE/) instance as
+`one` to read releases of the private bucket that are not public.
 :::
 
 ## S3 layout
@@ -38,7 +39,7 @@ than assuming:
 ```python
 import ephysatlas.data
 
-labels = ephysatlas.data.list_available_labels(one=one, project="ea_active")
+labels = ephysatlas.data.list_available_labels(project="ea_active")
 ```
 
 ## Download
@@ -47,14 +48,12 @@ labels = ephysatlas.data.list_available_labels(one=one, project="ea_active")
 from pathlib import Path
 
 import numpy as np
-from one.api import ONE
 from ephysatlas.data import download_encoding_volume
 
-one = ONE()
 local_path = Path("/datadisk/ephys-atlas/volumes")
 
 # res_um omitted -> auto-resolves to the finest resolution available for this label
-file_path = download_encoding_volume(local_path, label="2026_W46", one=one)
+file_path = download_encoding_volume(local_path, label="2026_W46")
 
 data = np.load(file_path, allow_pickle=True)
 ```
@@ -126,7 +125,7 @@ The published edges sit next to the volume on S3.
 ```python
 from ephysatlas.data import download_edges_volume
 
-edges_file = download_edges_volume(local_path, label="2026_W46", one=one)
+edges_file = download_edges_volume(local_path, label="2026_W46")
 edges = np.load(edges_file)["ephys_atlas_vol"][..., 0]   # (ML, AP, DV) float16, 0 outside the mask
 ```
 

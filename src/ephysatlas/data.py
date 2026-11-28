@@ -21,8 +21,10 @@ CLUSTERS_ATTRIBUTES = ["channels", "depths", "metrics"]
 
 EXTRACT_RADIUS_UM = 200  # for localisation , the default extraction radius in um
 
-# Version of the cells_aggregates/ release, a ``year_Www`` folder: cells_aggregates/{label}/
-CELLS_AGGREGATES_LABEL = "2026_W42"
+# Published releases, each a ``year_Www`` folder on the public bucket (``aws.S3_BUCKET_IBL``).
+FEATURES_LABEL = "2026_W42"  # features/{project}/{label}/
+VOLUMES_LABEL = "2026_W46"  # encoding_volumes/{project}/{label}/
+CELLS_AGGREGATES_LABEL = "2026_W42"  # projects/{project}/cells_aggregates/{label}/
 
 # Files in cells_aggregates/{label}/ that are always downloaded (standard set, ~1 GB)
 _CELLS_AGGREGATES_FILES = [
@@ -45,14 +47,14 @@ _ACG3D_FILES = [
     "clusters.acgs_3d.npy",
     "acgs_3d.times.npy",
 ]
-# Merged multi-recording LFP archives (lfpack v04, format 2) in lfp_aggregates/, keyed by
+# Merged multi-recording LFP archives (lfpack v05, format 2) in lfp_aggregates/, keyed by
 # tier. Tiers differ only in the wavelet-packet threshold alpha (epsilon=100 throughout).
 _LFP_AGGREGATES_FILES = {
-    "small": "lf_compressed_v04_a14_small_all.h5",  # alpha=14, ~11 GB
-    "default": "lf_compressed_v04_a07_default_all.h5",  # alpha=7, ~21.5 GB
-    "fine": "lf_compressed_v04_a2p5_fine_all.h5",  # alpha=2.5, ~46 GB
+    "small": "lf_compressed_v05_a14_small_all.h5",  # alpha=14, ~15 GB
+    "default": "lf_compressed_v05_a07_default_all.h5",  # alpha=7, ~30 GB
+    "fine": "lf_compressed_v05_a2p5_fine_all.h5",  # alpha=2.5, ~64 GB
 }
-# v03 levels removed in favour of v04; map them to the closest v04 tier for the error.
+# v03 levels removed in favour of the v04/v05 tiers; map them to the closest tier for the error.
 _LFP_DEPRECATED_LEVELS = {"mild": "small", "aggressive": "small"}
 
 
@@ -254,11 +256,32 @@ def get_immediate_labels(bucket, prefix=None, delimiter="/", limit=None):
     return sorted(filtered_children, reverse=True)[:limit]
 
 
+def get_s3(one=None):
+    """The S3 resource and bucket the atlas aggregates are read from.
+
+    Parameters
+    ----------
+    one : one.api.ONE, optional
+        Without it (the default), the public IBL bucket, read anonymously: no account needed.
+        With a logged-in ONE instance, the bucket of its Alyx data repository (for IBL members,
+        the private bucket, which holds releases that are not public).
+
+    Returns
+    -------
+    s3.ServiceResource
+        The S3 resource.
+    str
+        The bucket name.
+    """
+    if one is None:
+        return aws.get_s3_public()
+    return aws.get_s3_from_alyx(alyx=one.alyx)
+
+
 def list_available_projects(one=None):
-    """Get the list of available projects."""
-    assert one is not None, "ONE client instance is required"
+    """Get the list of available projects (public bucket unless ``one`` is given, see :func:`get_s3`)."""
     _logger.info("Listing available projects.")
-    s3, bucket_name = aws.get_s3_from_alyx(alyx=one.alyx)
+    s3, bucket_name = get_s3(one)
     bucket = s3.Bucket(bucket_name)
     return _get_immediate_children(
         bucket, prefix="aggregates/atlas/features/", delimiter="/"
@@ -266,13 +289,12 @@ def list_available_projects(one=None):
 
 
 def list_available_labels(one=None, project=None, limit=None):
-    """List available labels on AWS S3."""
-    assert one is not None, "ONE client instance is required"
+    """List the feature labels of a project (public bucket unless ``one`` is given, see :func:`get_s3`)."""
     assert project is not None, (
-        "First get list of available projects using list_available_projects(one=one)"
+        "First get list of available projects using list_available_projects()"
     )
     _logger.info(f"Listing available labels for project: {project}")
-    s3, bucket_name = aws.get_s3_from_alyx(alyx=one.alyx)
+    s3, bucket_name = get_s3(one)
     bucket = s3.Bucket(bucket_name)
     return get_immediate_labels(
         bucket,
@@ -289,7 +311,7 @@ def get_latest_label(one=None, project=None):
 
 def download_tables(
     local_path,
-    label="2024_W50",
+    label=FEATURES_LABEL,
     project=None,
     agg_level="agg_full",
     one=None,
@@ -299,19 +321,21 @@ def download_tables(
 ):
     """Download electrophysiology data tables from AWS S3.
 
-    Downloads aggregated electrophysiology data from the IBL AWS S3 bucket to a local directory.
-    For "agg_full", first tries the new path structure then falls back to the original path for
-    backward compatibility. For other agg_levels, uses the direct path structure.
+    Downloads aggregated electrophysiology data from the public IBL S3 bucket (no account needed)
+    to a local directory. For "agg_full", first tries the new path structure then falls back to
+    the original path for backward compatibility. For other agg_levels, uses the direct path
+    structure.
 
     Args:
         local_path (Path): Path where the data will be stored locally.
-        label (str, optional): Revision string (e.g., "2024_W04"). Defaults to "2024_W50".
+        label (str, optional): Revision string (e.g., "2026_W42"). Defaults to
+            ``FEATURES_LABEL``, the published release.
         project (str, optional): Project name. Defaults to "ea_active" if None.
         agg_level (str, optional): Aggregation level for the path structure. Defaults to "agg_full".
             For "agg_full": tries f"aggregates/atlas/features/{project}/{label}/{agg_level}" first,
             then falls back to f"aggregates/atlas/features/{project}/{label}" for backward compatibility.
             For other values: uses f"aggregates/atlas/features/{project}/{label}/{agg_level}" directly.
-        one: ONE client instance for AWS authentication.
+        one (one.api.ONE, optional): Only to read the private bucket, see :func:`get_s3`.
         verify (bool, optional): Checks the indices and consistency of the dataframes and raises an error if not consistent. Defaults to False.
         overwrite (bool, optional): Force redownloading if file exists. Defaults to False.
         extended (bool, optional): If True, will download also extended datasets, such as cross-correlograms that take up
@@ -343,8 +367,7 @@ def download_tables(
         _logger.info(f"using the locally derived feature release {local_path}")
         return local_path
 
-    # Get AWS credentials
-    s3, bucket_name = aws.get_s3_from_alyx(alyx=one.alyx)
+    s3, bucket_name = get_s3(one)
 
     # Download main data with backward compatibility for agg_full
     if agg_level == "agg_full":
@@ -424,7 +447,7 @@ def _download_volume_file(stem, local_path, label, project, res_um, one, overwri
     """Download ``brainwide_ephys_{stem}_{res_um}um.npz`` of a vintage, finest resolution by default."""
     if project is None:
         project = "ea_active"
-    s3, bucket_name = aws.get_s3_from_alyx(alyx=one.alyx)
+    s3, bucket_name = get_s3(one)
     if res_um is None:
         resolutions = _list_volume_resolutions(s3, bucket_name, project, label, stem)
         if not resolutions:
@@ -448,7 +471,7 @@ def _download_volume_file(stem, local_path, label, project, res_um, one, overwri
 
 
 def download_encoding_volume(
-    local_path, label="2026_W46", project=None, res_um=None, one=None, overwrite=False
+    local_path, label=VOLUMES_LABEL, project=None, res_um=None, one=None, overwrite=False
 ):
     """Download a pre-computed ephys atlas encoding volume from AWS S3.
 
@@ -468,8 +491,8 @@ def download_encoding_volume(
         CCF voxel resolution in µm of the requested volume, e.g. 25 or 50.
         If not specified, automatically picks the finest (smallest) resolution
         available on S3 for this ``project``/``label``.
-    one : ONE
-        ONE client instance for AWS authentication.
+    one : one.api.ONE, optional
+        Only to read the private bucket, see :func:`get_s3`.
     overwrite : bool, optional
         Force re-download even if the file already exists. Defaults to False.
 
@@ -484,7 +507,7 @@ def download_encoding_volume(
 
 
 def download_edges_volume(
-    local_path, label="2026_W46", project=None, res_um=None, one=None, overwrite=False
+    local_path, label=VOLUMES_LABEL, project=None, res_um=None, one=None, overwrite=False
 ):
     """Download the ephys edges volume of an encoding volume vintage from AWS S3.
 
@@ -503,8 +526,8 @@ def download_edges_volume(
     res_um : int, optional
         CCF voxel resolution in µm. If not specified, picks the finest resolution
         available on S3 for this ``project``/``label``.
-    one : ONE
-        ONE client instance for AWS authentication.
+    one : one.api.ONE, optional
+        Only to read the private bucket, see :func:`get_s3`.
     overwrite : bool, optional
         Force re-download even if the file already exists. Defaults to False.
 
@@ -688,14 +711,10 @@ def read_features_from_disk(
 
 
 def _project_s3(local_path, project, one):
-    """Set up ONE/S3 connection and return (s3, bucket_name, local_project_path)."""
-    from one.api import ONE
-
-    if one is None:
-        one = ONE()
+    """Return (s3, bucket_name, local_project_path) for a project's aggregates, see :func:`get_s3`."""
     local_project_path = Path(local_path) / project
     local_project_path.mkdir(parents=True, exist_ok=True)
-    s3, bucket_name = aws.get_s3_from_alyx(alyx=one.alyx)
+    s3, bucket_name = get_s3(one)
     return s3, bucket_name, local_project_path
 
 
@@ -707,7 +726,7 @@ def download_probe_details(
     Args:
         local_path (Path): Local root; file is placed under local_path/project/.
         project (str): Project name.
-        one (one.api.ONE, optional): ONE instance for AWS credentials.
+        one (one.api.ONE, optional): Only to read the private bucket, see :func:`get_s3`.
         overwrite (bool): Re-download if file already exists locally.
 
     Returns:
@@ -720,6 +739,39 @@ def download_probe_details(
             f"aggregates/atlas/projects/{project}/df_probe_details.pqt",
             str(local_file),
         )
+    return local_file
+
+
+def download_histology_picks(
+    local_path, project="ibl_neuropixel_brainwide_01", one=None, overwrite=False
+):
+    """Download the reconstructed histology tracks of a project's insertions from S3.
+
+    The tracks are the points traced along each probe in the histology (Alyx ``xyz_picks``),
+    the input of :class:`ephysatlas.alignment.data.HistologyTraces`. They are published so that
+    the alignment and the channel-level model run without an Alyx account.
+
+    Args:
+        local_path (Path): Local root; file is placed under local_path/project/.
+        project (str): Project name.
+        one (one.api.ONE, optional): Only to read the private bucket, see :func:`get_s3`.
+        overwrite (bool): Re-download if file already exists locally.
+
+    Returns:
+        Path: Path to ``histology_picks.json``, ``{pid: [[x, y, z], ...] (µm) or None}``.
+    """
+    s3, bucket_name, local_project_path = _project_s3(local_path, project, one)
+    local_file = local_project_path / "histology_picks.json"
+    local_file = aws.s3_download_file(
+        f"aggregates/atlas/projects/{project}/histology_picks.json",
+        local_file,
+        s3=s3,
+        bucket_name=bucket_name,
+        overwrite=overwrite,
+    )
+    # s3_download_file function returns None rather than raising for a missing key
+    if local_file is None:
+        raise FileNotFoundError(f"histology_picks.json of {project} not found on S3")
     return local_file
 
 
@@ -745,7 +797,7 @@ def download_cells_features(
     Args:
         local_path (Path): Local root; files are placed under local_path/project/cells_aggregates/label/.
         project (str): Project name.
-        one (one.api.ONE, optional): ONE instance for AWS credentials.
+        one (one.api.ONE, optional): Only to read the private bucket, see :func:`get_s3`.
         overwrite (bool): Re-download files that already exist locally.
         large_files (bool): If True, also download waveforms.voltage.npy and waveforms.table.pqt
             (~8 GB). Defaults to False.
@@ -792,7 +844,7 @@ def download_project_data(
     Args:
         local_path (Path): Local root; files are placed under local_path/project/.
         project (str): Project name.
-        one (one.api.ONE, optional): ONE instance for AWS credentials.
+        one (one.api.ONE, optional): Only to read the private bucket, see :func:`get_s3`.
         overwrite (bool): Re-download files that already exist locally.
         large_files (bool): If True, also download the large waveform files (~8 GB). Defaults to False.
         acg3d (bool): If True, also download the 3D ACG files (~3.5 GB). Defaults to False.
@@ -886,7 +938,7 @@ def download_lfp_features(
     overwrite=False,
     level="default",
 ):
-    """Download the merged LFP-compressed HDF5 archive (lfpack v04) from AWS S3.
+    """Download the merged LFP-compressed HDF5 archive (lfpack v05) from AWS S3.
 
     The archive is a single multi-recording HDF5 file (lfpack format 2, produced by
     ``lfpack.merge_h5``) containing one top-level group per insertion (pid). Use
@@ -900,15 +952,15 @@ def download_lfp_features(
     project : str, optional
         Project name. Defaults to "ibl_neuropixel_brainwide_01".
     one : one.api.ONE, optional
-        ONE client instance for AWS authentication.
+        Only to read the private bucket, see :func:`get_s3`.
     overwrite : bool, optional
         Force re-download if the file already exists locally. Defaults to False.
     level : {"small", "default", "fine"}, optional
         Compression tier to download (epsilon=100; tiers differ only in alpha).
-        "small" (alpha=14, ~11 GB, 0.57 % of float32) decodes like the former v03
-        "mild"; "default" (alpha=7, ~21.5 GB, 1.10 %); "fine" (alpha=2.5, ~46 GB,
-        2.35 %) is the closest to the raw LFP. The v03 levels "mild" and "aggressive"
-        are removed and raise a ``ValueError``. Defaults to "default".
+        "small" (alpha=14, ~15 GB) decodes like the former v03 "mild"; "default"
+        (alpha=7, ~30 GB); "fine" (alpha=2.5, ~64 GB) is the closest to the raw LFP.
+        The v03 levels "mild" and "aggressive" are removed and raise a ``ValueError``.
+        Defaults to "default".
 
     Returns
     -------

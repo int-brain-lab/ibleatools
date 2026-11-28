@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
@@ -223,13 +224,11 @@ class TestProjectDataIO(unittest.TestCase):
         self.assertIn("df_probe_details.pqt", args[1])  # local path
 
     def test_download_cells_features(self):
-        mock_one = MagicMock()
-        mock_one.alyx = MagicMock()
         with patch("ephysatlas.data.aws") as mock_aws:
-            mock_aws.get_s3_from_alyx.return_value = (MagicMock(), "test-bucket")
+            mock_aws.get_s3_public.return_value = (MagicMock(), "test-bucket")
             mock_aws.s3_download_file.return_value = Path("file1")
             ephysatlas.data.download_cells_features(
-                self.tmp / "dl", project=self.project, one=mock_one
+                self.tmp / "dl", project=self.project
             )
         # standard files only — no waveform files by default
         calls = mock_aws.s3_download_file.call_args_list
@@ -244,13 +243,11 @@ class TestProjectDataIO(unittest.TestCase):
         self.assertTrue(all(f"cells_aggregates/{label}/" in k for k in s3_keys))
 
     def test_download_cells_features_acg3d(self):
-        mock_one = MagicMock()
-        mock_one.alyx = MagicMock()
         with patch("ephysatlas.data.aws") as mock_aws:
-            mock_aws.get_s3_from_alyx.return_value = (MagicMock(), "test-bucket")
+            mock_aws.get_s3_public.return_value = (MagicMock(), "test-bucket")
             mock_aws.s3_download_file.return_value = Path("file1")
             ephysatlas.data.download_cells_features(
-                self.tmp / "dl", project=self.project, one=mock_one, acg3d=True
+                self.tmp / "dl", project=self.project, acg3d=True
             )
         s3_keys = [c[0][0] for c in mock_aws.s3_download_file.call_args_list]
         n_expected = len(ephysatlas.data._CELLS_AGGREGATES_FILES) + len(
@@ -261,13 +258,11 @@ class TestProjectDataIO(unittest.TestCase):
         self.assertTrue(any("acgs_3d.times.npy" in k for k in s3_keys))
 
     def test_download_cells_features_large_files(self):
-        mock_one = MagicMock()
-        mock_one.alyx = MagicMock()
         with patch("ephysatlas.data.aws") as mock_aws:
-            mock_aws.get_s3_from_alyx.return_value = (MagicMock(), "test-bucket")
+            mock_aws.get_s3_public.return_value = (MagicMock(), "test-bucket")
             mock_aws.s3_download_file.return_value = Path("file1")
             ephysatlas.data.download_cells_features(
-                self.tmp / "dl", project=self.project, one=mock_one, large_files=True
+                self.tmp / "dl", project=self.project, large_files=True
             )
         s3_keys = [c[0][0] for c in mock_aws.s3_download_file.call_args_list]
         n_expected = len(ephysatlas.data._CELLS_AGGREGATES_FILES) + len(
@@ -301,35 +296,33 @@ class TestProjectDataIO(unittest.TestCase):
         self.assertEqual(result, self.tmp / "dl" / self.project)
 
     def test_download_lfp_features(self):
-        mock_one = MagicMock()
-        mock_one.alyx = MagicMock()
         with patch("ephysatlas.data.aws") as mock_aws:
-            mock_aws.get_s3_from_alyx.return_value = (MagicMock(), "test-bucket")
+            mock_aws.get_s3_public.return_value = (MagicMock(), "test-bucket")
             ephysatlas.data.download_lfp_features(
-                self.tmp / "dl", project=self.project, one=mock_one
+                self.tmp / "dl", project=self.project
             )
         s3_key = mock_aws.s3_download_file.call_args[0][0]
         self.assertEqual(
             s3_key,
-            f"aggregates/atlas/projects/{self.project}/lfp_aggregates/lf_compressed_v04_a07_default_all.h5",
+            f"aggregates/atlas/projects/{self.project}/lfp_aggregates/lf_compressed_v05_a07_default_all.h5",
         )
 
     def test_download_lfp_features_tiers(self):
         for level, fname in {
-            "small": "lf_compressed_v04_a14_small_all.h5",
-            "fine": "lf_compressed_v04_a2p5_fine_all.h5",
+            "small": "lf_compressed_v05_a14_small_all.h5",
+            "fine": "lf_compressed_v05_a2p5_fine_all.h5",
         }.items():
             with patch("ephysatlas.data.aws") as mock_aws:
-                mock_aws.get_s3_from_alyx.return_value = (MagicMock(), "test-bucket")
+                mock_aws.get_s3_public.return_value = (MagicMock(), "test-bucket")
                 ephysatlas.data.download_lfp_features(
-                    self.tmp / "dl", project=self.project, one=MagicMock(), level=level
+                    self.tmp / "dl", project=self.project, level=level
                 )
             self.assertTrue(mock_aws.s3_download_file.call_args[0][0].endswith(fname))
 
     def test_lfp_v03_levels_raise(self):
         with self.assertRaisesRegex(ValueError, "'small'"):
             ephysatlas.data.download_lfp_features(
-                self.tmp / "dl", project=self.project, one=MagicMock(), level="mild"
+                self.tmp / "dl", project=self.project, level="mild"
             )
         with self.assertRaises(ValueError):
             ephysatlas.data.read_lfp_features(self.project_path, "pid123", level="x")
@@ -338,8 +331,70 @@ class TestProjectDataIO(unittest.TestCase):
         with patch("lfpack.LFPackReader") as mock_reader_cls:
             ephysatlas.data.read_lfp_features(self.project_path, "pid123")
         args, kwargs = mock_reader_cls.call_args
-        self.assertTrue(str(args[0]).endswith("lf_compressed_v04_a07_default_all.h5"))
+        self.assertTrue(str(args[0]).endswith("lf_compressed_v05_a07_default_all.h5"))
         self.assertEqual(kwargs["recording"], "pid123")
+
+    def test_get_s3_public_by_default_private_with_one(self):
+        mock_one = MagicMock()
+        with patch("ephysatlas.data.aws") as mock_aws:
+            ephysatlas.data.get_s3()
+            mock_aws.get_s3_public.assert_called_once_with()
+            mock_aws.get_s3_from_alyx.assert_not_called()
+            ephysatlas.data.get_s3(one=mock_one)
+            mock_aws.get_s3_from_alyx.assert_called_once_with(alyx=mock_one.alyx)
+
+    def test_download_histology_picks(self):
+        with patch("ephysatlas.data.aws") as mock_aws:
+            mock_aws.get_s3_public.return_value = (MagicMock(), "test-bucket")
+            mock_aws.s3_download_file.return_value = Path("histology_picks.json")
+            ephysatlas.data.download_histology_picks(self.tmp / "dl", project=self.project)
+            self.assertEqual(
+                mock_aws.s3_download_file.call_args[0][0],
+                f"aggregates/atlas/projects/{self.project}/histology_picks.json",
+            )
+            mock_aws.s3_download_file.return_value = None
+            with self.assertRaises(FileNotFoundError):
+                ephysatlas.data.download_histology_picks(
+                    self.tmp / "dl", project=self.project
+                )
+
+
+class TestHistologyTraces(unittest.TestCase):
+    """Published tracks come from S3; Alyx is queried only with a ``one``, and only for the rest."""
+
+    PICKS = [[0, -2000, -100], [0, -2000, -3000]]  # µm
+
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmpdir.name)
+        self.published = self.tmp.joinpath("histology_picks.json")
+        self.published.write_text(json.dumps({"published": self.PICKS}))
+
+    def tearDown(self):
+        self._tmpdir.cleanup()
+
+    def _traces(self, one=None):
+        from ephysatlas.alignment.data import HistologyTraces
+
+        return HistologyTraces(cache_path=self.tmp.joinpath("cache.json"), one=one)
+
+    def test_published_and_unpublished_insertions(self):
+        one = MagicMock()
+        one.alyx.rest.return_value = [{"json": {"xyz_picks": self.PICKS}}]
+        with patch(
+            "ephysatlas.data.download_histology_picks", return_value=self.published
+        ):
+            no_account = self._traces()
+            self.assertEqual(no_account.picks("published").shape, (2, 3))
+            self.assertIsNone(no_account.picks("unpublished"))
+            member = self._traces(one=one)
+            self.assertEqual(member.picks("published").shape, (2, 3))
+            one.alyx.rest.assert_not_called()
+            self.assertEqual(member.picks("unpublished").shape, (2, 3))
+            one.alyx.rest.assert_called_once()
+        # only the insertion fetched from Alyx is cached locally
+        cache = json.loads(self.tmp.joinpath("cache.json").read_text())
+        self.assertEqual(set(cache), {"published", "unpublished"})
 
 
 class TestReadFeaturesDenoisedRemap(unittest.TestCase):
@@ -416,8 +471,8 @@ class TestDownloadVolumes(unittest.TestCase):
 
     def _download(self, func, keys, **kwargs):
         with patch("ephysatlas.data.aws") as aws:
-            aws.get_s3_from_alyx.return_value = (self._s3(keys), "bucket")
-            func(Path("local"), label="L", one=MagicMock(), **kwargs)
+            aws.get_s3_public.return_value = (self._s3(keys), "bucket")
+            func(Path("local"), label="L", **kwargs)
             return aws.s3_download_file.call_args
 
     def test_finest_resolution_of_each_family(self):
@@ -443,11 +498,11 @@ class TestDownloadVolumes(unittest.TestCase):
     def test_explicit_resolution_missing_on_s3_raises(self):
         # with res_um given there is no listing: the 404 surfaces as None from s3_download_file
         with patch("ephysatlas.data.aws") as aws:
-            aws.get_s3_from_alyx.return_value = (self._s3([]), "bucket")
+            aws.get_s3_public.return_value = (self._s3([]), "bucket")
             aws.s3_download_file.return_value = None
             with self.assertRaises(FileNotFoundError):
                 ephysatlas.data.download_edges_volume(
-                    Path("local"), label="L", res_um=25, one=MagicMock()
+                    Path("local"), label="L", res_um=25
                 )
 
 
